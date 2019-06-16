@@ -1,0 +1,15 @@
+name: logq 
+version: "0.1"
+author: Paul Meng <me@paulme.ng>
+about: query agasint log files 
+subcommands:
+    - cat:
+        about: Concatenate log files by row or by column.
+    - partition:
+        about: Partition log data based on a column value.
+    - index:
+        about: Create an index for a log file
+    - search:
+        about: Run a regex over log data
+    - select:
+        about: Select columns from CSV data.
