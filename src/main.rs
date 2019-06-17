@@ -1,6 +1,9 @@
 use clap::load_yaml;
 use clap::App;
 
+mod classic_load_balancer_log_record;
+mod reader;
+
 fn main() {
     let yaml = load_yaml!("cli.yml");
     let app_m = App::from_yaml(yaml).get_matches();
