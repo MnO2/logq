@@ -5,11 +5,21 @@ about: query agasint log files
 subcommands:
     - cat:
         about: Concatenate log files by row or by column.
-    - partition:
-        about: Partition log data based on a column value.
-    - index:
-        about: Create an index for a log file
+        args:
+          - files:
+              help: files to concatenate
+              index: 1
+              multiple: true
     - search:
         about: Run a regex over log data
+        args:
+          - keyword:
+              help: keyword to search
+              index: 1
     - select:
         about: Select columns from CSV data.
+        args:
+          - columns:
+              help: columns to project
+              index: 1
+              multiple: true
