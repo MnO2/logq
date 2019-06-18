@@ -85,13 +85,18 @@ impl<R: io::Read> Reader<R> {
     }
 
     pub fn read_record(&mut self, record: &mut ClassicLoadBalancerLogRecord) -> Result<bool> {
-        let regex_literal = r#"[^\s"']+|\"([^"]*)"|'([^']*)'"#;
+        let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
         let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
         let mut buf = String::new();
 
-        if let Ok(_) = self.rdr.read_line(&mut buf) {
+        if let Ok(num_of_bytes) = self.rdr.read_line(&mut buf) {
+            if num_of_bytes == 0 {
+                return Ok(false);
+            }
+
             let r: Vec<&str> = split_the_line_regex.find_iter(&buf).map(|x| x.as_str()).collect();
             record.timestamp = String::from(r[0]); 
+            return Ok(true);
         }
 
         Ok(true)

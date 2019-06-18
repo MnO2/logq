@@ -6,7 +6,7 @@ subcommands:
     - cat:
         about: Concatenate log files by row or by column.
         args:
-          - files:
+          - files_to_cat:
               help: files to concatenate
               index: 1
               multiple: true
@@ -20,6 +20,9 @@ subcommands:
         about: Select columns from CSV data.
         args:
           - columns:
-              help: columns to project
+              help: columns of the logs
+              long: columns
+              takes_value: true
+          - file_to_select:
+              help: file to select against
               index: 1
-              multiple: true
