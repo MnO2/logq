@@ -3,25 +3,12 @@ version: "0.1"
 author: Paul Meng <me@paulme.ng>
 about: query agasint log files 
 subcommands:
-    - cat:
-        about: Concatenate log files by row or by column.
-        args:
-          - files_to_cat:
-              help: files to concatenate
-              index: 1
-              multiple: true
-    - search:
-        about: Run a regex over log data
-        args:
-          - keyword:
-              help: keyword to search
-              index: 1
     - select:
-        about: Select columns from CSV data.
+        about: select the data by query string
         args:
-          - columns:
-              help: columns of the logs
-              long: columns
+          - query:
+              help: query string
+              long: query
               takes_value: true
           - file_to_select:
               help: file to select against
