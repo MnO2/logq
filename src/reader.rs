@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::Path;
 use std::result;
 use regex::Regex;
-use crate::classic_load_balancer_log_record::ClassicLoadBalancerLogRecord;
+use crate::string_record::StringRecord;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -84,9 +84,7 @@ impl<R: io::Read> Reader<R> {
         ReaderBuilder::new().from_reader(rdr)
     }
 
-    pub fn read_record(&mut self, record: &mut ClassicLoadBalancerLogRecord) -> Result<bool> {
-        let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
-        let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
+    pub fn read_record(&mut self, record: &mut StringRecord) -> Result<bool> {
         let mut buf = String::new();
 
         if let Ok(num_of_bytes) = self.rdr.read_line(&mut buf) {
@@ -94,8 +92,7 @@ impl<R: io::Read> Reader<R> {
                 return Ok(false);
             }
 
-            let r: Vec<&str> = split_the_line_regex.find_iter(&buf).map(|x| x.as_str()).collect();
-            record.timestamp = String::from(r[0]); 
+            record.fields = buf;
             return Ok(true);
         }
 

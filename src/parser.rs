@@ -44,7 +44,10 @@ impl<'a> Parser<'a> {
             match self.parse_field() {
                 Ok(field) => { query.fields.push(field) },
                 Err(err) => { errors.push(err) },
-            }  
+            }
+
+            //ignore comma
+            self.next_token();
 
             self.next_token();
             tok = self.curr_token.clone();

@@ -2,9 +2,11 @@ use std::result;
 use std::fmt;
 use std::io;
 use crate::ast;
-use crate::classic_load_balancer_log_record::ClassicLoadBalancerLogRecord;
+use crate::string_record::StringRecord;
 use std::fs::File;
 use crate::reader;
+use crate::classic_load_balancer_log_field::ClassicLoadBalancerLogField;
+use std::str::FromStr;
 
 pub type EvalResult = result::Result<(), EvalError>;
 
@@ -51,7 +53,7 @@ pub fn eval(node: &ast::Node, env: &Environment) -> EvalResult {
 fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
     let mut file = File::open(&env.filename)?;
     let mut rdr = reader::Reader::from_reader(file);
-    let mut record = ClassicLoadBalancerLogRecord::empty();
+    let mut record = StringRecord::new();
 
     println!("{:?}", &env.filename);
     while let more_records = rdr.read_record(&mut record)? {
@@ -59,7 +61,15 @@ fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
             break;
         } else {
             let mut result = String::new();
-            result.push_str(&record.timestamp);
+            for (k, field) in query.fields.iter().enumerate() {
+                let f = ClassicLoadBalancerLogField::from_str(&field.name).unwrap();
+                if let Some(s) = record.get(f as usize) {
+                    if k > 0 {
+                        result.push_str(" ");
+                    }
+                    result.push_str(s);
+                }
+            }
 
             println!("{:?}", result)
         }

@@ -1,4 +1,5 @@
-mod classic_load_balancer_log_record;
+mod string_record;
+mod classic_load_balancer_log_field;
 mod reader;
 mod lexer;
 mod parser;
@@ -12,7 +13,6 @@ use std::result;
 use std::fs::File;
 use std::io;
 use reader::Reader;
-use classic_load_balancer_log_record::ClassicLoadBalancerLogRecord;
 
 fn main() -> result::Result<(), reader::Error> {
     let yaml = load_yaml!("cli.yml");
