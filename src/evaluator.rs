@@ -37,23 +37,31 @@ impl From<reader::Error> for EvalError {
     }
 }
 
-pub fn eval(node: &ast::Node, filename: &str) -> EvalResult {
-    let mut file = File::open(filename)?;
+#[derive(Clone, Debug)]
+pub struct Environment {
+    pub filename: String
+}
+
+pub fn eval(node: &ast::Node, env: &Environment) -> EvalResult {
+    match node {
+        ast::Node::Query(query) => eval_query(&query, env)
+    }
+}
+
+fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
+    let mut file = File::open(&env.filename)?;
     let mut rdr = reader::Reader::from_reader(file);
     let mut record = ClassicLoadBalancerLogRecord::empty();
 
-    loop {
-        if let more_records = rdr.read_record(&mut record)? {
-            if !more_records {
-                break;
-            } else {
-                let mut result = String::new();
-                result.push_str(&record.timestamp);
-
-                println!("{:?}", result)
-            }
-        } else {
+    println!("{:?}", &env.filename);
+    while let more_records = rdr.read_record(&mut record)? {
+        if !more_records {
             break;
+        } else {
+            let mut result = String::new();
+            result.push_str(&record.timestamp);
+
+            println!("{:?}", result)
         }
     }
 
