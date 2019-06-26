@@ -18,6 +18,8 @@ impl<'a> Lexer<'a> {
 
         match self.read_char() {
             Some(',') => Token::Comma,
+            Some('(') => Token::Lparen,
+            Some(')') => Token::Rparen,
             Some(ch) => {
                 if is_letter(ch) {
                     let ident = self.read_identifier(ch);

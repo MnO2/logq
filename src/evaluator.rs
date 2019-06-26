@@ -50,30 +50,61 @@ pub fn eval(node: &ast::Node, env: &Environment) -> EvalResult {
     }
 }
 
+enum QueryType {
+    Select,
+    Aggregation
+}
+
+fn type_of_query(query: &ast::Query) -> QueryType {
+    for field in query.fields.iter() {
+        match field {
+            ast::Field::Expression(expression_field) => {
+                return QueryType::Aggregation;
+            },
+            _ => {}
+        }
+    }
+
+    return QueryType::Select;
+}
+
 fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
     let mut file = File::open(&env.filename)?;
     let mut rdr = reader::Reader::from_reader(file);
     let mut record = StringRecord::new();
 
-    println!("{:?}", &env.filename);
-    while let more_records = rdr.read_record(&mut record)? {
-        if !more_records {
-            break;
-        } else {
-            let mut result = String::new();
-            for (k, field) in query.fields.iter().enumerate() {
-                let f = ClassicLoadBalancerLogField::from_str(&field.name).unwrap();
-                if let Some(s) = record.get(f as usize) {
-                    if k > 0 {
-                        result.push_str(" ");
+    match type_of_query(query) {
+        QueryType::Select => {
+            while let more_records = rdr.read_record(&mut record)? {
+                if !more_records {
+                    break;
+                } else {
+                    let mut result = String::new();
+                    for (k, field) in query.fields.iter().enumerate() {
+                        match field {
+                            ast::Field::Table(table_field) => {
+                                let f = ClassicLoadBalancerLogField::from_str(&table_field.name).unwrap();
+                                if let Some(s) = record.get(f as usize) {
+                                    if k > 0 {
+                                        result.push_str(" ");
+                                    }
+                                    result.push_str(s);
+                                };
+                            },
+                            _ => {}
+                        }
                     }
-                    result.push_str(s);
+
+                    println!("{:?}", result);
                 }
             }
+        },
+        QueryType::Aggregation => {
 
-            println!("{:?}", result)
         }
     }
+
+
 
     Ok(())
 }

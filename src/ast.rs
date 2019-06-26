@@ -6,6 +6,12 @@ pub enum Node {
 }
 
 #[derive(Debug)]
+pub enum Field {
+    Table(Box<TableField>),
+    Expression(Box<ExpressionField>)
+}
+
+#[derive(Debug)]
 pub struct Query {
     pub fields: Vec<Field>
 }
@@ -20,12 +26,18 @@ impl Query {
 
 impl fmt::Display for Query {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let fields: Vec<String> = (&self.fields).into_iter().map(|field| field.name.clone()).collect();
-        write!(f, "{}", fields.join(""))
+        //let fields: Vec<String> = (&self.fields).into_iter().map(|field| field.name.clone()).collect();
+        write!(f, "{}", "")
     }
 }
 
 #[derive(Debug)]
-pub struct Field {
+pub struct TableField {
     pub name: String
+}
+
+#[derive(Debug)]
+pub struct ExpressionField {
+    pub func_name: String,
+    pub arguments: Vec<String>
 }

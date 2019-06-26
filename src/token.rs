@@ -7,4 +7,7 @@ pub enum Token {
     Ident(String),
 
     Comma,
+
+    Lparen,
+    Rparen,
 }
