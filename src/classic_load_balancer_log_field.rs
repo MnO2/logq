@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-
 //https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
 pub enum ClassicLoadBalancerLogField {
     Timestamp = 0,
@@ -40,7 +39,7 @@ impl FromStr for ClassicLoadBalancerLogField {
             "user_agent" => Ok(ClassicLoadBalancerLogField::UserAgent),
             "ssl_cipher" => Ok(ClassicLoadBalancerLogField::SSLCipher),
             "ssl_protocol" => Ok(ClassicLoadBalancerLogField::SSLProtocol),
-            _ => { Err("unknown column name".to_string()) }
+            _ => Err("unknown column name".to_string()),
         }
     }
 }

@@ -1,18 +1,18 @@
-use std::result;
-use std::fmt;
-use std::io;
 use crate::ast;
-use crate::string_record::StringRecord;
-use std::fs::File;
-use crate::reader;
 use crate::classic_load_balancer_log_field::ClassicLoadBalancerLogField;
+use crate::reader;
+use crate::string_record::StringRecord;
+use std::fmt;
+use std::fs::File;
+use std::io;
+use std::result;
 use std::str::FromStr;
 
 pub type EvalResult = result::Result<(), EvalError>;
 
 #[derive(Debug)]
 pub struct EvalError {
-    pub message: String
+    pub message: String,
 }
 
 impl fmt::Display for EvalError {
@@ -29,30 +29,34 @@ impl std::error::Error for EvalError {
 
 impl From<io::Error> for EvalError {
     fn from(err: io::Error) -> EvalError {
-        EvalError { message: String::from("") }
+        EvalError {
+            message: String::from(""),
+        }
     }
 }
 
 impl From<reader::Error> for EvalError {
     fn from(err: reader::Error) -> EvalError {
-        EvalError { message: String::from("") }
+        EvalError {
+            message: String::from(""),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Environment {
-    pub filename: String
+    pub filename: String,
 }
 
 pub fn eval(node: &ast::Node, env: &Environment) -> EvalResult {
     match node {
-        ast::Node::Query(query) => eval_query(&query, env)
+        ast::Node::Query(query) => eval_query(&query, env),
     }
 }
 
 enum QueryType {
     Select,
-    Aggregation
+    Aggregation,
 }
 
 fn type_of_query(query: &ast::Query) -> QueryType {
@@ -60,7 +64,7 @@ fn type_of_query(query: &ast::Query) -> QueryType {
         match field {
             ast::Field::Expression(expression_field) => {
                 return QueryType::Aggregation;
-            },
+            }
             _ => {}
         }
     }
@@ -83,14 +87,15 @@ fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
                     for (k, field) in query.fields.iter().enumerate() {
                         match field {
                             ast::Field::Table(table_field) => {
-                                let f = ClassicLoadBalancerLogField::from_str(&table_field.name).unwrap();
+                                let f = ClassicLoadBalancerLogField::from_str(&table_field.name)
+                                    .unwrap();
                                 if let Some(s) = record.get(f as usize) {
                                     if k > 0 {
                                         result.push_str(" ");
                                     }
                                     result.push_str(s);
                                 };
-                            },
+                            }
                             _ => {}
                         }
                     }
@@ -98,13 +103,9 @@ fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
                     println!("{:?}", result);
                 }
             }
-        },
-        QueryType::Aggregation => {
-
         }
+        QueryType::Aggregation => {}
     }
-
-
 
     Ok(())
 }

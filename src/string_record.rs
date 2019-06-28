@@ -3,7 +3,7 @@ use regex::Regex;
 #[derive(Debug)]
 pub struct StringRecord {
     pub fields: String,
-    split_the_line_regex: Regex
+    split_the_line_regex: Regex,
 }
 
 impl StringRecord {
@@ -13,12 +13,16 @@ impl StringRecord {
 
         StringRecord {
             fields: String::new(),
-            split_the_line_regex: split_the_line_regex
+            split_the_line_regex: split_the_line_regex,
         }
     }
 
     pub fn get(&self, i: usize) -> Option<&str> {
-        let r: Vec<&str> = self.split_the_line_regex.find_iter(&self.fields).map(|x| x.as_str()).collect();
+        let r: Vec<&str> = self
+            .split_the_line_regex
+            .find_iter(&self.fields)
+            .map(|x| x.as_str())
+            .collect();
 
         if i < r.len() {
             return Some(r[i]);

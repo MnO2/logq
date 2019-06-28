@@ -1,15 +1,15 @@
-use crate::token::Token;
+use crate::token::{self, Token};
 use std::iter::Peekable;
 use std::str::Chars;
 
 pub struct Lexer<'a> {
-    input: Peekable<Chars<'a>>
+    input: Peekable<Chars<'a>>,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Lexer {
         Lexer {
-            input: input.chars().peekable()
+            input: input.chars().peekable(),
         }
     }
 
@@ -23,12 +23,15 @@ impl<'a> Lexer<'a> {
             Some(ch) => {
                 if is_letter(ch) {
                     let ident = self.read_identifier(ch);
-                    Token::Ident(ident)
+                    token::lookup_ident(ident)
+                } else if ch.is_digit(10) {
+                    let i = self.read_int(ch);
+                    Token::Int(i)
                 } else {
                     Token::Illegal
                 }
-            },
-            None => Token::EOF
+            }
+            None => Token::EOF,
         }
     }
 
@@ -48,6 +51,21 @@ impl<'a> Lexer<'a> {
 
     fn read_char(&mut self) -> Option<char> {
         self.input.next()
+    }
+
+    fn read_int(&mut self, ch: char) -> i64 {
+        let mut s = String::new();
+        s.push(ch);
+
+        while let Some(&ch) = self.peek_char() {
+            if ch.is_digit(10) {
+                s.push(self.read_char().unwrap());
+            } else {
+                break;
+            }
+        }
+
+        s.parse().unwrap()
     }
 
     fn read_identifier(&mut self, ch: char) -> String {

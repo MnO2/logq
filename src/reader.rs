@@ -1,11 +1,11 @@
-use std::io;
-use std::io::BufRead;
+use crate::string_record::StringRecord;
+use regex::Regex;
 use std::fmt;
 use std::fs::File;
+use std::io;
+use std::io::BufRead;
 use std::path::Path;
 use std::result;
-use regex::Regex;
-use crate::string_record::StringRecord;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -14,8 +14,8 @@ pub struct Error(Box<ErrorKind>);
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self.0 { 
-            ErrorKind::Io(ref err) => err.fmt(f)
+        match *self.0 {
+            ErrorKind::Io(ref err) => err.fmt(f),
         }
     }
 }
@@ -32,9 +32,8 @@ impl From<io::Error> for Error {
 
 #[derive(Debug)]
 pub enum ErrorKind {
-    Io(io::Error)
+    Io(io::Error),
 }
-
 
 #[derive(Debug)]
 pub struct ReaderBuilder {
@@ -76,7 +75,7 @@ pub struct Reader<R> {
 impl<R: io::Read> Reader<R> {
     fn new(builder: &ReaderBuilder, rdr: R) -> Reader<R> {
         Reader {
-            rdr: io::BufReader::with_capacity(builder.capacity, rdr)
+            rdr: io::BufReader::with_capacity(builder.capacity, rdr),
         }
     }
 
