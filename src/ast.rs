@@ -32,6 +32,7 @@ impl fmt::Display for Query {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expression {
     Identifier(String),
+    Int(i64),
 }
 
 impl Expression {
@@ -50,12 +51,29 @@ pub struct TableField {
 
 #[derive(Debug)]
 pub struct ExpressionField {
-    pub func_name: String,
-    pub arguments: Vec<String>,
+    pub func_call_expression: FuncCallExpression,
     pub partition_clause: Option<PartitionClause>,
 }
 
 #[derive(Debug)]
 pub struct PartitionClause {
     pub field_name: String,
+}
+
+#[derive(Debug)]
+pub struct OrderingClause {
+    pub field_name: String,
+    pub ordering: Ordering
+}
+
+#[derive(Debug)]
+pub enum Ordering {
+    Asc,
+    Desc
+}
+
+#[derive(Debug)]
+pub struct FuncCallExpression {
+    pub func_name: String,
+    pub arguments: Vec<Expression>,
 }

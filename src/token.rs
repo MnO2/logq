@@ -14,6 +14,14 @@ pub enum Token {
     Over,
     Partition,
     By,
+
+    Within,
+    Group,
+
+    Order,
+
+    Asc,
+    Desc
 }
 
 pub fn lookup_ident(ident: String) -> Token {
@@ -21,6 +29,11 @@ pub fn lookup_ident(ident: String) -> Token {
         "over" => Token::Over,
         "partition" => Token::Partition,
         "by" => Token::By,
+        "within" => Token::Within,
+        "group" => Token::Group,
+        "order" => Token::Order,
+        "asc" => Token::Asc,
+        "desc" => Token::Desc,
         _ => Token::Ident(ident),
     }
 }

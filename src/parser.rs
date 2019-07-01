@@ -78,27 +78,60 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_expression_field(&mut self) -> ParseResult<ast::Field> {
+    pub fn parse_func_call_expression(&mut self) -> ParseResult<ast::FuncCallExpression> {
         let func_name = self.parse_identifier()?;
 
-        // eat the left paren
+        let mut arguments: Vec<ast::Expression> = Vec::new();
+
+        // eat up the left paren
         self.expect_curr(&Token::Lparen)?;
+        while self.expect_peek(&Token::Rparen).is_err() {
+            let expression = self.parse_expression()?;
+            arguments.push(expression);
 
-        let ident = self.parse_identifier()?;
-
-        let mut tok = self.curr_token.clone();
-        dbg!("tok = {:?}", &tok);
-        while tok != Token::Rparen {
-            if self.expect_peek(&Token::Comma).is_ok() {
-                self.parse_identifier()?;
-            } else {
-                self.next_token();
-                tok = self.curr_token.clone();
-            }
+            self.expect_peek(&Token::Comma);
         }
+
+        // eat up the right paren
+        self.expect_curr(&Token::Rparen);
+
+        let func_call_expression = ast::FuncCallExpression {
+            func_name: func_name,
+            arguments: arguments
+        };
+
+        Ok(func_call_expression)
+    }
+
+    pub fn parse_expression(&mut self) -> ParseResult<ast::Expression> {
+        if let Token::Ident(ref name) = self.curr_token.clone() {
+            self.next_token();
+            return Ok(ast::Expression::Identifier(name.to_string()));
+        } else if let Token::Int(int) = self.curr_token.clone() {
+            self.next_token();
+            return Ok(ast::Expression::Int(int));
+        }
+
+        Err(format!(
+            "unexpected error on expression parse with {:?}",
+            self.curr_token
+        ))
+    }
+
+    pub fn parse_expression_field(&mut self) -> ParseResult<ast::Field> {
+        let func_call_expression = self.parse_func_call_expression()?;
 
         // eat the right paren
         //self.expect_curr(&Token::Rparen)?;
+
+        let group_clause = if self.expect_peek(&Token::Within).is_ok() {
+            self.expect_peek(&Token::Group);
+            Some(self.parse_ordering_clause()?)
+        } else {
+            None
+        };
+
+        dbg!("group_clause = {:?}", &group_clause);
 
         let partition_clause = if self.expect_peek(&Token::Over).is_ok() {
             Some(self.parse_partition_clause()?)
@@ -109,23 +142,49 @@ impl<'a> Parser<'a> {
         dbg!("partition_clause = {:?}", &partition_clause);
 
         let field = ast::ExpressionField {
-            func_name: func_name.ident(),
-            arguments: Vec::new(),
+            func_call_expression: func_call_expression,
             partition_clause: partition_clause,
         };
         Ok(ast::Field::Expression(Box::new(field)))
     }
 
-    fn parse_identifier(&mut self) -> ParseResult<ast::Expression> {
+    fn parse_identifier(&mut self) -> ParseResult<String> {
         if let Token::Ident(ref name) = self.curr_token.clone() {
             self.next_token();
-            return Ok(ast::Expression::Identifier(name.to_string()));
+            return Ok(name.to_string());
         }
 
         Err(format!(
             "unexpected error on identifier parse with {:?}",
             self.curr_token
         ))
+    }
+
+    pub fn parse_ordering_clause(&mut self) -> ParseResult<ast::OrderingClause> {
+        self.expect_peek(&Token::Lparen)?;
+        self.expect_peek(&Token::Order)?;
+        self.expect_peek(&Token::By)?;
+
+        let name = self.parse_identifier()?;
+        dbg!("name = {:?", &name);
+
+        let ordering = if self.expect_peek(&Token::Asc).is_ok() {
+            ast::Ordering::Asc
+        } else if self.expect_peek(&Token::Desc).is_ok() {
+            ast::Ordering::Desc
+        } else {
+            ast::Ordering::Asc
+        };
+
+        self.expect_peek(&Token::Rparen)?;
+        self.next_token();
+
+        let clause = ast::OrderingClause {
+            field_name: name,
+            ordering: ordering,
+        };
+
+        Ok(clause)
     }
 
     pub fn parse_partition_clause(&mut self) -> ParseResult<ast::PartitionClause> {
@@ -137,7 +196,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_identifier()?;
         dbg!("name = {:?}", &name);
         let clause = ast::PartitionClause {
-            field_name: name.ident(),
+            field_name: name,
         };
         self.expect_curr(&Token::Rparen)?;
         Ok(clause)
