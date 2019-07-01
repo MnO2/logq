@@ -26,6 +26,11 @@ Aggregate the average processing time and partition by backend_and_port.
 logq select --query "avg(backend_processing_time) over (partition by backend_and_port)" data/AWSLogs.log
 ```
 
+Select the most latency hitting to a backend server 
+```
+logq select --query "PERCENTILE_DISC(1) within group (order by backend_processing_time desc) over (partition by backend_and_port)" data/AWSLogs.log
+```
+
 ## Motivation
 
 The very same criticisms to xsv could also be asked to this project.
