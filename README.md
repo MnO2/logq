@@ -1,5 +1,7 @@
 # logq - A fast server log file command line toolkit written in Rust
 
+[![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
+
 This project is still under active development and not yet finished.
 
 logq is a command line program for easily analyzing, querying, aggregating and
