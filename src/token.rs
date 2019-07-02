@@ -21,7 +21,7 @@ pub enum Token {
     Order,
 
     Asc,
-    Desc
+    Desc,
 }
 
 pub fn lookup_ident(ident: String) -> Token {

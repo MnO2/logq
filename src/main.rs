@@ -17,9 +17,7 @@ fn main() -> result::Result<(), reader::Error> {
 
     match app_m.subcommand() {
         ("select", Some(sub_m)) => {
-            if let (Some(query_str), Some(filename)) =
-                (sub_m.value_of("query"), sub_m.value_of("file_to_select"))
-            {
+            if let (Some(query_str), Some(filename)) = (sub_m.value_of("query"), sub_m.value_of("file_to_select")) {
                 match parser::parse(&query_str) {
                     Ok(node) => {
                         let env = evaluator::Environment {
@@ -27,7 +25,7 @@ fn main() -> result::Result<(), reader::Error> {
                         };
 
                         match evaluator::eval(&node, &env) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(e) => {
                                 println!("{:?}", e);
                             }

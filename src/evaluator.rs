@@ -78,33 +78,30 @@ fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
     let mut record = StringRecord::new();
 
     match type_of_query(query) {
-        QueryType::Select => {
-            loop { 
-                let more_records = rdr.read_record(&mut record)?;
-                if !more_records {
-                    break;
-                } else {
-                    let mut result = String::new();
-                    for (k, field) in query.fields.iter().enumerate() {
-                        match field {
-                            ast::Field::Table(table_field) => {
-                                let f = ClassicLoadBalancerLogField::from_str(&table_field.name)
-                                    .unwrap();
-                                if let Some(s) = record.get(f as usize) {
-                                    if k > 0 {
-                                        result.push_str(" ");
-                                    }
-                                    result.push_str(s);
-                                };
-                            }
-                            _ => {}
+        QueryType::Select => loop {
+            let more_records = rdr.read_record(&mut record)?;
+            if !more_records {
+                break;
+            } else {
+                let mut result = String::new();
+                for (k, field) in query.fields.iter().enumerate() {
+                    match field {
+                        ast::Field::Table(table_field) => {
+                            let f = ClassicLoadBalancerLogField::from_str(&table_field.name).unwrap();
+                            if let Some(s) = record.get(f as usize) {
+                                if k > 0 {
+                                    result.push_str(" ");
+                                }
+                                result.push_str(s);
+                            };
                         }
+                        _ => {}
                     }
-
-                    println!("{:?}", result);
                 }
+
+                println!("{:?}", result);
             }
-        }
+        },
         QueryType::Aggregation => {}
     }
 

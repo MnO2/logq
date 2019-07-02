@@ -54,13 +54,13 @@ pub struct PartitionClause {
 #[derive(Debug)]
 pub struct OrderingClause {
     pub field_name: String,
-    pub ordering: Ordering
+    pub ordering: Ordering,
 }
 
 #[derive(Debug)]
 pub enum Ordering {
     Asc,
-    Desc
+    Desc,
 }
 
 #[derive(Debug)]

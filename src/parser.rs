@@ -63,16 +63,12 @@ impl<'a> Parser<'a> {
                 Token::Lparen => self.parse_expression_field(),
                 Token::Comma => {
                     self.next_token();
-                    Ok(ast::Field::Table(Box::new(ast::TableField {
-                        name: name.to_string(),
-                    })))
+                    Ok(ast::Field::Table(Box::new(ast::TableField { name: name.to_string() })))
                 }
-                _ => { 
+                _ => {
                     self.next_token();
-                    Ok(ast::Field::Table(Box::new(ast::TableField {
-                        name: name.to_string(),
-                    }))) 
-                },
+                    Ok(ast::Field::Table(Box::new(ast::TableField { name: name.to_string() })))
+                }
             },
             _ => Err("unexpected".to_string()),
         }
@@ -96,7 +92,7 @@ impl<'a> Parser<'a> {
         dbg!(&arguments);
         let func_call_expression = ast::FuncCallExpression {
             func_name: func_name,
-            arguments: arguments
+            arguments: arguments,
         };
 
         Ok(func_call_expression)
@@ -193,9 +189,7 @@ impl<'a> Parser<'a> {
 
         let name = self.parse_identifier()?;
         dbg!("name = {:?}", &name);
-        let clause = ast::PartitionClause {
-            field_name: name,
-        };
+        let clause = ast::PartitionClause { field_name: name };
         self.expect_curr(&Token::Rparen)?;
         Ok(clause)
     }
@@ -227,8 +221,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -245,15 +237,14 @@ mod test {
     fn unwrap_expression_field(query: &ast::Query) -> &ast::ExpressionField {
         match query.fields.first().unwrap() {
             ast::Field::Expression(field) => field,
-            field => panic!("{:?} isn't an expression field", field)
+            field => panic!("{:?} isn't an expression field", field),
         }
     }
-
 
     fn unwrap_table_field(query: &ast::Query) -> &ast::TableField {
         match query.fields.first().unwrap() {
             ast::Field::Table(field) => field,
-            field => panic!("{:?} isn't an expression field", field)
+            field => panic!("{:?} isn't an expression field", field),
         }
     }
 
