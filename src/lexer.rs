@@ -87,3 +87,28 @@ impl<'a> Lexer<'a> {
 fn is_letter(ch: char) -> bool {
     ch.is_alphabetic() || ch == '_'
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use token::Token;
+
+    #[test]
+    fn test_next_token() {
+        let input = r#"timestamp, backend_and_port"#;
+
+        let ans = vec![
+            Token::Ident("timestamp".to_string()),
+            Token::Comma,
+            Token::Ident("backend_and_port".to_string()),
+        ];
+
+        let mut l = Lexer::new(input);
+
+        for t in ans.iter() {
+            let tok = l.next_token();
+
+            assert_eq!(*t, tok, "expected {:?} token but got {:?}", t, tok);
+        }
+    }
+}
