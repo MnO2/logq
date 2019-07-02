@@ -35,6 +35,15 @@ pub enum Expression {
     Int(i64),
 }
 
+impl Expression {
+    pub fn ident(&self) -> String {
+        match self {
+            Expression::Identifier(ref s) => s.to_string(),
+            _ => panic!("Expression is not an Identifier"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TableField {
     pub name: String,
@@ -46,7 +55,7 @@ pub struct ExpressionField {
     pub partition_clause: Option<PartitionClause>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PartitionClause {
     pub field_name: String,
 }
