@@ -80,21 +80,20 @@ impl<'a> Parser<'a> {
 
     pub fn parse_func_call_expression(&mut self) -> ParseResult<ast::FuncCallExpression> {
         let func_name = self.parse_identifier()?;
-
+        dbg!(&func_name);
         let mut arguments: Vec<ast::Expression> = Vec::new();
 
         // eat up the left paren
         self.expect_curr(&Token::Lparen)?;
-        while self.expect_peek(&Token::Rparen).is_err() {
+        while self.expect_curr(&Token::Rparen).is_err() {
             let expression = self.parse_expression()?;
+            dbg!(&expression);
             arguments.push(expression);
 
             self.expect_peek(&Token::Comma);
         }
 
-        // eat up the right paren
-        self.expect_curr(&Token::Rparen);
-
+        dbg!(&arguments);
         let func_call_expression = ast::FuncCallExpression {
             func_name: func_name,
             arguments: arguments
@@ -131,7 +130,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        dbg!("group_clause = {:?}", &group_clause);
+        dbg!(&group_clause);
 
         let partition_clause = if self.expect_peek(&Token::Over).is_ok() {
             Some(self.parse_partition_clause()?)
@@ -139,7 +138,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        dbg!("partition_clause = {:?}", &partition_clause);
+        dbg!(&partition_clause);
 
         let field = ast::ExpressionField {
             func_call_expression: func_call_expression,
@@ -247,5 +246,38 @@ impl<'a> Parser<'a> {
     fn next_token(&mut self) {
         self.curr_token = self.peek_token.clone();
         self.peek_token = self.lexer.next_token();
+    }
+}
+
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::lexer::Lexer;
+
+    fn setup(input: &str) -> ast::Query {
+        let l = Lexer::new(input);
+        let mut p = Parser::new(l);
+        let query = p.parse_query().unwrap();
+
+        query
+    }
+
+    fn unwrap_expression_field(query: &ast::Query) -> &ast::ExpressionField {
+        match query.fields.first().unwrap() {
+            ast::Field::Expression(field) => field,
+            field => panic!("{:?} isn't an expression field", field)
+        }
+    }
+
+    #[test]
+    fn test_aggregate_function_with_partition_clause() {
+        let input = "avg(backend_processing_time) over (partition by backend_and_port)";
+        let query = setup(input);
+        let field = unwrap_expression_field(&query);
+
+        assert_eq!(field.func_call_expression.func_name, "avg");
+        assert_eq!(field.func_call_expression.arguments.len(), 1);
     }
 }
