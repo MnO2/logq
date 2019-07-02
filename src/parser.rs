@@ -38,19 +38,15 @@ impl<'a> Parser<'a> {
     pub fn parse_query(&mut self) -> Result<ast::Query, ParseErrors> {
         let mut query = ast::Query::new();
         let mut errors = ParseErrors::new();
-        let mut tok = self.curr_token.clone();
 
-        while tok != Token::EOF {
+        while self.expect_curr(&Token::EOF).is_err() {
             match self.parse_field() {
                 Ok(field) => query.fields.push(field),
                 Err(err) => errors.push(err),
             }
 
-            //ignore comma
-            self.expect_peek(&Token::Comma);
-            tok = self.curr_token.clone();
-            break;
-            dbg!("tok = {:?}", tok);
+            dbg!(&self.curr_token);
+            let _ = self.expect_curr(&Token::Comma).is_ok();
         }
 
         if !errors.is_empty() {
@@ -61,6 +57,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_field(&mut self) -> ParseResult<ast::Field> {
+        dbg!(&self.curr_token);
         match &self.curr_token.clone() {
             Token::Ident(name) => match &self.peek_token.clone() {
                 Token::Lparen => self.parse_expression_field(),
@@ -70,11 +67,14 @@ impl<'a> Parser<'a> {
                         name: name.to_string(),
                     })))
                 }
-                _ => Ok(ast::Field::Table(Box::new(ast::TableField {
-                    name: name.to_string(),
-                }))),
+                _ => { 
+                    self.next_token();
+                    Ok(ast::Field::Table(Box::new(ast::TableField {
+                        name: name.to_string(),
+                    }))) 
+                },
             },
-            _ => Err("unexpected GG".to_string()),
+            _ => Err("unexpected".to_string()),
         }
     }
 
@@ -90,7 +90,7 @@ impl<'a> Parser<'a> {
             dbg!(&expression);
             arguments.push(expression);
 
-            self.expect_peek(&Token::Comma);
+            let _ = self.expect_curr(&Token::Comma).is_ok();
         }
 
         dbg!(&arguments);
@@ -123,8 +123,9 @@ impl<'a> Parser<'a> {
         // eat the right paren
         //self.expect_curr(&Token::Rparen)?;
 
-        let group_clause = if self.expect_peek(&Token::Within).is_ok() {
-            self.expect_peek(&Token::Group);
+        dbg!(&self.curr_token);
+        let group_clause = if self.expect_curr(&Token::Within).is_ok() {
+            self.expect_curr(&Token::Group)?;
             Some(self.parse_ordering_clause()?)
         } else {
             None
@@ -132,7 +133,7 @@ impl<'a> Parser<'a> {
 
         dbg!(&group_clause);
 
-        let partition_clause = if self.expect_peek(&Token::Over).is_ok() {
+        let partition_clause = if self.expect_curr(&Token::Over).is_ok() {
             Some(self.parse_partition_clause()?)
         } else {
             None
@@ -160,23 +161,22 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_ordering_clause(&mut self) -> ParseResult<ast::OrderingClause> {
-        self.expect_peek(&Token::Lparen)?;
-        self.expect_peek(&Token::Order)?;
-        self.expect_peek(&Token::By)?;
+        self.expect_curr(&Token::Lparen)?;
+        self.expect_curr(&Token::Order)?;
+        self.expect_curr(&Token::By)?;
 
         let name = self.parse_identifier()?;
-        dbg!("name = {:?", &name);
+        dbg!(&name);
 
-        let ordering = if self.expect_peek(&Token::Asc).is_ok() {
+        let ordering = if self.expect_curr(&Token::Asc).is_ok() {
             ast::Ordering::Asc
-        } else if self.expect_peek(&Token::Desc).is_ok() {
+        } else if self.expect_curr(&Token::Desc).is_ok() {
             ast::Ordering::Desc
         } else {
             ast::Ordering::Asc
         };
 
-        self.expect_peek(&Token::Rparen)?;
-        self.next_token();
+        self.expect_curr(&Token::Rparen)?;
 
         let clause = ast::OrderingClause {
             field_name: name,
@@ -187,7 +187,6 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_partition_clause(&mut self) -> ParseResult<ast::PartitionClause> {
-        self.expect_curr(&Token::Over)?;
         self.expect_curr(&Token::Lparen)?;
         self.expect_curr(&Token::Partition)?;
         self.expect_curr(&Token::By)?;
@@ -222,27 +221,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn peek_token_is(&self, token: &Token) -> bool {
-        match (&token, &self.peek_token) {
-            (Token::Ident(_), Token::Ident(_)) => true,
-            (Token::Int(_), Token::Int(_)) => true,
-            _ => token == &self.peek_token,
-        }
-    }
-
-    fn expect_peek(&mut self, token: &Token) -> Result<(), ParseError> {
-        match self.peek_token_is(&token) {
-            true => {
-                self.next_token();
-                Ok(())
-            }
-            false => Err(format!(
-                "expected next token to be {:?} but got {:?} instread",
-                token, self.peek_token
-            )),
-        }
-    }
-
     fn next_token(&mut self) {
         self.curr_token = self.peek_token.clone();
         self.peek_token = self.lexer.next_token();
@@ -271,6 +249,23 @@ mod test {
         }
     }
 
+
+    fn unwrap_table_field(query: &ast::Query) -> &ast::TableField {
+        match query.fields.first().unwrap() {
+            ast::Field::Table(field) => field,
+            field => panic!("{:?} isn't an expression field", field)
+        }
+    }
+
+    #[test]
+    fn test_table_field() {
+        let input = "timestamp, backend_and_port";
+        let query = setup(input);
+        let field = unwrap_table_field(&query);
+
+        assert_eq!(field.name, "timestamp");
+    }
+
     #[test]
     fn test_aggregate_function_with_partition_clause() {
         let input = "avg(backend_processing_time) over (partition by backend_and_port)";
@@ -278,6 +273,16 @@ mod test {
         let field = unwrap_expression_field(&query);
 
         assert_eq!(field.func_call_expression.func_name, "avg");
+        assert_eq!(field.func_call_expression.arguments.len(), 1);
+    }
+
+    #[test]
+    fn test_aggregate_function_with_group_clause() {
+        let input = "percentile_disc(1) within group (order by backend_processing_time desc) over (partition by backend_and_port)";
+        let query = setup(input);
+        let field = unwrap_expression_field(&query);
+
+        assert_eq!(field.func_call_expression.func_name, "percentile_disc");
         assert_eq!(field.func_call_expression.arguments.len(), 1);
     }
 }

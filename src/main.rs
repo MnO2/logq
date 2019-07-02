@@ -9,9 +9,6 @@ mod token;
 
 use clap::load_yaml;
 use clap::App;
-use reader::Reader;
-use std::fs::File;
-use std::io;
 use std::result;
 
 fn main() -> result::Result<(), reader::Error> {
@@ -29,7 +26,12 @@ fn main() -> result::Result<(), reader::Error> {
                             filename: filename.to_string(),
                         };
 
-                        evaluator::eval(&node, &env);
+                        match evaluator::eval(&node, &env) {
+                            Ok(_) => {},
+                            Err(e) => {
+                                println!("{:?}", e);
+                            }
+                        }
                     }
                     Err(e) => {
                         println!("{:?}", e);

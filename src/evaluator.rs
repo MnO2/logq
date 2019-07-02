@@ -28,17 +28,17 @@ impl std::error::Error for EvalError {
 }
 
 impl From<io::Error> for EvalError {
-    fn from(err: io::Error) -> EvalError {
+    fn from(_: io::Error) -> EvalError {
         EvalError {
-            message: String::from(""),
+            message: "io error".to_string(),
         }
     }
 }
 
 impl From<reader::Error> for EvalError {
-    fn from(err: reader::Error) -> EvalError {
+    fn from(_: reader::Error) -> EvalError {
         EvalError {
-            message: String::from(""),
+            message: "reader error".to_string(),
         }
     }
 }
@@ -62,7 +62,7 @@ enum QueryType {
 fn type_of_query(query: &ast::Query) -> QueryType {
     for field in query.fields.iter() {
         match field {
-            ast::Field::Expression(expression_field) => {
+            ast::Field::Expression(_) => {
                 return QueryType::Aggregation;
             }
             _ => {}
@@ -73,13 +73,14 @@ fn type_of_query(query: &ast::Query) -> QueryType {
 }
 
 fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
-    let mut file = File::open(&env.filename)?;
+    let file = File::open(&env.filename)?;
     let mut rdr = reader::Reader::from_reader(file);
     let mut record = StringRecord::new();
 
     match type_of_query(query) {
         QueryType::Select => {
-            while let more_records = rdr.read_record(&mut record)? {
+            loop { 
+                let more_records = rdr.read_record(&mut record)?;
                 if !more_records {
                     break;
                 } else {

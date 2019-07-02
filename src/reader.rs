@@ -1,5 +1,4 @@
 use crate::string_record::StringRecord;
-use regex::Regex;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -17,6 +16,12 @@ impl fmt::Display for Error {
         match *self.0 {
             ErrorKind::Io(ref err) => err.fmt(f),
         }
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        "io error"
     }
 }
 
@@ -53,6 +58,7 @@ impl ReaderBuilder {
         ReaderBuilder::default()
     }
 
+    #[allow(dead_code)]
     pub fn from_path<P: AsRef<Path>>(&self, path: P) -> Result<Reader<File>> {
         Ok(Reader::new(self, File::open(path)?))
     }
@@ -61,6 +67,7 @@ impl ReaderBuilder {
         Reader::new(self, rdr)
     }
 
+    #[allow(dead_code)]
     pub fn buffer_capacity(&mut self, capacity: usize) -> &mut ReaderBuilder {
         self.capacity = capacity;
         self
