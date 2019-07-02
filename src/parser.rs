@@ -188,7 +188,6 @@ impl<'a> Parser<'a> {
         self.expect_curr(&Token::By)?;
 
         let name = self.parse_identifier()?;
-        dbg!("name = {:?}", &name);
         let clause = ast::PartitionClause { field_name: name };
         self.expect_curr(&Token::Rparen)?;
         Ok(clause)
