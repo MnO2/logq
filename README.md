@@ -37,9 +37,19 @@ logq select --query "PERCENTILE_DISC(1) within group (order by backend_processin
 
 The very same criticisms to xsv could also be asked to this project.
 
-That is, you shouldn't be working with log file directly, you should ship it to
-Spark or other data analyzing framework. However, in the daily work when you
-would like to quickly troubleshooting things, oftentime you are still handed
-with several gigabytes of log file, and it's time consuming to set things up.
-Usually the modern laptop/pc is very powerful and enough for analyzing gigabytes
-of volumes, when the implementation is well performance considered.
+That is, you shouldn't be working with log file directly in a large scale settings, you should ship it to stack like ELK for searching and analyzing. For more advanced need you could leverage on Spark etc. However, in the daily work when you
+would like to quickly troubleshooting things, oftentime you are still handed with several gigabytes of log file, and it's time consuming to set things up.  Usually the modern laptop/pc is very powerful and enough for analyzing gigabytes of volumes, when the implementation is well performance considered.
+This software is inspired by the daily need in the author's daily work, where I
+believe many people have the same kind of needs.
+
+### Why not TextQL, or insert the space delimited fields into sqlite?
+
+TextQL is implemented in python ant it's ok for the smaller cases. In the case
+of AWS ELB log where it often goes up to gigabytes of logs it is too slow
+regarding to speed. Furthermore, either TextQL and sqlite are limited in their
+provided SQL functions, it makes the domain processing like URL, and HTTP
+headers very hard. You would probably need to answer the questions like "What is
+the 99th percentile to this endpoint, by ignoring the user_id in the restful
+endpoing within a certain time range". It would be easier to have a software
+providing those handy function to extract or canonicalize the information from
+the log.
