@@ -24,10 +24,6 @@ script:
   - cargo fmt --all -- --check
   - cargo build
   - cargo test
-  - |
-    if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "stable" ]]; then
-      cargo clippy
-    fi
 
 after_success:
   - |
