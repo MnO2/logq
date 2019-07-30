@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate failure;
+
 mod ast;
 mod classic_load_balancer_log_field;
 mod evaluator;

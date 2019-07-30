@@ -2,7 +2,12 @@ use crate::ast;
 use crate::lexer::Lexer;
 use crate::token::Token;
 
-type ParseError = String;
+#[derive(Fail, Debug)]
+pub enum ParseError {
+    #[fail(display = "Unexpected Token Found")]
+    UnexpecedToken(Token),
+}
+
 type ParseErrors = Vec<ParseError>;
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -70,7 +75,7 @@ impl<'a> Parser<'a> {
                     Ok(ast::Field::Table(Box::new(ast::TableField { name: name.to_string() })))
                 }
             },
-            _ => Err("unexpected".to_string()),
+            _ => Err(ParseError::UnexpecedToken(self.curr_token.clone())),
         }
     }
 
@@ -107,10 +112,7 @@ impl<'a> Parser<'a> {
             return Ok(ast::Expression::Int(int));
         }
 
-        Err(format!(
-            "unexpected error on expression parse with {:?}",
-            self.curr_token
-        ))
+        Err(ParseError::UnexpecedToken(self.curr_token.clone()))
     }
 
     pub fn parse_expression_field(&mut self) -> ParseResult<ast::Field> {
@@ -150,10 +152,7 @@ impl<'a> Parser<'a> {
             return Ok(name.to_string());
         }
 
-        Err(format!(
-            "unexpected error on identifier parse with {:?}",
-            self.curr_token
-        ))
+        Err(ParseError::UnexpecedToken(self.curr_token.clone()))
     }
 
     pub fn parse_ordering_clause(&mut self) -> ParseResult<ast::OrderingClause> {
@@ -199,10 +198,7 @@ impl<'a> Parser<'a> {
                 self.next_token();
                 Ok(())
             }
-            false => Err(format!(
-                "expected next token to be {:?} but got {:?} instread",
-                token, self.curr_token
-            )),
+            false => Err(ParseError::UnexpecedToken(self.curr_token.clone())),
         }
     }
 

@@ -49,7 +49,7 @@ pub struct TableField {
     pub name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExpressionField {
     pub func_call_expression: FuncCallExpression,
     pub partition_clause: Option<PartitionClause>,
@@ -72,7 +72,7 @@ pub enum Ordering {
     Desc,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FuncCallExpression {
     pub func_name: String,
     pub arguments: Vec<Expression>,
