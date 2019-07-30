@@ -94,11 +94,7 @@ impl<'a> Parser<'a> {
             let _ = self.expect_curr(&Token::Comma).is_ok();
         }
 
-        dbg!(&arguments);
-        let func_call_expression = ast::FuncCallExpression {
-            func_name: func_name,
-            arguments: arguments,
-        };
+        let func_call_expression = ast::FuncCallExpression { func_name, arguments };
 
         Ok(func_call_expression)
     }
@@ -140,8 +136,8 @@ impl<'a> Parser<'a> {
         dbg!(&partition_clause);
 
         let field = ast::ExpressionField {
-            func_call_expression: func_call_expression,
-            partition_clause: partition_clause,
+            func_call_expression,
+            partition_clause,
         };
         Ok(ast::Field::Expression(Box::new(field)))
     }
@@ -175,7 +171,7 @@ impl<'a> Parser<'a> {
 
         let clause = ast::OrderingClause {
             field_name: name,
-            ordering: ordering,
+            ordering,
         };
 
         Ok(clause)
@@ -193,12 +189,11 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_curr(&mut self, token: &Token) -> Result<(), ParseError> {
-        match self.curr_token_is(&token) {
-            true => {
-                self.next_token();
-                Ok(())
-            }
-            false => Err(ParseError::UnexpecedToken(self.curr_token.clone())),
+        if self.curr_token_is(&token) {
+            self.next_token();
+            Ok(())
+        } else {
+            Err(ParseError::UnexpecedToken(self.curr_token.clone()))
         }
     }
 
@@ -224,9 +219,7 @@ mod test {
     fn setup(input: &str) -> ast::Query {
         let l = Lexer::new(input);
         let mut p = Parser::new(l);
-        let query = p.parse_query().unwrap();
-
-        query
+        p.parse_query().unwrap()
     }
 
     fn unwrap_expression_field(query: &ast::Query) -> &ast::ExpressionField {

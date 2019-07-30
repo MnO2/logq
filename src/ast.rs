@@ -24,8 +24,14 @@ impl Query {
 
 impl fmt::Display for Query {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        //let fields: Vec<String> = (&self.fields).into_iter().map(|field| field.name.clone()).collect();
-        write!(f, "{}", "")
+        let fields: Vec<String> = (&self.fields)
+            .iter()
+            .map(|field| match field {
+                Field::Table(tf) => tf.name.clone(),
+                Field::Expression(_) => "<func>".to_string(),
+            })
+            .collect();
+        write!(f, "{:?}", fields)
     }
 }
 

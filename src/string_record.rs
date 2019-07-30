@@ -13,7 +13,7 @@ impl StringRecord {
 
         StringRecord {
             fields: String::new(),
-            split_the_line_regex: split_the_line_regex,
+            split_the_line_regex,
         }
     }
 
@@ -25,9 +25,9 @@ impl StringRecord {
             .collect();
 
         if i < r.len() {
-            return Some(r[i]);
+            Some(r[i])
         } else {
-            return None;
+            None
         }
     }
 }

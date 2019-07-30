@@ -48,15 +48,12 @@ enum QueryType {
 
 fn type_of_query(query: &ast::Query) -> QueryType {
     for field in query.fields.iter() {
-        match field {
-            ast::Field::Expression(_) => {
-                return QueryType::Aggregation;
-            }
-            _ => {}
+        if let ast::Field::Expression(_) = field {
+            return QueryType::Aggregation;
         }
     }
 
-    return QueryType::Select;
+    QueryType::Select
 }
 
 fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
@@ -72,17 +69,14 @@ fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
             } else {
                 let mut result = String::new();
                 for (k, field) in query.fields.iter().enumerate() {
-                    match field {
-                        ast::Field::Table(table_field) => {
-                            let f = ClassicLoadBalancerLogField::from_str(&table_field.name).unwrap();
-                            if let Some(s) = record.get(f as usize) {
-                                if k > 0 {
-                                    result.push_str(" ");
-                                }
-                                result.push_str(s);
-                            };
-                        }
-                        _ => {}
+                    if let ast::Field::Table(table_field) = field {
+                        let f = ClassicLoadBalancerLogField::from_str(&table_field.name).unwrap();
+                        if let Some(s) = record.get(f as usize) {
+                            if k > 0 {
+                                result.push_str(" ");
+                            }
+                            result.push_str(s);
+                        };
                     }
                 }
 
@@ -98,34 +92,28 @@ fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
                     break;
                 } else {
                     for field in query.fields.iter() {
-                        match field {
-                            ast::Field::Expression(expression_field) => {
-                                if expression_field.func_call_expression.func_name == "avg" {
-                                    let value_column = expression_field
-                                        .clone()
-                                        .func_call_expression
-                                        .arguments
-                                        .first()
-                                        .unwrap()
-                                        .ident();
-                                    let partition_column =
-                                        expression_field.partition_clause.clone().unwrap().field_name;
-                                    let value_column_enum =
-                                        ClassicLoadBalancerLogField::from_str(&value_column).unwrap();
-                                    let partition_column_enum =
-                                        ClassicLoadBalancerLogField::from_str(&partition_column).unwrap();
+                        if let ast::Field::Expression(expression_field) = field {
+                            if expression_field.func_call_expression.func_name == "avg" {
+                                let value_column = expression_field
+                                    .clone()
+                                    .func_call_expression
+                                    .arguments
+                                    .first()
+                                    .unwrap()
+                                    .ident();
+                                let partition_column = expression_field.partition_clause.clone().unwrap().field_name;
+                                let value_column_enum = ClassicLoadBalancerLogField::from_str(&value_column).unwrap();
+                                let partition_column_enum =
+                                    ClassicLoadBalancerLogField::from_str(&partition_column).unwrap();
 
-                                    if let Some(s) = record.get(value_column_enum as usize) {
-                                        let partition_key =
-                                            record.get(partition_column_enum as usize).unwrap().to_string();
-                                        let value: f64 = s.parse().unwrap();
-                                        let entry = map.entry(partition_key).or_insert((0.0, 0));
-                                        (*entry).0 += value;
-                                        (*entry).1 += 1;
-                                    };
+                                if let Some(s) = record.get(value_column_enum as usize) {
+                                    let partition_key = record.get(partition_column_enum as usize).unwrap().to_string();
+                                    let value: f64 = s.parse().unwrap();
+                                    let entry = map.entry(partition_key).or_insert((0.0, 0));
+                                    (*entry).0 += value;
+                                    (*entry).1 += 1;
                                 }
                             }
-                            _ => {}
                         }
                     }
                 }

@@ -37,11 +37,11 @@ impl ReaderBuilder {
         ReaderBuilder::default()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::wrong_self_convention)]
     pub fn from_path<P: AsRef<Path>>(&self, path: P) -> Result<Reader<File>> {
         Ok(Reader::new(self, File::open(path)?))
     }
-
+    #[allow(dead_code, clippy::wrong_self_convention)]
     pub fn from_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
         Reader::new(self, rdr)
     }
