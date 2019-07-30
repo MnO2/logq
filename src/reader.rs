@@ -1,43 +1,22 @@
 use crate::string_record::StringRecord;
-use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
 use std::result;
 
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T> = result::Result<T, ReaderError>;
 
-#[derive(Debug)]
-pub struct Error(Box<ErrorKind>);
+#[derive(Fail, Debug)]
+pub enum ReaderError {
+    #[fail(display = "{}", _0)]
+    Io(#[cause] io::Error),
+}
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self.0 {
-            ErrorKind::Io(ref err) => err.fmt(f),
-        }
+impl From<io::Error> for ReaderError {
+    fn from(err: io::Error) -> ReaderError {
+        ReaderError::Io(err)
     }
-}
-
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        "io error"
-    }
-}
-
-pub fn new_error(kind: ErrorKind) -> Error {
-    Error(Box::new(kind))
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        new_error(ErrorKind::Io(err))
-    }
-}
-
-#[derive(Debug)]
-pub enum ErrorKind {
-    Io(io::Error),
 }
 
 #[derive(Debug)]

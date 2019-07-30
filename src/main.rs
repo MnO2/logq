@@ -14,7 +14,7 @@ use clap::load_yaml;
 use clap::App;
 use std::result;
 
-fn main() -> result::Result<(), reader::Error> {
+fn main() -> result::Result<(), reader::ReaderError> {
     let yaml = load_yaml!("cli.yml");
     let app_m = App::from_yaml(yaml).get_matches();
 

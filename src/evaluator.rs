@@ -3,7 +3,6 @@ use crate::classic_load_balancer_log_field::ClassicLoadBalancerLogField;
 use crate::reader;
 use crate::string_record::StringRecord;
 use std::collections::hash_map::HashMap;
-use std::fmt;
 use std::fs::File;
 use std::io;
 use std::result;
@@ -11,36 +10,23 @@ use std::str::FromStr;
 
 pub type EvalResult = result::Result<(), EvalError>;
 
-#[derive(Debug)]
-pub struct EvalError {
-    pub message: String,
-}
-
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for EvalError {
-    fn description(&self) -> &str {
-        &self.message
-    }
+#[derive(Fail, Debug)]
+pub enum EvalError {
+    #[fail(display = "{}", _0)]
+    Io(#[cause] io::Error),
+    #[fail(display = "{}", _0)]
+    Reader(#[cause] reader::ReaderError),
 }
 
 impl From<io::Error> for EvalError {
-    fn from(_: io::Error) -> EvalError {
-        EvalError {
-            message: "io error".to_string(),
-        }
+    fn from(err: io::Error) -> EvalError {
+        EvalError::Io(err)
     }
 }
 
-impl From<reader::Error> for EvalError {
-    fn from(_: reader::Error) -> EvalError {
-        EvalError {
-            message: "reader error".to_string(),
-        }
+impl From<reader::ReaderError> for EvalError {
+    fn from(err: reader::ReaderError) -> EvalError {
+        EvalError::Reader(err)
     }
 }
 
