@@ -38,6 +38,8 @@ pub enum StreamError {
     Get(#[cause] GetError),
     #[fail(display = "{}", _0)]
     Evaluate(#[cause] EvaluateError),
+    #[fail(display = "{}", _0)]
+    Expression(#[cause] ExpressionError),
 }
 
 impl From<GetError> for StreamError {
@@ -49,6 +51,12 @@ impl From<GetError> for StreamError {
 impl From<EvaluateError> for StreamError {
     fn from(err: EvaluateError) -> StreamError {
         StreamError::Evaluate(err)
+    }
+}
+
+impl From<ExpressionError> for StreamError {
+    fn from(err: ExpressionError) -> StreamError {
+        StreamError::Expression(err)
     }
 }
 
@@ -64,6 +72,10 @@ pub(crate) trait Expression {
     fn expression_value(&self, variables: Variables) -> ExpressionResult<Value>;
 }
 
+pub(crate) trait NamedExpression: Expression {
+    fn name(&self) -> VariableName;
+}
+
 pub(crate) trait Formula {
     fn evaluate(&self, variables: Variables) -> EvaluateResult<bool>;
 }
@@ -73,8 +85,8 @@ pub(crate) trait Node {
 }
 
 pub(crate) struct Record {
-    field_names: Vec<VariableName>,
-    data: Vec<Value>,
+    pub(crate) field_names: Vec<VariableName>,
+    pub(crate) data: Vec<Value>,
 }
 
 pub(crate) trait RecordStream {
