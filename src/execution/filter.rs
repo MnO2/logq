@@ -1,4 +1,4 @@
-use crate::execution::types::{Formula, Node, Variables, GetResult, RecordStream, Record, StreamResult};
+use crate::execution::types::{Formula, GetResult, Node, Record, RecordStream, StreamResult, Variables};
 use std::rc::Rc;
 
 pub(crate) struct FilterIterator {
@@ -22,12 +22,16 @@ impl FilterIterator {
 pub(crate) struct FilteredStream {
     formula: Rc<dyn Formula>,
     variables: Variables,
-    source: Box<dyn RecordStream>
+    source: Box<dyn RecordStream>,
 }
 
 impl FilteredStream {
     fn new(formula: Rc<dyn Formula>, variables: Variables, source: Box<dyn RecordStream>) -> Self {
-        FilteredStream { formula, variables, source }
+        FilteredStream {
+            formula,
+            variables,
+            source,
+        }
     }
 }
 
