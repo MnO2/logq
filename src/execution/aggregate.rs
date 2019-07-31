@@ -1,18 +1,9 @@
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::result;
+use crate::execution::types::{Tuple, Value};
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub(crate) enum Value {
-    Int(i64),
-    Float(OrderedFloat<f64>),
-    String(String),
-    Null,
-}
-
-type Tuple = Vec<Value>;
-
-pub type Result<T> = result::Result<T, AggregateError>;
+pub(crate) type Result<T> = result::Result<T, AggregateError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
 pub enum AggregateError {
@@ -23,8 +14,8 @@ pub enum AggregateError {
 }
 
 pub(crate) trait AggregateIterator {
-    fn add_record(key: Tuple, value: Value);
-    fn get_aggregated();
+    fn add_record(&mut self, key: Tuple, value: Value);
+    fn get_aggregated(&self);
 }
 
 #[derive(Debug)]
