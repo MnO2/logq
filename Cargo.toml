@@ -8,3 +8,5 @@ edition = "2018"
 clap = {version = "2.33.0", features = ["yaml"]}
 regex = "1.1.7"
 failure = "0.1.5"
+hashbrown = "0.5"
+ordered-float = "1.0"

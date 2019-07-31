@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate failure;
 
+mod execution;
 mod ast;
 mod classic_load_balancer_log_field;
 mod evaluator;
@@ -34,8 +35,10 @@ fn main() -> result::Result<(), reader::ReaderError> {
                             }
                         }
                     }
-                    Err(e) => {
-                        println!("{:?}", e);
+                    Err(errs) => {
+                        for e in errs {
+                            eprintln!("{}", e);
+                        }
                     }
                 }
             } else {
