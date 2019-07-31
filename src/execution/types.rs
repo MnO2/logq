@@ -1,5 +1,5 @@
-use ordered_float::OrderedFloat;
 use hashbrown::HashMap;
+use ordered_float::OrderedFloat;
 use std::result;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -50,6 +50,18 @@ impl From<EvaluateError> for StreamError {
     fn from(err: EvaluateError) -> StreamError {
         StreamError::Evaluate(err)
     }
+}
+
+pub(crate) type ExpressionResult<T> = result::Result<T, ExpressionError>;
+
+#[derive(Fail, PartialEq, Eq, Debug)]
+pub enum ExpressionError {
+    #[fail(display = "Key Not Found")]
+    KeyNotFound,
+}
+
+pub(crate) trait Expression {
+    fn expression_value(&self, variables: Variables) -> ExpressionResult<Value>;
 }
 
 pub(crate) trait Formula {
