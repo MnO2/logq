@@ -36,7 +36,7 @@ impl FilteredStream {
 }
 
 impl RecordStream for FilteredStream {
-    fn next(&self) -> StreamResult<Record> {
+    fn next(&mut self) -> StreamResult<Record> {
         loop {
             let record = self.source.next()?;
             let variables = self.variables.clone();

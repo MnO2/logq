@@ -1,9 +1,44 @@
-use crate::string_record::StringRecord;
+use crate::execution::types::{GetResult, Node, Record, RecordStream, StreamResult, Variables};
+use regex::Regex;
+use std::cell::RefCell;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
+use std::rc::Rc;
 use std::result;
+
+#[derive(Debug)]
+pub struct StringRecord {
+    pub fields: String,
+    split_the_line_regex: Regex,
+}
+
+impl StringRecord {
+    pub fn new() -> Self {
+        let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
+        let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
+
+        StringRecord {
+            fields: String::new(),
+            split_the_line_regex,
+        }
+    }
+
+    pub fn get(&self, i: usize) -> Option<&str> {
+        let r: Vec<&str> = self
+            .split_the_line_regex
+            .find_iter(&self.fields)
+            .map(|x| x.as_str())
+            .collect();
+
+        if i < r.len() {
+            Some(r[i])
+        } else {
+            None
+        }
+    }
+}
 
 pub type Result<T> = result::Result<T, ReaderError>;
 
@@ -83,4 +118,38 @@ impl<R: io::Read> Reader<R> {
 
         Ok(true)
     }
+
+    fn close(&self) {}
+}
+
+#[derive(Debug)]
+pub struct DataSource {
+    rdr: Rc<RefCell<Reader<File>>>,
+}
+
+impl Node for DataSource {
+    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
+        let stream = LogFileStream { rdr: self.rdr.clone() };
+
+        Ok(Box::new(stream))
+    }
+}
+
+pub struct LogFileStream {
+    rdr: Rc<RefCell<Reader<File>>>,
+}
+
+impl RecordStream for LogFileStream {
+    fn next(&mut self) -> StreamResult<Record> {
+        let mut record = StringRecord::new();
+        let more_records = self.rdr.borrow_mut().read_record(&mut record)?;
+
+        let record = Record {
+            field_names: Vec::new(),
+            data: Vec::new(),
+        };
+        Ok(record)
+    }
+
+    fn close(&self) {}
 }

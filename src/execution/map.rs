@@ -46,7 +46,7 @@ impl RecordStream for MappedStream {
         self.source.close();
     }
 
-    fn next(&self) -> StreamResult<Record> {
+    fn next(&mut self) -> StreamResult<Record> {
         let record = self.source.next()?;
         let variables = self.variables.clone();
 

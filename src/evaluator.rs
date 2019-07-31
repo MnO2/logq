@@ -1,7 +1,6 @@
 use crate::ast;
 use crate::classic_load_balancer_log_field::ClassicLoadBalancerLogField;
-use crate::reader;
-use crate::string_record::StringRecord;
+use crate::datasource::reader::{Reader, ReaderError, StringRecord};
 use std::collections::hash_map::HashMap;
 use std::fs::File;
 use std::io;
@@ -15,7 +14,7 @@ pub enum EvalError {
     #[fail(display = "{}", _0)]
     Io(#[cause] io::Error),
     #[fail(display = "{}", _0)]
-    Reader(#[cause] reader::ReaderError),
+    Reader(#[cause] ReaderError),
 }
 
 impl From<io::Error> for EvalError {
@@ -24,8 +23,8 @@ impl From<io::Error> for EvalError {
     }
 }
 
-impl From<reader::ReaderError> for EvalError {
-    fn from(err: reader::ReaderError) -> EvalError {
+impl From<ReaderError> for EvalError {
+    fn from(err: ReaderError) -> EvalError {
         EvalError::Reader(err)
     }
 }
@@ -58,7 +57,7 @@ fn type_of_query(query: &ast::Query) -> QueryType {
 
 fn eval_query(query: &ast::Query, env: &Environment) -> EvalResult {
     let file = File::open(&env.filename)?;
-    let mut rdr = reader::Reader::from_reader(file);
+    let mut rdr = Reader::from_reader(file);
     let mut record = StringRecord::new();
 
     match type_of_query(query) {

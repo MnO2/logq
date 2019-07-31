@@ -1,6 +1,8 @@
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::result;
+use std::io;
+use crate::datasource::reader::ReaderError;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {
@@ -28,6 +30,14 @@ pub(crate) type GetResult<T> = result::Result<T, GetError>;
 pub enum GetError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
+    #[fail(display = "Io Error")]
+    Io
+}
+
+impl From<io::Error> for GetError {
+    fn from(err: io::Error) -> GetError {
+        GetError::Io
+    }
 }
 
 pub(crate) type StreamResult<T> = result::Result<T, StreamError>;
@@ -40,6 +50,8 @@ pub enum StreamError {
     Evaluate(#[cause] EvaluateError),
     #[fail(display = "{}", _0)]
     Expression(#[cause] ExpressionError),
+    #[fail(display = "Reader Error")]
+    Reader,
 }
 
 impl From<GetError> for StreamError {
@@ -57,6 +69,12 @@ impl From<EvaluateError> for StreamError {
 impl From<ExpressionError> for StreamError {
     fn from(err: ExpressionError) -> StreamError {
         StreamError::Expression(err)
+    }
+}
+
+impl From<ReaderError> for StreamError {
+    fn from(_: ReaderError) -> StreamError {
+        StreamError::Reader
     }
 }
 
@@ -90,6 +108,6 @@ pub(crate) struct Record {
 }
 
 pub(crate) trait RecordStream {
-    fn next(&self) -> StreamResult<Record>;
+    fn next(&mut self) -> StreamResult<Record>;
     fn close(&self);
 }

@@ -7,15 +7,13 @@ mod classic_load_balancer_log_field;
 mod evaluator;
 mod lexer;
 mod parser;
-mod reader;
-mod string_record;
+mod datasource;
 mod token;
 
 use clap::load_yaml;
 use clap::App;
-use std::result;
 
-fn main() -> result::Result<(), reader::ReaderError> {
+fn main() {
     let yaml = load_yaml!("cli.yml");
     let app_m = App::from_yaml(yaml).get_matches();
 
@@ -49,6 +47,4 @@ fn main() -> result::Result<(), reader::ReaderError> {
             app_m.usage();
         }
     }
-
-    Ok(())
 }
