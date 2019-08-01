@@ -137,6 +137,7 @@ impl Node for DataSource {
 
 pub struct LogFileStream {
     rdr: Rc<RefCell<Reader<File>>>,
+
 }
 
 impl RecordStream for LogFileStream {
@@ -144,10 +145,10 @@ impl RecordStream for LogFileStream {
         let mut record = StringRecord::new();
         let more_records = self.rdr.borrow_mut().read_record(&mut record)?;
 
-        let record = Record {
-            field_names: Vec::new(),
-            data: Vec::new(),
-        };
+        let field_names = Vec::new();
+        let data = Vec::new();
+
+        let record = Record::new(field_names, data);
         Ok(record)
     }
 

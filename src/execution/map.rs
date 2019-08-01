@@ -59,8 +59,7 @@ impl RecordStream for MappedStream {
             data.push(v);
         }
 
-        let record = Record { field_names, data };
-
+        let record = Record::new(field_names, data);
         Ok(record)
     }
 }

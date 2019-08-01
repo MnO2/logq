@@ -52,6 +52,8 @@ pub enum StreamError {
     Expression(#[cause] ExpressionError),
     #[fail(display = "Reader Error")]
     Reader,
+     #[fail(display = "End Of Stream")]
+    EndOfStream,
 }
 
 impl From<GetError> for StreamError {
@@ -102,9 +104,16 @@ pub(crate) trait Node {
     fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>>;
 }
 
+#[derive(Debug)]
 pub(crate) struct Record {
-    pub(crate) field_names: Vec<VariableName>,
-    pub(crate) data: Vec<Value>,
+    field_names: Vec<VariableName>,
+    data: Vec<Value>,
+}
+
+impl Record {
+    pub(crate) fn new(field_names: Vec<VariableName>, data: Vec<Value>) -> Self {
+        Record { field_names, data }
+    }
 }
 
 pub(crate) trait RecordStream {
