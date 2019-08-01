@@ -1,4 +1,4 @@
-use crate::token::{self, Token};
+use super::token::{self, Token};
 use std::iter::Peekable;
 use std::str::Chars;
 

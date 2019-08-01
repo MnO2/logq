@@ -1,4 +1,5 @@
 use crate::common;
+use crate::common::types::VariableName;
 use crate::execution;
 use std::result;
 
@@ -15,6 +16,23 @@ pub(crate) trait Node {
         &self,
         physicalCreator: PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<dyn execution::types::Node>, common::types::Variables)>;
+}
+
+pub(crate) trait Expression {
+    fn physical(
+        &self,
+        physicalCreator: PhysicalPlanCreator,
+    ) -> PhysicalResult<(Box<dyn execution::types::Expression>, common::types::Variables)>;
+}
+
+pub(crate) struct Variable {
+    name: VariableName,
+}
+
+impl Variable {
+    pub(crate) fn new(name: String) -> Self {
+        Variable { name }
+    }
 }
 
 pub(crate) struct DataSource {

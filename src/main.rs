@@ -1,18 +1,34 @@
 #[macro_use]
 extern crate failure;
 
-mod ast;
 mod classic_load_balancer_log_field;
 mod common;
-mod evaluator;
 mod execution;
-mod lexer;
 mod logical;
-mod parser;
-mod token;
+mod syntax;
 
 use clap::load_yaml;
 use clap::App;
+use std::result;
+
+pub(crate) type AppResult<T> = result::Result<T, AppError>;
+
+#[derive(Fail, PartialEq, Eq, Debug)]
+pub enum AppError {
+    #[fail(display = "Parse Error")]
+    Parse,
+}
+
+impl From<syntax::parser::ParseErrors> for AppError {
+    fn from(_: syntax::parser::ParseErrors) -> AppError {
+        AppError::Parse
+    }
+}
+
+fn run(query_str: &str) -> AppResult<()> {
+    let stmt = syntax::parser::parse(&query_str)?;
+    Ok(())
+}
 
 fn main() {
     let yaml = load_yaml!("cli.yml");
@@ -21,25 +37,7 @@ fn main() {
     match app_m.subcommand() {
         ("select", Some(sub_m)) => {
             if let (Some(query_str), Some(filename)) = (sub_m.value_of("query"), sub_m.value_of("file_to_select")) {
-                match parser::parse(&query_str) {
-                    Ok(node) => {
-                        let env = evaluator::Environment {
-                            filename: filename.to_string(),
-                        };
-
-                        match evaluator::eval(&node, &env) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                println!("{:?}", e);
-                            }
-                        }
-                    }
-                    Err(errs) => {
-                        for e in errs {
-                            eprintln!("{}", e);
-                        }
-                    }
-                }
+                run(query_str);
             } else {
                 sub_m.usage();
             }

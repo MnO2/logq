@@ -1,18 +1,18 @@
-use crate::ast;
-use crate::lexer::Lexer;
-use crate::token::Token;
+use super::ast;
+use super::lexer::Lexer;
+use super::token::Token;
 
 #[derive(Fail, Debug)]
-pub enum ParseError {
+pub(crate) enum ParseError {
     #[fail(display = "Unexpected Token Found")]
     UnexpecedToken(Token),
 }
 
-type ParseErrors = Vec<ParseError>;
+pub(crate) type ParseErrors = Vec<ParseError>;
 
-pub type ParseResult<T> = Result<T, ParseError>;
+pub(crate) type ParseResult<T> = Result<T, ParseError>;
 
-pub fn parse(input: &str) -> Result<ast::Node, ParseErrors> {
+pub(crate) fn parse(input: &str) -> Result<ast::Node, ParseErrors> {
     let l = Lexer::new(input);
     let mut p = Parser::new(l);
     let query = p.parse_query()?;
@@ -20,7 +20,7 @@ pub fn parse(input: &str) -> Result<ast::Node, ParseErrors> {
     Ok(ast::Node::Query(Box::new(query)))
 }
 
-pub struct Parser<'a> {
+pub(crate) struct Parser<'a> {
     lexer: Lexer<'a>,
 
     curr_token: Token,
@@ -28,7 +28,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(l: Lexer<'a>) -> Self {
+    pub(crate) fn new(l: Lexer<'a>) -> Self {
         let mut l = l;
         let curr = l.next_token();
         let next = l.next_token();
@@ -40,7 +40,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_query(&mut self) -> Result<ast::Query, ParseErrors> {
+    pub(crate) fn parse_query(&mut self) -> Result<ast::Query, ParseErrors> {
         let mut query = ast::Query::new();
         let mut errors = ParseErrors::new();
 
@@ -61,7 +61,7 @@ impl<'a> Parser<'a> {
         Ok(query)
     }
 
-    pub fn parse_field(&mut self) -> ParseResult<ast::Field> {
+    pub(crate) fn parse_field(&mut self) -> ParseResult<ast::Field> {
         dbg!(&self.curr_token);
         match &self.curr_token.clone() {
             Token::Ident(name) => match &self.peek_token.clone() {
@@ -79,7 +79,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_func_call_expression(&mut self) -> ParseResult<ast::FuncCallExpression> {
+    pub(crate) fn parse_func_call_expression(&mut self) -> ParseResult<ast::FuncCallExpression> {
         let func_name = self.parse_identifier()?;
         dbg!(&func_name);
         let mut arguments: Vec<ast::Expression> = Vec::new();
@@ -99,7 +99,7 @@ impl<'a> Parser<'a> {
         Ok(func_call_expression)
     }
 
-    pub fn parse_expression(&mut self) -> ParseResult<ast::Expression> {
+    pub(crate) fn parse_expression(&mut self) -> ParseResult<ast::Expression> {
         if let Token::Ident(ref name) = self.curr_token.clone() {
             self.next_token();
             return Ok(ast::Expression::Identifier(name.to_string()));
@@ -111,7 +111,7 @@ impl<'a> Parser<'a> {
         Err(ParseError::UnexpecedToken(self.curr_token.clone()))
     }
 
-    pub fn parse_expression_field(&mut self) -> ParseResult<ast::Field> {
+    pub(crate) fn parse_expression_field(&mut self) -> ParseResult<ast::Field> {
         let func_call_expression = self.parse_func_call_expression()?;
 
         // eat the right paren
@@ -151,7 +151,7 @@ impl<'a> Parser<'a> {
         Err(ParseError::UnexpecedToken(self.curr_token.clone()))
     }
 
-    pub fn parse_ordering_clause(&mut self) -> ParseResult<ast::OrderingClause> {
+    pub(crate) fn parse_ordering_clause(&mut self) -> ParseResult<ast::OrderingClause> {
         self.expect_curr(&Token::Lparen)?;
         self.expect_curr(&Token::Order)?;
         self.expect_curr(&Token::By)?;
@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
         Ok(clause)
     }
 
-    pub fn parse_partition_clause(&mut self) -> ParseResult<ast::PartitionClause> {
+    pub(crate) fn parse_partition_clause(&mut self) -> ParseResult<ast::PartitionClause> {
         self.expect_curr(&Token::Lparen)?;
         self.expect_curr(&Token::Partition)?;
         self.expect_curr(&Token::By)?;
@@ -213,8 +213,8 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod test {
+    use super::super::lexer::Lexer;
     use super::*;
-    use crate::lexer::Lexer;
 
     fn setup(input: &str) -> ast::Query {
         let l = Lexer::new(input);
