@@ -137,7 +137,6 @@ impl Node for DataSource {
 
 pub struct LogFileStream {
     rdr: Rc<RefCell<Reader<File>>>,
-
 }
 
 impl RecordStream for LogFileStream {

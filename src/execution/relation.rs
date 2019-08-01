@@ -13,7 +13,7 @@ pub(crate) struct Equal {}
 
 impl Equal {
     pub(crate) fn new() -> Self {
-        Equal{}
+        Equal {}
     }
 }
 

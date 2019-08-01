@@ -1,7 +1,7 @@
+use crate::execution::types::{Tuple, Value};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::result;
-use crate::execution::types::{Tuple, Value};
 
 pub(crate) type Result<T> = result::Result<T, AggregateError>;
 
