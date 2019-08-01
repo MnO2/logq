@@ -1,20 +1,10 @@
-use crate::datasource::reader::ReaderError;
-use hashbrown::HashMap;
-use ordered_float::OrderedFloat;
+use super::datasource::{LogFileStream, Reader, ReaderError};
+use crate::common::types::{Value, VariableName, Variables};
+use std::cell::RefCell;
+use std::fs::File;
 use std::io;
+use std::rc::Rc;
 use std::result;
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub(crate) enum Value {
-    Int(i64),
-    Float(OrderedFloat<f64>),
-    String(String),
-    Null,
-}
-
-pub(crate) type Tuple = Vec<Value>;
-pub(crate) type VariableName = String;
-pub(crate) type Variables = HashMap<VariableName, Value>;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
@@ -147,4 +137,17 @@ impl Record {
 pub(crate) trait RecordStream {
     fn next(&mut self) -> StreamResult<Record>;
     fn close(&self);
+}
+
+#[derive(Debug)]
+pub struct DataSource {
+    rdr: Rc<RefCell<Reader<File>>>,
+}
+
+impl Node for DataSource {
+    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
+        let stream = LogFileStream { rdr: self.rdr.clone() };
+
+        Ok(Box::new(stream))
+    }
 }

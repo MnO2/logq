@@ -1,8 +1,6 @@
-use crate::execution::logic::Predicate;
-use crate::execution::relation::Equal;
-use crate::execution::types::{
-    Formula, GetResult, Node, Record, RecordStream, StreamError, StreamResult, Value, Variable, Variables,
-};
+use crate::common::types::{Value, Variables};
+use crate::execution::datasource::InMemoryStream;
+use crate::execution::types::{Formula, GetResult, Node, Record, RecordStream, StreamError, StreamResult, Variable};
 use hashbrown::HashMap;
 use std::rc::Rc;
 
@@ -61,7 +59,9 @@ impl RecordStream for FilteredStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::in_memory_stream::InMemoryStream;
+    use crate::execution::datasource::InMemoryStream;
+    use crate::execution::logic::Predicate;
+    use crate::execution::relation::Equal;
     use std::collections::VecDeque;
 
     #[test]

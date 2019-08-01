@@ -1,4 +1,5 @@
 mod aggregate;
+pub mod datasource;
 mod filter;
 mod logic;
 mod map;

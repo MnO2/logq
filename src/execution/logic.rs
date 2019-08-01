@@ -1,5 +1,6 @@
+use crate::common::types::Variables;
 use crate::execution::relation::Relation;
-use crate::execution::types::{EvaluateResult, Expression, Formula, Variables};
+use crate::execution::types::{EvaluateResult, Expression, Formula};
 
 pub(crate) struct Constant {
     value: bool,

@@ -1,4 +1,5 @@
-use crate::execution::types::{Expression, ExpressionResult, Value, Variables};
+use crate::common::types::{Value, Variables};
+use crate::execution::types::{Expression, ExpressionResult};
 
 pub(crate) trait Relation {
     fn apply(

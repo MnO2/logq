@@ -1,4 +1,5 @@
-use crate::execution::types::{GetResult, NamedExpression, Node, Record, RecordStream, StreamResult, Value, Variables};
+use crate::common::types::{Value, Variables};
+use crate::execution::types::{GetResult, NamedExpression, Node, Record, RecordStream, StreamResult};
 use std::rc::Rc;
 
 pub(crate) struct Map {

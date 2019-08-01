@@ -3,10 +3,11 @@ extern crate failure;
 
 mod ast;
 mod classic_load_balancer_log_field;
-mod datasource;
+mod common;
 mod evaluator;
 mod execution;
 mod lexer;
+mod logical;
 mod parser;
 mod token;
 

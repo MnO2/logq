@@ -1,6 +1,7 @@
-use crate::execution::types::{GetResult, Node, Record, RecordStream, StreamResult, Variables};
+use crate::execution::types::{Record, RecordStream, StreamError, StreamResult};
 use regex::Regex;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -122,21 +123,8 @@ impl<R: io::Read> Reader<R> {
     fn close(&self) {}
 }
 
-#[derive(Debug)]
-pub struct DataSource {
-    rdr: Rc<RefCell<Reader<File>>>,
-}
-
-impl Node for DataSource {
-    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
-        let stream = LogFileStream { rdr: self.rdr.clone() };
-
-        Ok(Box::new(stream))
-    }
-}
-
-pub struct LogFileStream {
-    rdr: Rc<RefCell<Reader<File>>>,
+pub(crate) struct LogFileStream {
+    pub(crate) rdr: Rc<RefCell<Reader<File>>>,
 }
 
 impl RecordStream for LogFileStream {
@@ -149,6 +137,29 @@ impl RecordStream for LogFileStream {
 
         let record = Record::new(field_names, data);
         Ok(record)
+    }
+
+    fn close(&self) {}
+}
+
+#[derive(Debug)]
+pub(crate) struct InMemoryStream {
+    pub(crate) data: VecDeque<Record>,
+}
+
+impl InMemoryStream {
+    pub(crate) fn new(data: VecDeque<Record>) -> InMemoryStream {
+        InMemoryStream { data }
+    }
+}
+
+impl RecordStream for InMemoryStream {
+    fn next(&mut self) -> StreamResult<Record> {
+        if let Some(record) = self.data.pop_front() {
+            Ok(record)
+        } else {
+            Err(StreamError::EndOfStream)
+        }
     }
 
     fn close(&self) {}
