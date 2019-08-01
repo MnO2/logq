@@ -1,8 +1,8 @@
+use crate::datasource::reader::ReaderError;
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
-use std::result;
 use std::io;
-use crate::datasource::reader::ReaderError;
+use std::result;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {
@@ -22,6 +22,14 @@ pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 pub enum EvaluateError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
+    #[fail(display = "{}", _0)]
+    Expression(#[cause] ExpressionError),
+}
+
+impl From<ExpressionError> for EvaluateError {
+    fn from(err: ExpressionError) -> EvaluateError {
+        EvaluateError::Expression(err)
+    }
 }
 
 pub(crate) type GetResult<T> = result::Result<T, GetError>;
@@ -31,7 +39,7 @@ pub enum GetError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
     #[fail(display = "Io Error")]
-    Io
+    Io,
 }
 
 impl From<io::Error> for GetError {
@@ -52,7 +60,7 @@ pub enum StreamError {
     Expression(#[cause] ExpressionError),
     #[fail(display = "Reader Error")]
     Reader,
-     #[fail(display = "End Of Stream")]
+    #[fail(display = "End Of Stream")]
     EndOfStream,
 }
 
@@ -96,6 +104,26 @@ pub(crate) trait NamedExpression: Expression {
     fn name(&self) -> VariableName;
 }
 
+pub(crate) struct Variable {
+    name: VariableName,
+}
+
+impl Variable {
+    pub(crate) fn new(name: String) -> Self {
+        Variable { name }
+    }
+}
+
+impl Expression for Variable {
+    fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
+        if let Some(v) = variables.get(&self.name) {
+            Ok(v.clone())
+        } else {
+            Err(ExpressionError::KeyNotFound)
+        }
+    }
+}
+
 pub(crate) trait Formula {
     fn evaluate(&self, variables: Variables) -> EvaluateResult<bool>;
 }
@@ -104,7 +132,7 @@ pub(crate) trait Node {
     fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
     field_names: Vec<VariableName>,
     data: Vec<Value>,

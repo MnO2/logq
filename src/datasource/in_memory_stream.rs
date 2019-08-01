@@ -7,7 +7,7 @@ pub(crate) struct InMemoryStream {
 }
 
 impl InMemoryStream {
-    fn new(data: VecDeque<Record>) -> InMemoryStream {
+    pub(crate) fn new(data: VecDeque<Record>) -> InMemoryStream {
         InMemoryStream { data }
     }
 }

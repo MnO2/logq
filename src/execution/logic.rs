@@ -1,6 +1,7 @@
-use crate::execution::types::{Formula, EvaluateResult, Variables};
+use crate::execution::relation::Relation;
+use crate::execution::types::{EvaluateResult, Expression, Formula, Variables};
 
-struct Constant {
+pub(crate) struct Constant {
     value: bool,
 }
 
@@ -10,7 +11,7 @@ impl Constant {
     }
 }
 
-struct And {
+pub(crate) struct And {
     left: Box<dyn Formula>,
     right: Box<dyn Formula>,
 }
@@ -29,7 +30,7 @@ impl Formula for And {
     }
 }
 
-struct Or {
+pub(crate) struct Or {
     left: Box<dyn Formula>,
     right: Box<dyn Formula>,
 }
@@ -48,3 +49,21 @@ impl Formula for Or {
     }
 }
 
+pub(crate) struct Predicate {
+    left: Box<dyn Expression>,
+    right: Box<dyn Expression>,
+    relation: Box<dyn Relation>,
+}
+
+impl Predicate {
+    pub(crate) fn new(left: Box<dyn Expression>, right: Box<dyn Expression>, relation: Box<dyn Relation>) -> Self {
+        Predicate { left, right, relation }
+    }
+}
+
+impl Formula for Predicate {
+    fn evaluate(&self, variables: Variables) -> EvaluateResult<bool> {
+        let result = self.relation.apply(variables, &self.left, &self.right)?;
+        Ok(result)
+    }
+}
