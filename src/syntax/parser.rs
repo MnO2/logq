@@ -26,10 +26,10 @@ fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>
 fn number<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
     alt((
         map_res(digit1, |digit_str: &str| {
-            digit_str.parse::<i32>().map(ast::Value::Number)
+            digit_str.parse::<i32>().map(ast::Value::Integral)
         }),
         map(preceded(tag("-"), digit1), |digit_str: &str| {
-            ast::Value::Number(-1 * digit_str.parse::<i32>().unwrap())
+            ast::Value::Integral(-1 * digit_str.parse::<i32>().unwrap())
         }),
     ))(i)
 }
@@ -154,8 +154,8 @@ mod test {
 
     #[test]
     fn test_number() {
-        assert_eq!(number("123"), Ok(("", ast::Value::Number(123))));
-        assert_eq!(number("-123"), Ok(("", ast::Value::Number(-123))));
+        assert_eq!(number("123"), Ok(("", ast::Value::Integral(123))));
+        assert_eq!(number("-123"), Ok(("", ast::Value::Integral(-123))));
     }
 
     #[test]
@@ -164,10 +164,10 @@ mod test {
             ast::ValueOperator::Plus,
             Box::new(ast::ValueExpression::Operator(
                 ast::ValueOperator::Plus,
-                Box::new(ast::ValueExpression::Value(ast::Value::Number(1))),
-                Box::new(ast::ValueExpression::Value(ast::Value::Number(2))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(2))),
             )),
-            Box::new(ast::ValueExpression::Value(ast::Value::Number(3))),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
         );
         assert_eq!(value_expression("1 + 2 + 3"), Ok(("", ans)));
     }
@@ -178,10 +178,10 @@ mod test {
             ast::RelationOperator::Equal,
             Box::new(ast::ValueExpression::Operator(
                 ast::ValueOperator::Plus,
-                Box::new(ast::ValueExpression::Value(ast::Value::Number(1))),
-                Box::new(ast::ValueExpression::Value(ast::Value::Number(2))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(2))),
             )),
-            Box::new(ast::ValueExpression::Value(ast::Value::Number(3))),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
         );
 
         assert_eq!(condition("1 + 2 = 3"), Ok(("", ans)));
@@ -211,13 +211,13 @@ mod test {
 
         let ans = vec![
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Number(1),
+                ast::Value::Integral(1),
             ))))),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Number(2),
+                ast::Value::Integral(2),
             ))))),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Number(3),
+                ast::Value::Integral(3),
             ))))),
         ];
         assert_eq!(select_expression_list("1, 2, 3"), Ok(("", ans)));

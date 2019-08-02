@@ -75,7 +75,7 @@ pub(crate) enum ValueOperator {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Value {
-    Number(i32),
+    Integral(i32),
     StringLiteral(String),
     Boolean(bool),
 }
