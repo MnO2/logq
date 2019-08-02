@@ -1,3 +1,4 @@
+use ordered_float::OrderedFloat;
 use std::fmt;
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ pub(crate) enum ValueOperator {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Value {
     Integral(i32),
+    Float(OrderedFloat<f32>),
     StringLiteral(String),
     Boolean(bool),
 }

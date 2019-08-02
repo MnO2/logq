@@ -1,19 +1,33 @@
 use super::ast;
+use ordered_float::OrderedFloat;
 
 use nom::{
     branch::alt,
-    bytes::complete::{escaped, tag, take_while},
-    character::complete::{alphanumeric1 as alphanumeric, char, digit1, multispace0, multispace1, one_of, space0},
+    bytes::complete::{escaped, tag},
+    character::complete::{
+        alpha1, alphanumeric1 as alphanumeric, char, digit1, multispace0, multispace1, one_of, space0,
+    },
     combinator::{cut, map, map_res, opt},
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
-    number::complete::double,
-    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
+    number::complete,
+    sequence::{delimited, pair, preceded, separated_pair, terminated},
     IResult,
 };
 
-fn string_literal<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
     escaped(alphanumeric, '\\', one_of("\"n\\"))(i)
+}
+
+fn string_literal<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+    context(
+        "string",
+        preceded(char('\"'), cut(terminated(string_literal_interior, char('\"')))),
+    )(i)
+}
+
+fn column_name<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+    alpha1(i)
 }
 
 fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
@@ -23,7 +37,11 @@ fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>
     ))(i)
 }
 
-fn number<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+fn float<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+    map(complete::float, |f| ast::Value::Float(OrderedFloat::from(f)))(i)
+}
+
+fn integral<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
     alt((
         map_res(digit1, |digit_str: &str| {
             digit_str.parse::<i32>().map(ast::Value::Integral)
@@ -35,7 +53,7 @@ fn number<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>>
 }
 
 fn value<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
-    alt((number, boolean))(i)
+    alt((integral, boolean, float))(i)
 }
 
 fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
@@ -45,6 +63,11 @@ fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError
 fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
     alt((
         delimited(space0, map(value, |v| ast::ValueExpression::Value(v)), space0),
+        delimited(
+            space0,
+            map(column_name, |n| ast::ValueExpression::Column(n.to_string())),
+            space0,
+        ),
         parens,
     ))(i)
 }
@@ -148,14 +171,14 @@ mod test {
 
     #[test]
     fn test_string_literal() {
-        assert_eq!(string_literal("abc"), Ok(("", "abc")));
-        assert_eq!(string_literal("def"), Ok(("", "def")));
+        assert_eq!(string_literal("\"abc\""), Ok(("", "abc")));
+        assert_eq!(string_literal("\"def\""), Ok(("", "def")));
     }
 
     #[test]
-    fn test_number() {
-        assert_eq!(number("123"), Ok(("", ast::Value::Integral(123))));
-        assert_eq!(number("-123"), Ok(("", ast::Value::Integral(-123))));
+    fn test_integral() {
+        assert_eq!(integral("123"), Ok(("", ast::Value::Integral(123))));
+        assert_eq!(integral("-123"), Ok(("", ast::Value::Integral(-123))));
     }
 
     #[test]
@@ -221,5 +244,18 @@ mod test {
             ))))),
         ];
         assert_eq!(select_expression_list("1, 2, 3"), Ok(("", ans)));
+
+        let ans = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("a".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("b".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("c".to_string()),
+            )))),
+        ];
+        assert_eq!(select_expression_list("a, b, c"), Ok(("", ans)));
     }
 }
