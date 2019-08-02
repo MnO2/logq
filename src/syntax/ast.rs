@@ -1,7 +1,7 @@
 use ordered_float::OrderedFloat;
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
     pub(crate) select_exprs: Vec<SelectExpression>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
@@ -88,7 +88,7 @@ pub enum Value {
     Boolean(bool),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct WhereExpression {
     pub(crate) expr: Expression,
 }
@@ -99,7 +99,7 @@ impl WhereExpression {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct GroupByExpression {
     pub(crate) expr: Expression,
 }
