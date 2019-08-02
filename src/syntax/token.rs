@@ -6,20 +6,20 @@ pub enum Token {
     Ident(String),
     Int(i64),
 
+    Star,
     Comma,
 
     Lparen,
     Rparen,
 
     Over,
-    Partition,
     By,
-
-    Within,
     Group,
-
     Order,
 
+    True,
+    False,
+    
     Asc,
     Desc,
 }
@@ -27,9 +27,7 @@ pub enum Token {
 pub fn lookup_ident(ident: String) -> Token {
     match ident.as_str() {
         "over" => Token::Over,
-        "partition" => Token::Partition,
         "by" => Token::By,
-        "within" => Token::Within,
         "group" => Token::Group,
         "order" => Token::Order,
         "asc" => Token::Asc,

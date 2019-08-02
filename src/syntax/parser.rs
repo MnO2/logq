@@ -8,11 +8,9 @@ pub(crate) enum ParseError {
     UnexpecedToken(Token),
 }
 
-pub(crate) type ParseErrors = Vec<ParseError>;
-
 pub(crate) type ParseResult<T> = Result<T, ParseError>;
 
-pub(crate) fn parse(input: &str) -> Result<ast::Node, ParseErrors> {
+pub(crate) fn parse(input: &str) -> ParseResult<ast::Node> {
     let l = Lexer::new(input);
     let mut p = Parser::new(l);
     let query = p.parse_query()?;
@@ -40,106 +38,60 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(crate) fn parse_query(&mut self) -> Result<ast::Query, ParseErrors> {
+    pub(crate) fn parse_query(&mut self) -> ParseResult<ast::Query> {
         let mut query = ast::Query::new();
-        let mut errors = ParseErrors::new();
-
-        while self.expect_curr(&Token::EOF).is_err() {
-            match self.parse_field() {
-                Ok(field) => query.fields.push(field),
-                Err(err) => errors.push(err),
-            }
-
-            dbg!(&self.curr_token);
-            let _ = self.expect_curr(&Token::Comma).is_ok();
-        }
-
-        if !errors.is_empty() {
-            return Err(errors);
-        }
+        let fields = self.parse_select_expression_list()?;
+        let where_clause = self.parse_where_clause()?;
 
         Ok(query)
     }
 
-    pub(crate) fn parse_field(&mut self) -> ParseResult<ast::Field> {
-        dbg!(&self.curr_token);
-        match &self.curr_token.clone() {
-            Token::Ident(name) => match &self.peek_token.clone() {
-                Token::Lparen => self.parse_expression_field(),
-                Token::Comma => {
-                    self.next_token();
-                    Ok(ast::Field::Table(Box::new(ast::TableField { name: name.to_string() })))
-                }
-                _ => {
-                    self.next_token();
-                    Ok(ast::Field::Table(Box::new(ast::TableField { name: name.to_string() })))
-                }
-            },
-            _ => Err(ParseError::UnexpecedToken(self.curr_token.clone())),
+    pub(crate) fn parse_select_expression_list(&mut self) -> ParseResult<Vec<ast::SelectExpression>> {
+        let mut select_exprs: Vec<ast::SelectExpression> = Vec::new();
+
+        while self.expect_curr(&Token::EOF).is_err() {
+            let select_expr = self.parse_select_expression()?;
+            select_exprs.push(select_expr);
+
+            if self.expect_curr(&Token::Comma).is_err() {
+                break;
+            }
         }
+
+        Ok(select_exprs)
     }
 
-    pub(crate) fn parse_func_call_expression(&mut self) -> ParseResult<ast::FuncCallExpression> {
-        let func_name = self.parse_identifier()?;
-        dbg!(&func_name);
-        let mut arguments: Vec<ast::Expression> = Vec::new();
-
-        // eat up the left paren
-        self.expect_curr(&Token::Lparen)?;
-        while self.expect_curr(&Token::Rparen).is_err() {
-            let expression = self.parse_expression()?;
-            dbg!(&expression);
-            arguments.push(expression);
-
-            let _ = self.expect_curr(&Token::Comma).is_ok();
+    pub(crate) fn parse_select_expression(&mut self) -> ParseResult<ast::SelectExpression> {
+        if self.expect_curr(&Token::Star).is_ok() {
+            Ok(ast::SelectExpression::Star)
+        } else {
+            let expr = self.parse_expression()?;
+            Ok(ast::SelectExpression::Expression(Box::new(expr)))
         }
-
-        let func_call_expression = ast::FuncCallExpression { func_name, arguments };
-
-        Ok(func_call_expression)
     }
 
     pub(crate) fn parse_expression(&mut self) -> ParseResult<ast::Expression> {
+        unimplemented!();
+    }
+
+    pub(crate) fn parse_value_expression(&mut self) -> ParseResult<ast::ValueExpression> {
         if let Token::Ident(ref name) = self.curr_token.clone() {
             self.next_token();
-            return Ok(ast::Expression::Identifier(name.to_string()));
+            return Ok(ast::ValueExpression::Column(name.to_string()));
         } else if let Token::Int(int) = self.curr_token.clone() {
             self.next_token();
-            return Ok(ast::Expression::Int(int));
+            return Ok(ast::ValueExpression::Int(int));
         }
 
         Err(ParseError::UnexpecedToken(self.curr_token.clone()))
     }
 
-    pub(crate) fn parse_expression_field(&mut self) -> ParseResult<ast::Field> {
-        let func_call_expression = self.parse_func_call_expression()?;
+    pub(crate) fn parse_where_clause(&mut self) -> ParseResult<ast::WhereClause> {
+        unimplemented!();
+    }
 
-        // eat the right paren
-        //self.expect_curr(&Token::Rparen)?;
-
-        dbg!(&self.curr_token);
-        let group_clause = if self.expect_curr(&Token::Within).is_ok() {
-            self.expect_curr(&Token::Group)?;
-            Some(self.parse_ordering_clause()?)
-        } else {
-            None
-        };
-
-        dbg!(&group_clause);
-
-        let partition_clause = if self.expect_curr(&Token::Over).is_ok() {
-            Some(self.parse_partition_clause()?)
-        } else {
-            None
-        };
-
-        dbg!(&partition_clause);
-
-        let field = ast::ExpressionField {
-            func_call_expression,
-            partition_clause,
-        };
-        Ok(ast::Field::Expression(Box::new(field)))
+    pub(crate) fn parse_func_call(&mut self) -> ParseResult<ast::FuncCallExpression> {
+        unimplemented!();
     }
 
     fn parse_identifier(&mut self) -> ParseResult<String> {
@@ -149,43 +101,6 @@ impl<'a> Parser<'a> {
         }
 
         Err(ParseError::UnexpecedToken(self.curr_token.clone()))
-    }
-
-    pub(crate) fn parse_ordering_clause(&mut self) -> ParseResult<ast::OrderingClause> {
-        self.expect_curr(&Token::Lparen)?;
-        self.expect_curr(&Token::Order)?;
-        self.expect_curr(&Token::By)?;
-
-        let name = self.parse_identifier()?;
-        dbg!(&name);
-
-        let ordering = if self.expect_curr(&Token::Asc).is_ok() {
-            ast::Ordering::Asc
-        } else if self.expect_curr(&Token::Desc).is_ok() {
-            ast::Ordering::Desc
-        } else {
-            ast::Ordering::Asc
-        };
-
-        self.expect_curr(&Token::Rparen)?;
-
-        let clause = ast::OrderingClause {
-            field_name: name,
-            ordering,
-        };
-
-        Ok(clause)
-    }
-
-    pub(crate) fn parse_partition_clause(&mut self) -> ParseResult<ast::PartitionClause> {
-        self.expect_curr(&Token::Lparen)?;
-        self.expect_curr(&Token::Partition)?;
-        self.expect_curr(&Token::By)?;
-
-        let name = self.parse_identifier()?;
-        let clause = ast::PartitionClause { field_name: name };
-        self.expect_curr(&Token::Rparen)?;
-        Ok(clause)
     }
 
     fn expect_curr(&mut self, token: &Token) -> Result<(), ParseError> {
@@ -215,53 +130,4 @@ impl<'a> Parser<'a> {
 mod test {
     use super::super::lexer::Lexer;
     use super::*;
-
-    fn setup(input: &str) -> ast::Query {
-        let l = Lexer::new(input);
-        let mut p = Parser::new(l);
-        p.parse_query().unwrap()
-    }
-
-    fn unwrap_expression_field(query: &ast::Query) -> &ast::ExpressionField {
-        match query.fields.first().unwrap() {
-            ast::Field::Expression(field) => field,
-            field => panic!("{:?} isn't an expression field", field),
-        }
-    }
-
-    fn unwrap_table_field(query: &ast::Query) -> &ast::TableField {
-        match query.fields.first().unwrap() {
-            ast::Field::Table(field) => field,
-            field => panic!("{:?} isn't an expression field", field),
-        }
-    }
-
-    #[test]
-    fn test_table_field() {
-        let input = "timestamp, backend_and_port";
-        let query = setup(input);
-        let field = unwrap_table_field(&query);
-
-        assert_eq!(field.name, "timestamp");
-    }
-
-    #[test]
-    fn test_aggregate_function_with_partition_clause() {
-        let input = "avg(backend_processing_time) over (partition by backend_and_port)";
-        let query = setup(input);
-        let field = unwrap_expression_field(&query);
-
-        assert_eq!(field.func_call_expression.func_name, "avg");
-        assert_eq!(field.func_call_expression.arguments.len(), 1);
-    }
-
-    #[test]
-    fn test_aggregate_function_with_group_clause() {
-        let input = "percentile_disc(1) within group (order by backend_processing_time desc) over (partition by backend_and_port)";
-        let query = setup(input);
-        let field = unwrap_expression_field(&query);
-
-        assert_eq!(field.func_call_expression.func_name, "percentile_disc");
-        assert_eq!(field.func_call_expression.arguments.len(), 1);
-    }
 }

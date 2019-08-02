@@ -19,8 +19,8 @@ pub enum AppError {
     Parse,
 }
 
-impl From<syntax::parser::ParseErrors> for AppError {
-    fn from(_: syntax::parser::ParseErrors) -> AppError {
+impl From<syntax::parser::ParseError> for AppError {
+    fn from(_: syntax::parser::ParseError) -> AppError {
         AppError::Parse
     }
 }

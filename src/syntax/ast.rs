@@ -1,85 +1,87 @@
 use std::fmt;
 
 #[derive(Debug)]
-pub enum Node {
+pub(crate) enum Node {
     Query(Box<Query>),
 }
 
 #[derive(Debug)]
-pub enum Field {
-    Table(Box<TableField>),
-    Expression(Box<ExpressionField>),
-}
-
-#[derive(Debug)]
-pub struct Query {
-    pub fields: Vec<Field>,
+pub(crate) struct Query {
+    pub select_exprs: Vec<SelectExpression>,
 }
 
 impl Query {
     pub fn new() -> Self {
-        Query { fields: Vec::new() }
+        Query {
+            select_exprs: Vec::new(),
+        }
     }
 }
 
 impl fmt::Display for Query {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let fields: Vec<String> = (&self.fields)
+        let select_exprs_str: Vec<String> = (&self.select_exprs)
             .iter()
             .map(|field| match field {
-                Field::Table(tf) => tf.name.clone(),
-                Field::Expression(_) => "<func>".to_string(),
+                SelectExpression::Star => "<star>".to_string(),
+                SelectExpression::Expression(e) => format!("{:?}", e),
             })
             .collect();
-        write!(f, "{:?}", fields)
+        write!(f, "{:?}", select_exprs_str)
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Expression {
-    Identifier(String),
+pub(crate) enum SelectExpression {
+    Star,
+    Expression(Box<Expression>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Expression {
+    Condition(Condition),
+    And(Box<Expression>, Box<Expression>),
+    Or(Box<Expression>, Box<Expression>),
+    Not(Box<Expression>),
+    Value(Box<ValueExpression>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Condition {
+    ComparisonExpression(OperatorName, Box<ValueExpression>, Box<ValueExpression>),
+}
+
+pub(crate) type FuncName = String;
+pub(crate) type OperatorName = String;
+pub(crate) type ColumnName = String;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum ValueExpression {
+    Column(ColumnName),
     Int(i64),
-}
-
-impl Expression {
-    pub fn ident(&self) -> String {
-        match self {
-            Expression::Identifier(ref s) => s.to_string(),
-            _ => panic!("Expression is not an Identifier"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct TableField {
-    pub name: String,
+    Operator(OperatorName, Box<ValueExpression>, Box<ValueExpression>),
+    FuncCall(FuncName, Vec<Box<SelectExpression>>),
 }
 
 #[derive(Debug, Clone)]
-pub struct ExpressionField {
-    pub func_call_expression: FuncCallExpression,
-    pub partition_clause: Option<PartitionClause>,
+pub(crate) struct WhereClause {
+    pub(crate) expr: Expression,
 }
 
 #[derive(Debug, Clone)]
-pub struct PartitionClause {
-    pub field_name: String,
+pub(crate) enum BooleanValue {
+    True,
+    False,
 }
 
-#[derive(Debug)]
-pub struct OrderingClause {
-    pub field_name: String,
-    pub ordering: Ordering,
-}
-
-#[derive(Debug)]
-pub enum Ordering {
+#[derive(Debug, Clone)]
+pub(crate) enum Ordering {
     Asc,
     Desc,
 }
 
 #[derive(Debug, Clone)]
-pub struct FuncCallExpression {
-    pub func_name: String,
-    pub arguments: Vec<Expression>,
+pub(crate) struct FuncCallExpression {
+    pub(crate) func_name: String,
+    pub(crate) arguments: Vec<ValueExpression>,
 }
