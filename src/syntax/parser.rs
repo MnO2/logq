@@ -168,4 +168,32 @@ mod test {
         );
         assert_eq!(value_expression("1 + 2 + 3"), Ok(("", ans)));
     }
+
+    #[test]
+    fn test_condition_expression() {
+        let ans = ast::Condition::ComparisonExpression(
+            ast::RelationOperator::Equal,
+            Box::new(ast::ValueExpression::Operator(
+                ast::ValueOperator::Plus,
+                Box::new(ast::ValueExpression::Value(ast::Value::Number(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Number(2))),
+            )),
+            Box::new(ast::ValueExpression::Value(ast::Value::Number(3))),
+        );
+
+        assert_eq!(condition("1 + 2 = 3"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_expression_term() {
+        let ans = ast::Expression::And(
+            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Boolean(true),
+            )))),
+            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Boolean(true),
+            )))),
+        );
+        assert_eq!(expression_term("true AND true"), Ok(("", ans)));
+    }
 }
