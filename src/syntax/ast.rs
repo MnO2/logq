@@ -69,7 +69,7 @@ pub(crate) enum ValueExpression {
     Column(ColumnName),
     Value(Value),
     Operator(ValueOperator, Box<ValueExpression>, Box<ValueExpression>),
-    FuncCall(FuncName, Vec<Box<SelectExpression>>),
+    FuncCall(FuncName, Option<Vec<SelectExpression>>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

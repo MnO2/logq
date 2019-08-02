@@ -58,8 +58,20 @@ fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError
     delimited(space0, delimited(tag("("), value_expression, tag(")")), space0)(i)
 }
 
+fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
+    map(
+        delimited(
+            space0,
+            tuple((alpha1, delimited(tag("("), opt(select_expression_list), tag(")")))),
+            space0,
+        ),
+        |(func_name, select_expr_list)| ast::ValueExpression::FuncCall(func_name.to_string(), select_expr_list),
+    )(i)
+}
+
 fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
     alt((
+        func_call,
         delimited(space0, map(value, |v| ast::ValueExpression::Value(v)), space0),
         delimited(
             space0,
@@ -285,5 +297,34 @@ mod test {
         let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
 
         assert_eq!(select_query("a, b, c where a = 1"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_select_statement_with_func_call() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::FuncCall(
+                    "avg".to_string(),
+                    Some(vec![ast::SelectExpression::Expression(Box::new(
+                        ast::Expression::Value(Box::new(ast::ValueExpression::Column("a".to_string()))),
+                    ))]),
+                ),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("b".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("c".to_string()),
+            )))),
+        ];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
+            ast::RelationOperator::Equal,
+            Box::new(ast::ValueExpression::Column("a".to_string())),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+        )));
+        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
+
+        assert_eq!(select_query("avg(a), b, c where a = 1"), Ok(("", ans)));
     }
 }
