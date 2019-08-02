@@ -136,4 +136,36 @@ pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatem
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_boolean() {
+        assert_eq!(boolean("true"), Ok(("", ast::Value::Boolean(true))));
+        assert_eq!(boolean("false"), Ok(("", ast::Value::Boolean(false))));
+    }
+
+    #[test]
+    fn test_string_literal() {
+        assert_eq!(string_literal("abc"), Ok(("", "abc")));
+        assert_eq!(string_literal("def"), Ok(("", "def")));
+    }
+
+    #[test]
+    fn test_number() {
+        assert_eq!(number("123"), Ok(("", ast::Value::Number(123))));
+        assert_eq!(number("-123"), Ok(("", ast::Value::Number(-123))));
+    }
+
+    #[test]
+    fn test_where_value_expression() {
+        let ans = ast::ValueExpression::Operator(
+            ast::ValueOperator::Plus,
+            Box::new(ast::ValueExpression::Operator(
+                ast::ValueOperator::Plus,
+                Box::new(ast::ValueExpression::Value(ast::Value::Number(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Number(2))),
+            )),
+            Box::new(ast::ValueExpression::Value(ast::Value::Number(3))),
+        );
+        assert_eq!(value_expression("1 + 2 + 3"), Ok(("", ans)));
+    }
 }
