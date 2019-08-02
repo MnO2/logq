@@ -2,128 +2,140 @@ use super::ast;
 use super::lexer::Lexer;
 use super::token::Token;
 
-#[derive(Fail, Debug)]
-pub(crate) enum ParseError {
-    #[fail(display = "Unexpected Token Found")]
-    UnexpecedToken(Token),
+use nom::{
+    branch::alt,
+    bytes::complete::{escaped, tag, take_while},
+    character::complete::{alphanumeric1 as alphanumeric, char, digit1, multispace0, multispace1, one_of, space0},
+    combinator::{cut, map, map_res, opt},
+    error::{context, VerboseError},
+    multi::{fold_many0, separated_list},
+    number::complete::double,
+    sequence::{delimited, pair, separated_pair, preceded, terminated, tuple},
+    IResult,
+};
+
+fn string_literal<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+    escaped(alphanumeric, '\\', one_of("\"n\\"))(i)
 }
 
-pub(crate) type ParseResult<T> = Result<T, ParseError>;
-
-pub(crate) fn parse(input: &str) -> ParseResult<ast::Node> {
-    let l = Lexer::new(input);
-    let mut p = Parser::new(l);
-    let query = p.parse_query()?;
-
-    Ok(ast::Node::Query(Box::new(query)))
+fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+    alt((
+        map(tag("true"), |_| ast::Value::Boolean(true)),
+        map(tag("false"), |_| ast::Value::Boolean(false)),
+    ))(i)
 }
 
-pub(crate) struct Parser<'a> {
-    lexer: Lexer<'a>,
-
-    curr_token: Token,
-    peek_token: Token,
+fn number<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+    alt((
+        map_res(digit1, |digit_str: &str| {
+            digit_str.parse::<i32>().map(ast::Value::Number)
+        }),
+        map(preceded(tag("-"), digit1), |digit_str: &str| {
+            ast::Value::Number(-1 * digit_str.parse::<i32>().unwrap())
+        }),
+    ))(i)
 }
 
-impl<'a> Parser<'a> {
-    pub(crate) fn new(l: Lexer<'a>) -> Self {
-        let mut l = l;
-        let curr = l.next_token();
-        let next = l.next_token();
+fn value<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+    alt((number, boolean))(i)
+}
 
-        Parser {
-            lexer: l,
-            curr_token: curr,
-            peek_token: next,
-        }
-    }
+fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
+    delimited(space0, delimited(tag("("), value_expression, tag(")")), space0)(i)
+}
 
-    pub(crate) fn parse_query(&mut self) -> ParseResult<ast::Query> {
-        let mut query = ast::Query::new();
-        let fields = self.parse_select_expression_list()?;
-        let where_clause = self.parse_where_clause()?;
+fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
+    alt((
+        delimited(space0, map(value, |v| ast::ValueExpression::Value(v)), space0),
+        parens,
+    ))(i)
+}
 
-        Ok(query)
-    }
+fn term<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
+    let (i, init) = factor(i)?;
 
-    pub(crate) fn parse_select_expression_list(&mut self) -> ParseResult<Vec<ast::SelectExpression>> {
-        let mut select_exprs: Vec<ast::SelectExpression> = Vec::new();
-
-        while self.expect_curr(&Token::EOF).is_err() {
-            let select_expr = self.parse_select_expression()?;
-            select_exprs.push(select_expr);
-
-            if self.expect_curr(&Token::Comma).is_err() {
-                break;
+    fold_many0(
+        pair(alt((char('*'), char('/'))), factor),
+        init,
+        |acc, (op, val): (char, ast::ValueExpression)| {
+            if op == '*' {
+                ast::ValueExpression::Operator(ast::ValueOperator::Times, Box::new(acc), Box::new(val))
+            } else {
+                ast::ValueExpression::Operator(ast::ValueOperator::Divide, Box::new(acc), Box::new(val))
             }
-        }
+        },
+    )(i)
+}
 
-        Ok(select_exprs)
-    }
+fn value_expression<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
+    let (i, init) = term(i)?;
 
-    pub(crate) fn parse_select_expression(&mut self) -> ParseResult<ast::SelectExpression> {
-        if self.expect_curr(&Token::Star).is_ok() {
-            Ok(ast::SelectExpression::Star)
-        } else {
-            let expr = self.parse_expression()?;
-            Ok(ast::SelectExpression::Expression(Box::new(expr)))
-        }
-    }
+    fold_many0(
+        pair(alt((char('+'), char('-'))), term),
+        init,
+        |acc, (op, val): (char, ast::ValueExpression)| {
+            if op == '+' {
+                ast::ValueExpression::Operator(ast::ValueOperator::Plus, Box::new(acc), Box::new(val))
+            } else {
+                ast::ValueExpression::Operator(ast::ValueOperator::Minus, Box::new(acc), Box::new(val))
+            }
+        },
+    )(i)
+}
 
-    pub(crate) fn parse_expression(&mut self) -> ParseResult<ast::Expression> {
-        unimplemented!();
-    }
+fn condition<'a>(i: &'a str) -> IResult<&'a str, ast::Condition, VerboseError<&'a str>> {
+    map(
+        separated_pair(value_expression, alt((tag("="), tag("/="))), value_expression), 
+        |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, Box::new(l), Box::new(r))
+    )(i)
+}
 
-    pub(crate) fn parse_value_expression(&mut self) -> ParseResult<ast::ValueExpression> {
-        if let Token::Ident(ref name) = self.curr_token.clone() {
-            self.next_token();
-            return Ok(ast::ValueExpression::Column(name.to_string()));
-        } else if let Token::Int(int) = self.curr_token.clone() {
-            self.next_token();
-            return Ok(ast::ValueExpression::Int(int));
-        }
+fn expression_term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    let (i, init) = value_expression(i)?;
 
-        Err(ParseError::UnexpecedToken(self.curr_token.clone()))
-    }
+    fold_many0(
+        pair(alt((tag("OR"), tag("AND"))), value_expression),
+        ast::Expression::Value(Box::new(init)),
+        |acc, (op, val): (&str, ast::ValueExpression)| {
+            if op == "AND" {
+                ast::Expression::And(Box::new(acc), Box::new(ast::Expression::Value(Box::new(val))))
+            } else {
+                ast::Expression::Or(Box::new(acc), Box::new(ast::Expression::Value(Box::new(val))))
+            }
+        },
+    )(i)
+}
 
-    pub(crate) fn parse_where_clause(&mut self) -> ParseResult<ast::WhereClause> {
-        unimplemented!();
-    }
+fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    alt((
+        map(condition, |c| ast::Expression::Condition(c)),
+        expression_term,
+    ))(i)
+}
 
-    pub(crate) fn parse_func_call(&mut self) -> ParseResult<ast::FuncCallExpression> {
-        unimplemented!();
-    }
+fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
+    alt((
+        map(char('*'), |_| ast::SelectExpression::Star),
+        map(expression, |e| ast::SelectExpression::Expression(Box::new(e))),
+    ))(i)
+}
 
-    fn parse_identifier(&mut self) -> ParseResult<String> {
-        if let Token::Ident(ref name) = self.curr_token.clone() {
-            self.next_token();
-            return Ok(name.to_string());
-        }
+fn select_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::SelectExpression>, VerboseError<&'a str>> {
+    context(
+        "select_expression_list",
+        separated_list(preceded(multispace1, char(',')), select_expression)
+    )(i)
+}
 
-        Err(ParseError::UnexpecedToken(self.curr_token.clone()))
-    }
+fn where_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, VerboseError<&'a str>> {
+    map(preceded(tag("where"), expression), |e| ast::WhereExpression::new(e))(i)
+}
 
-    fn expect_curr(&mut self, token: &Token) -> Result<(), ParseError> {
-        if self.curr_token_is(&token) {
-            self.next_token();
-            Ok(())
-        } else {
-            Err(ParseError::UnexpecedToken(self.curr_token.clone()))
-        }
-    }
-
-    fn curr_token_is(&self, token: &Token) -> bool {
-        match (&token, &self.curr_token) {
-            (Token::Ident(_), Token::Ident(_)) => true,
-            (Token::Int(_), Token::Int(_)) => true,
-            _ => token == &self.curr_token,
-        }
-    }
-
-    fn next_token(&mut self) {
-        self.curr_token = self.peek_token.clone();
-        self.peek_token = self.lexer.next_token();
-    }
+pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
+    map(
+        pair(select_expression_list, opt(where_expression)),
+        |(select_exprs, where_expr)| ast::SelectStatement::new(select_exprs, where_expr)
+    )(i)
 }
 
 #[cfg(test)]

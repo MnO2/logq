@@ -1,24 +1,21 @@
 use std::fmt;
 
 #[derive(Debug)]
-pub(crate) enum Node {
-    Query(Box<Query>),
+pub(crate) struct SelectStatement {
+    pub(crate) select_exprs: Vec<SelectExpression>,
+    pub(crate) where_expr_opt: Option<WhereExpression>
 }
 
-#[derive(Debug)]
-pub(crate) struct Query {
-    pub select_exprs: Vec<SelectExpression>,
-}
-
-impl Query {
-    pub fn new() -> Self {
-        Query {
-            select_exprs: Vec::new(),
+impl SelectStatement {
+    pub fn new(select_exprs: Vec<SelectExpression>, where_expr_opt: Option<WhereExpression>) -> Self {
+        SelectStatement {
+            select_exprs,
+            where_expr_opt
         }
     }
 }
 
-impl fmt::Display for Query {
+impl fmt::Display for SelectStatement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let select_exprs_str: Vec<String> = (&self.select_exprs)
             .iter()
@@ -48,30 +45,50 @@ pub(crate) enum Expression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Condition {
-    ComparisonExpression(OperatorName, Box<ValueExpression>, Box<ValueExpression>),
+    ComparisonExpression(RelationOperator, Box<ValueExpression>, Box<ValueExpression>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum RelationOperator {
+    Equal,
+    NotEqual,
 }
 
 pub(crate) type FuncName = String;
-pub(crate) type OperatorName = String;
 pub(crate) type ColumnName = String;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum ValueExpression {
     Column(ColumnName),
-    Int(i64),
-    Operator(OperatorName, Box<ValueExpression>, Box<ValueExpression>),
+    Value(Value),
+    Operator(ValueOperator, Box<ValueExpression>, Box<ValueExpression>),
     FuncCall(FuncName, Vec<Box<SelectExpression>>),
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct WhereClause {
-    pub(crate) expr: Expression,
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum ValueOperator {
+    Plus,
+    Minus,
+    Times,
+    Divide,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Value {
+    Number(i32),
+    StringLiteral(String),
+    Boolean(bool),
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum BooleanValue {
-    True,
-    False,
+pub(crate) struct WhereExpression {
+    pub(crate) expr: Expression,
+}
+
+impl WhereExpression {
+    pub(crate) fn new(expr: Expression) -> Self {
+        WhereExpression { expr }
+    }
 }
 
 #[derive(Debug, Clone)]

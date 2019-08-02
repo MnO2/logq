@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate failure;
+extern crate nom;
 
 mod classic_load_balancer_log_field;
 mod common;
@@ -10,6 +11,7 @@ mod syntax;
 use clap::load_yaml;
 use clap::App;
 use std::result;
+use nom::error::VerboseError;
 
 pub(crate) type AppResult<T> = result::Result<T, AppError>;
 
@@ -19,14 +21,14 @@ pub enum AppError {
     Parse,
 }
 
-impl From<syntax::parser::ParseError> for AppError {
-    fn from(_: syntax::parser::ParseError) -> AppError {
+impl From<nom::Err<VerboseError<&str>>> for AppError {
+    fn from(_: nom::Err<VerboseError<&str>>) -> AppError {
         AppError::Parse
     }
 }
 
 fn run(query_str: &str) -> AppResult<()> {
-    let stmt = syntax::parser::parse(&query_str)?;
+    let stmt = syntax::parser::select_query(&query_str)?;
     Ok(())
 }
 
