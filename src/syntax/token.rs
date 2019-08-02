@@ -19,7 +19,7 @@ pub enum Token {
 
     True,
     False,
-    
+
     Asc,
     Desc,
 }

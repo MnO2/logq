@@ -10,7 +10,7 @@ use nom::{
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
     number::complete::double,
-    sequence::{delimited, pair, separated_pair, preceded, terminated, tuple},
+    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
     IResult,
 };
 
@@ -85,8 +85,8 @@ fn value_expression<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, Ve
 
 fn condition<'a>(i: &'a str) -> IResult<&'a str, ast::Condition, VerboseError<&'a str>> {
     map(
-        separated_pair(value_expression, alt((tag("="), tag("/="))), value_expression), 
-        |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, Box::new(l), Box::new(r))
+        separated_pair(value_expression, alt((tag("="), tag("/="))), value_expression),
+        |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, Box::new(l), Box::new(r)),
     )(i)
 }
 
@@ -107,10 +107,7 @@ fn expression_term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseE
 }
 
 fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    alt((
-        map(condition, |c| ast::Expression::Condition(c)),
-        expression_term,
-    ))(i)
+    alt((map(condition, |c| ast::Expression::Condition(c)), expression_term))(i)
 }
 
 fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
@@ -123,7 +120,7 @@ fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, 
 fn select_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::SelectExpression>, VerboseError<&'a str>> {
     context(
         "select_expression_list",
-        separated_list(preceded(multispace1, char(',')), select_expression)
+        separated_list(preceded(multispace1, char(',')), select_expression),
     )(i)
 }
 
@@ -134,7 +131,7 @@ fn where_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, Ve
 pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
     map(
         pair(select_expression_list, opt(where_expression)),
-        |(select_exprs, where_expr)| ast::SelectStatement::new(select_exprs, where_expr)
+        |(select_exprs, where_expr)| ast::SelectStatement::new(select_exprs, where_expr),
     )(i)
 }
 

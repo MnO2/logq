@@ -10,8 +10,8 @@ mod syntax;
 
 use clap::load_yaml;
 use clap::App;
-use std::result;
 use nom::error::VerboseError;
+use std::result;
 
 pub(crate) type AppResult<T> = result::Result<T, AppError>;
 

@@ -3,14 +3,14 @@ use std::fmt;
 #[derive(Debug)]
 pub(crate) struct SelectStatement {
     pub(crate) select_exprs: Vec<SelectExpression>,
-    pub(crate) where_expr_opt: Option<WhereExpression>
+    pub(crate) where_expr_opt: Option<WhereExpression>,
 }
 
 impl SelectStatement {
     pub fn new(select_exprs: Vec<SelectExpression>, where_expr_opt: Option<WhereExpression>) -> Self {
         SelectStatement {
             select_exprs,
-            where_expr_opt
+            where_expr_opt,
         }
     }
 }
