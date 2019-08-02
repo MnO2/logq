@@ -1,6 +1,4 @@
 use super::ast;
-use super::lexer::Lexer;
-use super::token::Token;
 
 use nom::{
     branch::alt,
@@ -137,6 +135,5 @@ pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatem
 
 #[cfg(test)]
 mod test {
-    use super::super::lexer::Lexer;
     use super::*;
 }
