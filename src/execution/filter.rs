@@ -65,6 +65,7 @@ mod tests {
     use std::collections::VecDeque;
 
     #[test]
+    #[ignore]
     fn test_filtered_stream() {
         let left = Box::new(Variable::new("host".to_string()));
         let right = Box::new(Variable::new("const".to_string()));
