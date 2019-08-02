@@ -5,13 +5,19 @@ use std::fmt;
 pub(crate) struct SelectStatement {
     pub(crate) select_exprs: Vec<SelectExpression>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
+    pub(crate) group_by_expr_opt: Option<GroupByExpression>,
 }
 
 impl SelectStatement {
-    pub fn new(select_exprs: Vec<SelectExpression>, where_expr_opt: Option<WhereExpression>) -> Self {
+    pub fn new(
+        select_exprs: Vec<SelectExpression>,
+        where_expr_opt: Option<WhereExpression>,
+        group_by_expr_opt: Option<GroupByExpression>,
+    ) -> Self {
         SelectStatement {
             select_exprs,
             where_expr_opt,
+            group_by_expr_opt,
         }
     }
 }
@@ -90,6 +96,17 @@ pub(crate) struct WhereExpression {
 impl WhereExpression {
     pub(crate) fn new(expr: Expression) -> Self {
         WhereExpression { expr }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GroupByExpression {
+    pub(crate) expr: Expression,
+}
+
+impl GroupByExpression {
+    pub(crate) fn new(expr: Expression) -> Self {
+        GroupByExpression { expr }
     }
 }
 

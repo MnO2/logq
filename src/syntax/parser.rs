@@ -4,14 +4,12 @@ use ordered_float::OrderedFloat;
 use nom::{
     branch::alt,
     bytes::complete::{escaped, tag},
-    character::complete::{
-        alpha1, alphanumeric1 as alphanumeric, char, digit1, multispace0, multispace1, one_of, space0,
-    },
+    character::complete::{alpha1, alphanumeric1 as alphanumeric, char, digit1, one_of, space0, space1},
     combinator::{cut, map, map_res, opt},
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
     number::complete,
-    sequence::{delimited, pair, preceded, separated_pair, terminated},
+    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
     IResult,
 };
 
@@ -152,10 +150,16 @@ fn where_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, Ve
     map(preceded(tag("where"), expression), |e| ast::WhereExpression::new(e))(i)
 }
 
+fn group_by_expression<'a>(i: &'a str) -> IResult<&'a str, ast::GroupByExpression, VerboseError<&'a str>> {
+    map(preceded(tuple((tag("group"), space1, tag("by"))), expression), |e| {
+        ast::GroupByExpression::new(e)
+    })(i)
+}
+
 pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
     map(
-        pair(select_expression_list, opt(where_expression)),
-        |(select_exprs, where_expr)| ast::SelectStatement::new(select_exprs, where_expr),
+        tuple((select_expression_list, opt(where_expression), opt(group_by_expression))),
+        |(select_exprs, where_expr, group_by_expr)| ast::SelectStatement::new(select_exprs, where_expr, group_by_expr),
     )(i)
 }
 
