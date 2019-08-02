@@ -109,16 +109,19 @@ fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<
 }
 
 fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
-    alt((
-        map(char('*'), |_| ast::SelectExpression::Star),
-        map(expression, |e| ast::SelectExpression::Expression(Box::new(e))),
-    ))(i)
+    preceded(
+        space0,
+        alt((
+            map(char('*'), |_| ast::SelectExpression::Star),
+            map(expression, |e| ast::SelectExpression::Expression(Box::new(e))),
+        )),
+    )(i)
 }
 
 fn select_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::SelectExpression>, VerboseError<&'a str>> {
     context(
         "select_expression_list",
-        separated_list(preceded(multispace1, char(',')), select_expression),
+        terminated(separated_list(preceded(space0, char(',')), select_expression), space0),
     )(i)
 }
 
@@ -195,5 +198,28 @@ mod test {
             )))),
         );
         assert_eq!(expression_term("true AND true"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_select_expression_list() {
+        let ans = vec![
+            ast::SelectExpression::Star,
+            ast::SelectExpression::Star,
+            ast::SelectExpression::Star,
+        ];
+        assert_eq!(select_expression_list("*, *, *"), Ok(("", ans)));
+
+        let ans = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Number(1),
+            ))))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Number(2),
+            ))))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Number(3),
+            ))))),
+        ];
+        assert_eq!(select_expression_list("1, 2, 3"), Ok(("", ans)));
     }
 }
