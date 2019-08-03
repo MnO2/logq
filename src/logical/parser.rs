@@ -3,6 +3,7 @@
 use super::types;
 use crate::common::types as common;
 use crate::syntax::ast;
+use std::convert::TryFrom;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -10,6 +11,8 @@ pub enum ParseError {
     TypeMismatch,
     #[fail(display = "Unsupported Logic Operator")]
     UnsupportedLogicOperator,
+    #[fail(display = "Not Aggregate Function")]
+    NotAggregateFunction,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -58,31 +61,68 @@ fn parse_boolean(b: bool) -> ParseResult<Box<types::Formula>> {
     Ok(Box::new(types::Formula::Constant(common::Value::Boolean(b))))
 }
 
-fn parse_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
-    match expr {
-        ast::Expression::Condition(c) => unimplemented!(),
-        ast::Expression::And(_, _) => parse_logic_expression(expr),
-        ast::Expression::Or(_, _) => parse_logic_expression(expr),
-        ast::Expression::Not(_) => parse_logic_expression(expr),
+fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Expression>> {
+    match select_expr {
+        ast::SelectExpression::Star => unimplemented!(),
+        ast::SelectExpression::Expression(expr) => match &**expr {
+            ast::Expression::Condition(c) => unimplemented!(),
+            ast::Expression::And(_, _) => parse_logic_expression(expr),
+            ast::Expression::Or(_, _) => parse_logic_expression(expr),
+            ast::Expression::Not(_) => parse_logic_expression(expr),
+            _ => Err(ParseError::TypeMismatch),
+        },
+    }
+}
+
+impl TryFrom<&str> for types::Aggregate {
+    type Error = ParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "avg" => Ok(types::Aggregate::Avg),
+            "count" => Ok(types::Aggregate::Count),
+            "first" => Ok(types::Aggregate::First),
+            "last" => Ok(types::Aggregate::Last),
+            "max" => Ok(types::Aggregate::Max),
+            "min" => Ok(types::Aggregate::Min),
+            "sum" => Ok(types::Aggregate::Sum),
+            _ => Err(ParseError::NotAggregateFunction),
+        }
+    }
+}
+
+fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Aggregate> {
+    match select_expr {
+        ast::SelectExpression::Expression(expr) => match &**expr {
+            ast::Expression::Value(value_expr) => match &**value_expr {
+                ast::ValueExpression::FuncCall(func_name, args) => types::Aggregate::try_from(&**func_name),
+                _ => Err(ParseError::TypeMismatch),
+            },
+            _ => Err(ParseError::TypeMismatch),
+        },
         _ => Err(ParseError::TypeMismatch),
     }
 }
 
 fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<types::Node> {
-    let root = types::Node::DataSource(data_source);
+    let mut root = types::Node::DataSource(data_source);
+    let mut aggregating = false;
 
     if !query.select_exprs.is_empty() {
-        for select_exprs in query.select_exprs.iter() {
-            match select_exprs {
-                ast::SelectExpression::Star => {}
-                ast::SelectExpression::Expression(expr) => {
-                    parse_expression(expr);
-                }
+        for select_expr in query.select_exprs.iter() {
+            let parse_aggregate_result = parse_aggregate(select_expr);
+            if parse_aggregate_result.is_ok() {
+                aggregating = true;
+            } else {
+                parse_expression(select_expr);
             }
         }
     }
 
-    if query.where_expr_opt.is_some() {}
+    if let Some(where_expr) = query.where_expr_opt {
+        let filter_formula = parse_logic(&where_expr.expr)?;
+        root = types::Node::Filter(filter_formula, Box::new(root));
+    }
 
     if query.group_by_expr_opt.is_some() {}
 

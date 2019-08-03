@@ -48,7 +48,7 @@ fn integral<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str
             digit_str.parse::<i32>().map(ast::Value::Integral)
         }),
         map(preceded(tag("-"), digit1), |digit_str: &str| {
-            ast::Value::Integral(-1 * digit_str.parse::<i32>().unwrap())
+            ast::Value::Integral(-digit_str.parse::<i32>().unwrap())
         }),
     ))(i)
 }
@@ -75,7 +75,7 @@ fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseEr
 fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
     alt((
         func_call,
-        delimited(space0, map(value, |v| ast::ValueExpression::Value(v)), space0),
+        delimited(space0, map(value, ast::ValueExpression::Value), space0),
         delimited(
             space0,
             map(column_name, |n| ast::ValueExpression::Column(n.to_string())),
@@ -141,7 +141,7 @@ fn expression_term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseE
 }
 
 fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    alt((map(condition, |c| ast::Expression::Condition(c)), expression_term))(i)
+    alt((map(condition, ast::Expression::Condition), expression_term))(i)
 }
 
 fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
@@ -162,7 +162,7 @@ fn select_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::SelectExp
 }
 
 fn where_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, VerboseError<&'a str>> {
-    map(preceded(tag("where"), expression), |e| ast::WhereExpression::new(e))(i)
+    map(preceded(tag("where"), expression), ast::WhereExpression::new)(i)
 }
 
 fn group_by_expression<'a>(i: &'a str) -> IResult<&'a str, ast::GroupByExpression, VerboseError<&'a str>> {

@@ -196,14 +196,14 @@ impl Formula {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
     DataSource(String),
-    FilterIterator(Box<Node>, Box<Formula>),
+    Filter(Box<Node>, Box<Formula>),
     Map(Vec<Rc<NamedExpression>>, Box<Node>),
 }
 
 impl Node {
     fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
         match self {
-            Node::FilterIterator(source, formula) => {
+            Node::Filter(source, formula) => {
                 let record_stream = source.get(variables.clone())?;
                 let rc_formula = Rc::from(formula.clone());
                 let stream = FilteredStream::new(rc_formula, variables, record_stream);

@@ -17,6 +17,7 @@ pub enum PhysicalError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
     DataSource(DataSource),
+    Filter(Box<Formula>, Box<Node>),
 }
 
 impl Node {
@@ -30,6 +31,14 @@ impl Node {
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
+            }
+            Node::Filter(formula, source) => {
+                let (physical_formula, formula_variables) = formula.physical(physicalCreator)?;
+                let (child, child_variables) = source.physical(physicalCreator)?;
+
+                let return_variables = common::merge(formula_variables, child_variables);
+                let filter = execution::Node::Filter(child, physical_formula);
+                Ok((Box::new(filter), return_variables))
             }
         }
     }
@@ -108,4 +117,15 @@ pub(crate) enum DataSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhysicalPlanCreator {
     data_source: execution::Node,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Aggregate {
+    Avg,
+    Count,
+    First,
+    Last,
+    Max,
+    Min,
+    Sum,
 }
