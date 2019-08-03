@@ -86,12 +86,35 @@ pub enum ExpressionError {
     KeyNotFound,
 }
 
+impl From<EvaluateError> for ExpressionError {
+    fn from(_: EvaluateError) -> ExpressionError {
+        ExpressionError::KeyNotFound
+    }
+}
+
 pub(crate) trait Expression {
     fn expression_value(&self, variables: Variables) -> ExpressionResult<Value>;
 }
 
 pub(crate) trait NamedExpression: Expression {
     fn name(&self) -> VariableName;
+}
+
+pub(crate) struct LogicExpression {
+    pub(crate) formula: Box<dyn Formula>,
+}
+
+impl LogicExpression {
+    pub(crate) fn new(formula: Box<dyn Formula>) -> Self {
+        LogicExpression { formula }
+    }
+}
+
+impl Expression for LogicExpression {
+    fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
+        let out = self.formula.evaluate(variables)?;
+        Ok(Value::Boolean(out))
+    }
 }
 
 pub(crate) struct Variable {
@@ -139,7 +162,7 @@ pub(crate) trait RecordStream {
     fn close(&self);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataSource {
     rdr: Rc<RefCell<Reader<File>>>,
 }

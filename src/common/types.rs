@@ -5,6 +5,7 @@ use ordered_float::OrderedFloat;
 pub(crate) enum Value {
     Int(i64),
     Float(OrderedFloat<f64>),
+    Boolean(bool),
     String(String),
     Null,
 }
@@ -15,4 +16,8 @@ pub(crate) type Variables = HashMap<VariableName, Value>;
 
 pub(crate) fn empty_variables() -> Variables {
     HashMap::new()
+}
+
+pub(crate) fn merge(left: Variables, right: Variables) -> Variables {
+    left.into_iter().chain(right).collect()
 }

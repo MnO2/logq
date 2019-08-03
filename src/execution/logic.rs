@@ -18,7 +18,7 @@ pub(crate) struct And {
 }
 
 impl And {
-    fn new(left: Box<dyn Formula>, right: Box<dyn Formula>) -> Self {
+    pub(crate) fn new(left: Box<dyn Formula>, right: Box<dyn Formula>) -> Self {
         And { left, right }
     }
 }
@@ -37,7 +37,7 @@ pub(crate) struct Or {
 }
 
 impl Or {
-    fn new(left: Box<dyn Formula>, right: Box<dyn Formula>) -> Self {
+    pub(crate) fn new(left: Box<dyn Formula>, right: Box<dyn Formula>) -> Self {
         Or { left, right }
     }
 }
@@ -47,6 +47,23 @@ impl Formula for Or {
         let left = self.left.evaluate(variables.clone())?;
         let right = self.right.evaluate(variables.clone())?;
         Ok(left || right)
+    }
+}
+
+pub(crate) struct Not {
+    child: Box<dyn Formula>,
+}
+
+impl Not {
+    pub(crate) fn new(child: Box<dyn Formula>) -> Self {
+        Not { child }
+    }
+}
+
+impl Formula for Not {
+    fn evaluate(&self, variables: Variables) -> EvaluateResult<bool> {
+        let child = self.child.evaluate(variables.clone())?;
+        Ok(!child)
     }
 }
 

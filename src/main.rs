@@ -11,6 +11,7 @@ mod syntax;
 use clap::load_yaml;
 use clap::App;
 use nom::error::VerboseError;
+use std::path::Path;
 use std::result;
 
 pub(crate) type AppResult<T> = result::Result<T, AppError>;
@@ -27,8 +28,9 @@ impl From<nom::Err<VerboseError<&str>>> for AppError {
     }
 }
 
-fn run(query_str: &str, filename: &str) -> AppResult<()> {
+fn run(query_str: &str, filename: logical::types::DataSource) -> AppResult<()> {
     let select_stmt = syntax::parser::select_query(&query_str)?;
+
     dbg!(&select_stmt);
     Ok(())
 }
@@ -39,8 +41,15 @@ fn main() {
 
     match app_m.subcommand() {
         ("query", Some(sub_m)) => {
-            if let (Some(query_str), Some(filename)) = (sub_m.value_of("query"), sub_m.value_of("file_to_select")) {
-                run(query_str, filename);
+            if let Some(query_str) = sub_m.value_of("query") {
+                if let Some(filename) = sub_m.value_of("file_to_select") {
+                    let path = Path::new(filename);
+                    let data_source = logical::types::DataSource::File(path.to_path_buf());
+                    run(query_str, data_source);
+                } else {
+                    let data_source = logical::types::DataSource::Stdin;
+                    run(query_str, data_source);
+                }
             } else {
                 sub_m.usage();
             }
