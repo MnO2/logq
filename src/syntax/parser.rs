@@ -297,6 +297,30 @@ mod test {
         let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
 
         assert_eq!(select_query("a, b, c where a = 1"), Ok(("", ans)));
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("a".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("b".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("c".to_string()),
+            )))),
+        ];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
+            ast::RelationOperator::Equal,
+            Box::new(ast::ValueExpression::Column("a".to_string())),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+        )));
+
+        let group_by_expr = ast::GroupByExpression::new(ast::Expression::Value(Box::new(
+            ast::ValueExpression::Column("b".to_string()),
+        )));
+        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr));
+
+        assert_eq!(select_query("a, b, c where a = 1 group by b"), Ok(("", ans)));
     }
 
     #[test]
