@@ -17,10 +17,13 @@ fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseE
     escaped(alphanumeric, '\\', one_of("\"n\\"))(i)
 }
 
-fn string_literal<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+fn string_literal<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
     context(
         "string",
-        preceded(char('\"'), cut(terminated(string_literal_interior, char('\"')))),
+        map(
+            preceded(char('\"'), cut(terminated(string_literal_interior, char('\"')))),
+            |s| ast::Value::StringLiteral(s.to_string()),
+        ),
     )(i)
 }
 
@@ -51,7 +54,7 @@ fn integral<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str
 }
 
 fn value<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
-    alt((integral, boolean, float))(i)
+    alt((integral, boolean, float, string_literal))(i)
 }
 
 fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
@@ -187,8 +190,14 @@ mod test {
 
     #[test]
     fn test_string_literal() {
-        assert_eq!(string_literal("\"abc\""), Ok(("", "abc")));
-        assert_eq!(string_literal("\"def\""), Ok(("", "def")));
+        assert_eq!(
+            string_literal("\"abc\""),
+            Ok(("", ast::Value::StringLiteral("abc".to_string())))
+        );
+        assert_eq!(
+            string_literal("\"def\""),
+            Ok(("", ast::Value::StringLiteral("def".to_string())))
+        );
     }
 
     #[test]
