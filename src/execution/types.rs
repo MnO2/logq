@@ -1,13 +1,13 @@
 use super::datasource::{LogFileStream, Reader, ReaderError};
-use super::filter::{FilteredStream};
+use super::filter::FilteredStream;
 use super::map::MappedStream;
 use crate::common::types::{Value, VariableName, Variables};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io;
+use std::io::BufReader;
 use std::rc::Rc;
 use std::result;
-use std::io::BufReader;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
@@ -98,7 +98,7 @@ impl From<EvaluateError> for ExpressionError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Expression {
     LogicExpression(Box<Formula>),
-    Variable(VariableName)
+    Variable(VariableName),
 }
 
 impl Expression {
@@ -107,7 +107,7 @@ impl Expression {
             Expression::LogicExpression(formula) => {
                 let out = formula.evaluate(variables)?;
                 Ok(Value::Boolean(out))
-            },
+            }
             Expression::Variable(name) => {
                 if let Some(v) = variables.get(name) {
                     Ok(v.clone())
@@ -116,14 +116,13 @@ impl Expression {
                 }
             }
         }
-
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Relation {
     Equal,
-    NotEqual
+    NotEqual,
 }
 
 impl Relation {
@@ -137,12 +136,8 @@ impl Relation {
         let right_result = right.expression_value(variables.clone())?;
 
         match self {
-            Relation::Equal => {
-                Ok(left_result == right_result)
-            },
-            Relation::NotEqual => {
-                Ok(left_result != right_result)
-            }
+            Relation::Equal => Ok(left_result == right_result),
+            Relation::NotEqual => Ok(left_result != right_result),
         }
     }
 }
@@ -150,7 +145,7 @@ impl Relation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NamedExpression {
     pub(crate) expr: Expression,
-    pub(crate) name: VariableName
+    pub(crate) name: VariableName,
 }
 
 pub(crate) struct Variable {
@@ -169,7 +164,7 @@ pub(crate) enum Formula {
     And(Box<Formula>, Box<Formula>),
     Or(Box<Formula>, Box<Formula>),
     Not(Box<Formula>),
-    Predicate(Box<Relation>, Box<Expression>, Box<Expression>)
+    Predicate(Box<Relation>, Box<Expression>, Box<Expression>),
 }
 
 impl Formula {
@@ -179,25 +174,22 @@ impl Formula {
                 let left = left_formula.evaluate(variables.clone())?;
                 let right = right_formula.evaluate(variables.clone())?;
                 Ok(left && right)
-            },
+            }
             Formula::Or(left_formula, right_formula) => {
                 let left = left_formula.evaluate(variables.clone())?;
                 let right = right_formula.evaluate(variables.clone())?;
                 Ok(left || right)
-            },
+            }
             Formula::Not(child_formula) => {
                 let child = child_formula.evaluate(variables.clone())?;
                 Ok(!child)
-            },
+            }
             Formula::Predicate(relation, left_formula, right_formula) => {
                 let result = relation.apply(variables, left_formula, right_formula)?;
                 Ok(result)
             }
-            Formula::Constant(value) => {
-                Ok(*value)
-            }
+            Formula::Constant(value) => Ok(*value),
         }
-   
     }
 }
 
@@ -205,7 +197,7 @@ impl Formula {
 pub(crate) enum Node {
     DataSource(String),
     FilterIterator(Box<Node>, Box<Formula>),
-    Map(Vec<Rc<NamedExpression>>, Box<Node>)
+    Map(Vec<Rc<NamedExpression>>, Box<Node>),
 }
 
 impl Node {
@@ -216,7 +208,7 @@ impl Node {
                 let rc_formula = Rc::from(formula.clone());
                 let stream = FilteredStream::new(rc_formula, variables, record_stream);
                 Ok(Box::new(stream))
-            },
+            }
             Node::Map(expressions, source) => {
                 let record_stream = source.get(variables.clone())?;
 
@@ -227,7 +219,7 @@ impl Node {
                 };
 
                 Ok(Box::new(stream))
-            },
+            }
             Node::DataSource(filename) => {
                 let f = File::open(filename)?;
                 let mut reader = Reader::from_reader(f);

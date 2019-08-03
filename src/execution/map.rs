@@ -1,4 +1,4 @@
-use crate::common::types::{Variables};
+use crate::common::types::Variables;
 use crate::execution::types::{NamedExpression, Record, RecordStream, StreamResult};
 use std::rc::Rc;
 
