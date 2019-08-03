@@ -14,10 +14,10 @@ pub enum ParseError {
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
-fn parse_prefix_operator(operator: &str, child: &ast::Expression) -> ParseResult<Box<dyn types::Formula>> {
+fn parse_prefix_operator(operator: &str, child: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     let child_parsed = parse_logic(child)?;
 
-    let prefix_op = types::PrefixOperator::new(operator.to_string(), child_parsed);
+    let prefix_op = types::Formula::PrefixOperator(operator.to_string(), child_parsed);
     Ok(Box::new(prefix_op))
 }
 
@@ -25,15 +25,15 @@ fn parse_infix_operator(
     operator: &str,
     left: &ast::Expression,
     right: &ast::Expression,
-) -> ParseResult<Box<dyn types::Formula>> {
+) -> ParseResult<Box<types::Formula>> {
     let left_parsed = parse_logic(left)?;
     let right_parsed = parse_logic(right)?;
 
-    let infix_op = types::InfixOperator::new(operator.to_string(), left_parsed, right_parsed);
+    let infix_op = types::Formula::InfixOperator(operator.to_string(), left_parsed, right_parsed);
     Ok(Box::new(infix_op))
 }
 
-fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<dyn types::Formula>> {
+fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match expr {
         ast::Expression::And(l, r) => parse_infix_operator("AND", l, r),
         ast::Expression::Or(l, r) => parse_infix_operator("OR", l, r),
@@ -49,16 +49,16 @@ fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<dyn types::Formula>> {
     }
 }
 
-fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<dyn types::Expression>> {
+fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     let formula = parse_logic(expr)?;
-    Ok(Box::new(types::LogicExpression::new(formula)))
+    Ok(Box::new(types::Expression::LogicExpression(formula)))
 }
 
-fn parse_boolean(b: bool) -> ParseResult<Box<dyn types::Formula>> {
-    Ok(Box::new(types::Constant::new(common::Value::Boolean(b))))
+fn parse_boolean(b: bool) -> ParseResult<Box<types::Formula>> {
+    Ok(Box::new(types::Formula::Constant(common::Value::Boolean(b))))
 }
 
-fn parse_expression(expr: &ast::Expression) -> ParseResult<Box<dyn types::Expression>> {
+fn parse_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     match expr {
         ast::Expression::Condition(c) => unimplemented!(),
         ast::Expression::And(_, _) => parse_logic_expression(expr),
@@ -68,8 +68,8 @@ fn parse_expression(expr: &ast::Expression) -> ParseResult<Box<dyn types::Expres
     }
 }
 
-fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<Box<dyn types::Node>> {
-    let root: Box<dyn types::Node> = Box::new(data_source);
+fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<types::Node> {
+    let root = types::Node::DataSource(data_source);
 
     if !query.select_exprs.is_empty() {
         for select_exprs in query.select_exprs.iter() {
@@ -104,10 +104,15 @@ mod test {
             )))),
         );
 
-        let ans = Box::new(types::LogicExpression::new(Box::new(types::InfixOperator::new(
-            "AND".to_string(),
-            Box::new(types::Constant::new(common::Value::Boolean(true))),
-            Box::new(types::Constant::new(common::Value::Boolean(false))),
-        ))));
+        let expected = Box::new(types::Expression::LogicExpression(Box::new(
+            types::Formula::InfixOperator(
+                "AND".to_string(),
+                Box::new(types::Formula::Constant(common::Value::Boolean(true))),
+                Box::new(types::Formula::Constant(common::Value::Boolean(false))),
+            ),
+        )));
+
+        let ans = parse_logic_expression(&before).unwrap();
+        assert_eq!(expected, ans);
     }
 }

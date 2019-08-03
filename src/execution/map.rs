@@ -1,43 +1,9 @@
-use crate::common::types::{Value, Variables};
-use crate::execution::types::{GetResult, NamedExpression, Node, Record, RecordStream, StreamResult};
+use crate::common::types::{Variables};
+use crate::execution::types::{NamedExpression, Record, RecordStream, StreamResult};
 use std::rc::Rc;
 
-pub(crate) struct Map {
-    expressions: Vec<Rc<dyn NamedExpression>>,
-    source: Box<dyn Node>,
-}
-
-impl Map {
-    fn new(expressions: Vec<Box<dyn NamedExpression>>, source: Box<dyn Node>) -> Self {
-        let mut exps = Vec::new();
-
-        for ne in expressions.into_iter() {
-            exps.push(Rc::from(ne));
-        }
-
-        Map {
-            expressions: exps,
-            source,
-        }
-    }
-}
-
-impl Node for Map {
-    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
-        let record_stream = self.source.get(variables.clone())?;
-
-        let stream = MappedStream {
-            expressions: self.expressions.clone(),
-            variables,
-            source: record_stream,
-        };
-
-        Ok(Box::new(stream))
-    }
-}
-
 pub(crate) struct MappedStream {
-    pub(crate) expressions: Vec<Rc<dyn NamedExpression>>,
+    pub(crate) expressions: Vec<Rc<NamedExpression>>,
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
 }
@@ -54,9 +20,9 @@ impl RecordStream for MappedStream {
         let mut field_names = Vec::new();
         let mut data = Vec::new();
         for i in 0..self.expressions.len() {
-            let field_name = self.expressions[i].name();
+            let field_name = self.expressions[i].name.clone();
             field_names.push(field_name.clone());
-            let v = self.expressions[i].expression_value(variables.clone())?;
+            let v = self.expressions[i].expr.expression_value(variables.clone())?;
             data.push(v);
         }
 

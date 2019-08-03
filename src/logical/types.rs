@@ -1,6 +1,5 @@
 use crate::common::types as common;
 use crate::common::types::VariableName;
-use crate::execution::logic;
 use crate::execution::types as execution;
 use std::path::PathBuf;
 use std::result;
@@ -15,162 +14,98 @@ pub enum PhysicalError {
     TypeMisMatch,
 }
 
-pub(crate) trait Node {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Node {
+    DataSource(DataSource),
+}
+
+impl Node {
     fn physical(
         &self,
         physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Node>, common::Variables)>;
-}
-
-pub(crate) trait Expression {
-    fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Expression>, common::Variables)>;
-}
-
-pub(crate) trait Formula {
-    fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Formula>, common::Variables)>;
-}
-
-pub(crate) struct Constant {
-    value: common::Value,
-}
-
-impl Constant {
-    pub(crate) fn new(value: common::Value) -> Self {
-        Constant { value }
-    }
-}
-
-impl Formula for Constant {
-    fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Formula>, common::Variables)> {
-        match self.value {
-            common::Value::Boolean(b) => {
-                let node = Box::new(execution::Constant::new(b));
+    ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
+        match self {
+            Node::DataSource(data_source) => {
+                let node = physicalCreator.data_source.clone();
                 let variables = common::empty_variables();
 
-                Ok((node, variables))
+                Ok((Box::new(node), variables))
             }
-            _ => Err(PhysicalError::TypeMisMatch),
         }
     }
 }
 
-pub(crate) struct Variable {
-    name: VariableName,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Expression {
+    Variable(VariableName),
+    LogicExpression(Box<Formula>),
 }
 
-impl Expression for Variable {
-    fn physical(
+impl Expression {
+    pub(crate) fn physical(
         &self,
         physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Expression>, common::Variables)> {
-        let node = Box::new(execution::Variable::new("a".to_string()));
-        let variables = common::empty_variables();
+    ) -> PhysicalResult<(Box<execution::Expression>, common::Variables)> {
+        match self {
+            Expression::Variable(name) => {
+                let node = Box::new(execution::Expression::Variable("a".to_string()));
+                let variables = common::empty_variables();
 
-        Ok((node, variables))
+                Ok((node, variables))
+            }
+            Expression::LogicExpression(formula) => {
+                let (expr, variables) = formula.physical(physicalCreator)?;
+                Ok((Box::new(execution::Expression::LogicExpression(expr)), variables))
+            }
+        }
     }
 }
 
-impl Variable {
-    pub(crate) fn new(name: String) -> Self {
-        Variable { name }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Formula {
+    InfixOperator(String, Box<Formula>, Box<Formula>),
+    PrefixOperator(String, Box<Formula>),
+    Constant(common::Value),
 }
 
-pub(crate) struct LogicExpression {
-    pub(crate) formula: Box<dyn Formula>,
-}
-
-impl LogicExpression {
-    pub(crate) fn new(formula: Box<dyn Formula>) -> Self {
-        LogicExpression { formula }
-    }
-}
-
-impl Expression for LogicExpression {
-    fn physical(
+impl Formula {
+    pub(crate) fn physical(
         &self,
         physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Expression>, common::Variables)> {
-        let (expr, variables) = self.formula.physical(physicalCreator)?;
+    ) -> PhysicalResult<(Box<execution::Formula>, common::Variables)> {
+        match self {
+            Formula::InfixOperator(op, left_formula, right_formula) => {
+                let (left, left_variables) = left_formula.physical(physicalCreator)?;
+                let (right, right_variables) = right_formula.physical(physicalCreator)?;
 
-        Ok((Box::new(execution::LogicExpression::new(expr)), variables))
+                let return_variables = common::merge(left_variables, right_variables);
+
+                Ok((Box::new(execution::Formula::And(left, right)), return_variables))
+            }
+            Formula::PrefixOperator(op, child_formula) => {
+                let (child, child_variables) = child_formula.physical(physicalCreator)?;
+                Ok((Box::new(execution::Formula::Not(child)), child_variables))
+            }
+            Formula::Constant(value) => match value {
+                common::Value::Boolean(b) => {
+                    let node = Box::new(execution::Formula::Constant(*b));
+                    let variables = common::empty_variables();
+
+                    Ok((node, variables))
+                }
+                _ => Err(PhysicalError::TypeMisMatch),
+            },
+        }
     }
 }
 
-pub(crate) struct PrefixOperator {
-    pub(crate) op: String,
-    pub(crate) child: Box<dyn Formula>,
-}
-
-impl PrefixOperator {
-    pub(crate) fn new(op: String, child: Box<dyn Formula>) -> Self {
-        PrefixOperator { op, child }
-    }
-}
-
-impl Formula for PrefixOperator {
-    fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Formula>, common::Variables)> {
-        let (child, child_variables) = self.child.physical(physicalCreator)?;
-
-        Ok((Box::new(logic::Not::new(child)), child_variables))
-    }
-}
-
-pub(crate) struct InfixOperator {
-    pub(crate) op: String,
-    pub(crate) left: Box<dyn Formula>,
-    pub(crate) right: Box<dyn Formula>,
-}
-
-impl InfixOperator {
-    pub(crate) fn new(op: String, left: Box<dyn Formula>, right: Box<dyn Formula>) -> Self {
-        InfixOperator { op, left, right }
-    }
-}
-
-impl Formula for InfixOperator {
-    fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Formula>, common::Variables)> {
-        let (left, left_variables) = self.left.physical(physicalCreator)?;
-        let (right, right_variables) = self.right.physical(physicalCreator)?;
-
-        let return_variables = common::merge(left_variables, right_variables);
-
-        Ok((Box::new(logic::And::new(left, right)), return_variables))
-    }
-}
-
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DataSource {
     File(PathBuf),
     Stdin,
 }
 
-impl Node for DataSource {
-    fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<dyn execution::Node>, common::Variables)> {
-        let node = Box::new(physicalCreator.data_source.clone());
-        let variables = common::empty_variables();
-
-        Ok((node, variables))
-    }
-}
-
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhysicalPlanCreator {
-    data_source: execution::DataSource,
+    data_source: execution::Node,
 }

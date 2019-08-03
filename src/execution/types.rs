@@ -1,10 +1,13 @@
 use super::datasource::{LogFileStream, Reader, ReaderError};
+use super::filter::{FilteredStream};
+use super::map::MappedStream;
 use crate::common::types::{Value, VariableName, Variables};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io;
 use std::rc::Rc;
 use std::result;
+use std::io::BufReader;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
@@ -92,29 +95,62 @@ impl From<EvaluateError> for ExpressionError {
     }
 }
 
-pub(crate) trait Expression {
-    fn expression_value(&self, variables: Variables) -> ExpressionResult<Value>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Expression {
+    LogicExpression(Box<Formula>),
+    Variable(VariableName)
 }
 
-pub(crate) trait NamedExpression: Expression {
-    fn name(&self) -> VariableName;
-}
+impl Expression {
+    pub(crate) fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
+        match self {
+            Expression::LogicExpression(formula) => {
+                let out = formula.evaluate(variables)?;
+                Ok(Value::Boolean(out))
+            },
+            Expression::Variable(name) => {
+                if let Some(v) = variables.get(name) {
+                    Ok(v.clone())
+                } else {
+                    Err(ExpressionError::KeyNotFound)
+                }
+            }
+        }
 
-pub(crate) struct LogicExpression {
-    pub(crate) formula: Box<dyn Formula>,
-}
-
-impl LogicExpression {
-    pub(crate) fn new(formula: Box<dyn Formula>) -> Self {
-        LogicExpression { formula }
     }
 }
 
-impl Expression for LogicExpression {
-    fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
-        let out = self.formula.evaluate(variables)?;
-        Ok(Value::Boolean(out))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Relation {
+    Equal,
+    NotEqual
+}
+
+impl Relation {
+    pub(crate) fn apply(
+        &self,
+        variables: Variables,
+        left: &Box<Expression>,
+        right: &Box<Expression>,
+    ) -> ExpressionResult<bool> {
+        let left_result = left.expression_value(variables.clone())?;
+        let right_result = right.expression_value(variables.clone())?;
+
+        match self {
+            Relation::Equal => {
+                Ok(left_result == right_result)
+            },
+            Relation::NotEqual => {
+                Ok(left_result != right_result)
+            }
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedExpression {
+    pub(crate) expr: Expression,
+    pub(crate) name: VariableName
 }
 
 pub(crate) struct Variable {
@@ -127,38 +163,81 @@ impl Variable {
     }
 }
 
-impl Expression for Variable {
-    fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
-        if let Some(v) = variables.get(&self.name) {
-            Ok(v.clone())
-        } else {
-            Err(ExpressionError::KeyNotFound)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Formula {
+    Constant(bool),
+    And(Box<Formula>, Box<Formula>),
+    Or(Box<Formula>, Box<Formula>),
+    Not(Box<Formula>),
+    Predicate(Box<Relation>, Box<Expression>, Box<Expression>)
+}
+
+impl Formula {
+    pub(crate) fn evaluate(&self, variables: Variables) -> EvaluateResult<bool> {
+        match self {
+            Formula::And(left_formula, right_formula) => {
+                let left = left_formula.evaluate(variables.clone())?;
+                let right = right_formula.evaluate(variables.clone())?;
+                Ok(left && right)
+            },
+            Formula::Or(left_formula, right_formula) => {
+                let left = left_formula.evaluate(variables.clone())?;
+                let right = right_formula.evaluate(variables.clone())?;
+                Ok(left || right)
+            },
+            Formula::Not(child_formula) => {
+                let child = child_formula.evaluate(variables.clone())?;
+                Ok(!child)
+            },
+            Formula::Predicate(relation, left_formula, right_formula) => {
+                let result = relation.apply(variables, left_formula, right_formula)?;
+                Ok(result)
+            }
+            Formula::Constant(value) => {
+                Ok(*value)
+            }
+        }
+   
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Node {
+    DataSource(String),
+    FilterIterator(Box<Node>, Box<Formula>),
+    Map(Vec<Rc<NamedExpression>>, Box<Node>)
+}
+
+impl Node {
+    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
+        match self {
+            Node::FilterIterator(source, formula) => {
+                let record_stream = source.get(variables.clone())?;
+                let rc_formula = Rc::from(formula.clone());
+                let stream = FilteredStream::new(rc_formula, variables, record_stream);
+                Ok(Box::new(stream))
+            },
+            Node::Map(expressions, source) => {
+                let record_stream = source.get(variables.clone())?;
+
+                let stream = MappedStream {
+                    expressions: expressions.clone(),
+                    variables,
+                    source: record_stream,
+                };
+
+                Ok(Box::new(stream))
+            },
+            Node::DataSource(filename) => {
+                let f = File::open(filename)?;
+                let mut reader = Reader::from_reader(f);
+                let rdr = Rc::new(RefCell::new(reader));
+                let stream = LogFileStream { rdr };
+
+                Ok(Box::new(stream))
+            }
         }
     }
-}
-
-pub(crate) trait Formula {
-    fn evaluate(&self, variables: Variables) -> EvaluateResult<bool>;
-}
-
-pub(crate) struct Constant {
-    value: bool
-}
-
-impl Constant {
-    pub(crate) fn new(value: bool) -> Self {
-        Constant { value }
-    }
-}
-
-impl Formula for Constant {
-    fn evaluate(&self, variables: Variables) -> EvaluateResult<bool> {
-        Ok(self.value.clone())
-    }
-}
-
-pub(crate) trait Node {
-    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>>;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -176,17 +255,4 @@ impl Record {
 pub(crate) trait RecordStream {
     fn next(&mut self) -> StreamResult<Record>;
     fn close(&self);
-}
-
-#[derive(Debug, Clone)]
-pub struct DataSource {
-    rdr: Rc<RefCell<Reader<File>>>,
-}
-
-impl Node for DataSource {
-    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
-        let stream = LogFileStream { rdr: self.rdr.clone() };
-
-        Ok(Box::new(stream))
-    }
 }

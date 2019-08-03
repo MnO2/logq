@@ -4,32 +4,14 @@ use crate::execution::types::{Formula, GetResult, Node, Record, RecordStream, St
 use hashbrown::HashMap;
 use std::rc::Rc;
 
-pub(crate) struct FilterIterator {
-    pub(crate) source: Box<dyn Node>,
-    pub(crate) formula: Rc<dyn Formula>,
-}
-
-impl FilterIterator {
-    fn new(source: Box<dyn Node>, formula: Box<dyn Formula>) -> Self {
-        let formula = Rc::from(formula);
-        FilterIterator { source, formula }
-    }
-
-    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
-        let record_stream = self.source.get(variables.clone())?;
-        let stream = FilteredStream::new(self.formula.clone(), variables, record_stream);
-        Ok(Box::new(stream))
-    }
-}
-
 pub(crate) struct FilteredStream {
-    formula: Rc<dyn Formula>,
+    formula: Rc<Formula>,
     variables: Variables,
     source: Box<dyn RecordStream>,
 }
 
 impl FilteredStream {
-    fn new(formula: Rc<dyn Formula>, variables: Variables, source: Box<dyn RecordStream>) -> Self {
+    pub(crate) fn new(formula: Rc<Formula>, variables: Variables, source: Box<dyn RecordStream>) -> Self {
         FilteredStream {
             formula,
             variables,
@@ -60,17 +42,16 @@ impl RecordStream for FilteredStream {
 mod tests {
     use super::*;
     use crate::execution::datasource::InMemoryStream;
-    use crate::execution::logic::Predicate;
-    use crate::execution::relation::Equal;
+    use crate::execution::types;
     use std::collections::VecDeque;
 
     #[test]
     #[ignore]
     fn test_filtered_stream() {
-        let left = Box::new(Variable::new("host".to_string()));
-        let right = Box::new(Variable::new("const".to_string()));
-        let rel = Box::new(Equal::new());
-        let predicate = Rc::new(Predicate::new(left, right, rel));
+        let left = Box::new(types::Expression::Variable("host".to_string()));
+        let right = Box::new(types::Expression::Variable("const".to_string()));
+        let rel = Box::new(types::Relation::Equal);
+        let predicate = Rc::new(types::Formula::Predicate(rel, left, right));
 
         let mut variables: Variables = HashMap::new();
         variables.insert("const".to_string(), Value::String("example.com".to_string()));
