@@ -1,4 +1,7 @@
+#![feature(box_patterns)]
+
 use super::types;
+use crate::common::types as common;
 use crate::syntax::ast;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,13 @@ fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<dyn types::Formula>> {
         ast::Expression::And(l, r) => parse_infix_operator("AND", l, r),
         ast::Expression::Or(l, r) => parse_infix_operator("OR", l, r),
         ast::Expression::Not(c) => parse_prefix_operator("NOT", c),
+        ast::Expression::Value(value_expr) => match &**value_expr {
+            ast::ValueExpression::Value(v) => match v {
+                ast::Value::Boolean(b) => parse_boolean(*b),
+                _ => Err(ParseError::TypeMismatch),
+            },
+            _ => Err(ParseError::TypeMismatch),
+        },
         _ => Err(ParseError::UnsupportedLogicOperator),
     }
 }
@@ -44,23 +54,18 @@ fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<dyn types::
     Ok(Box::new(types::LogicExpression::new(formula)))
 }
 
+fn parse_boolean(b: bool) -> ParseResult<Box<dyn types::Formula>> {
+    Ok(Box::new(types::Constant::new(common::Value::Boolean(b))))
+}
+
 fn parse_expression(expr: &ast::Expression) -> ParseResult<Box<dyn types::Expression>> {
     match expr {
-        ast::Expression::Condition(c) => {}
-        ast::Expression::And(_, _) => {
-            parse_logic_expression(expr);
-        }
-        ast::Expression::Or(_, _) => {
-            parse_logic_expression(expr);
-        }
-        ast::Expression::Not(_) => {
-            parse_logic_expression(expr);
-        }
-        ast::Expression::Value(v) => {}
-    };
-    let variable = types::Variable::new("a".to_string());
-
-    Ok(Box::new(variable))
+        ast::Expression::Condition(c) => unimplemented!(),
+        ast::Expression::And(_, _) => parse_logic_expression(expr),
+        ast::Expression::Or(_, _) => parse_logic_expression(expr),
+        ast::Expression::Not(_) => parse_logic_expression(expr),
+        _ => Err(ParseError::TypeMismatch),
+    }
 }
 
 fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<Box<dyn types::Node>> {
@@ -77,6 +82,10 @@ fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> P
         }
     }
 
+    if query.where_expr_opt.is_some() {}
+
+    if query.group_by_expr_opt.is_some() {}
+
     Ok(root)
 }
 
@@ -85,5 +94,20 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_parse_variable() {}
+    fn test_parse_logic_expression() {
+        let before = ast::Expression::And(
+            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Boolean(true),
+            )))),
+            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                ast::Value::Boolean(false),
+            )))),
+        );
+
+        let ans = Box::new(types::LogicExpression::new(Box::new(types::InfixOperator::new(
+            "AND".to_string(),
+            Box::new(types::Constant::new(common::Value::Boolean(true))),
+            Box::new(types::Constant::new(common::Value::Boolean(false))),
+        ))));
+    }
 }

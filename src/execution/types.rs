@@ -141,6 +141,22 @@ pub(crate) trait Formula {
     fn evaluate(&self, variables: Variables) -> EvaluateResult<bool>;
 }
 
+pub(crate) struct Constant {
+    value: bool
+}
+
+impl Constant {
+    pub(crate) fn new(value: bool) -> Self {
+        Constant { value }
+    }
+}
+
+impl Formula for Constant {
+    fn evaluate(&self, variables: Variables) -> EvaluateResult<bool> {
+        Ok(self.value.clone())
+    }
+}
+
 pub(crate) trait Node {
     fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>>;
 }

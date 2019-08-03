@@ -11,6 +11,8 @@ pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalError>;
 pub enum PhysicalError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
+    #[fail(display = "Type Mismatch")]
+    TypeMisMatch,
 }
 
 pub(crate) trait Node {
@@ -32,6 +34,33 @@ pub(crate) trait Formula {
         &self,
         physicalCreator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<dyn execution::Formula>, common::Variables)>;
+}
+
+pub(crate) struct Constant {
+    value: common::Value,
+}
+
+impl Constant {
+    pub(crate) fn new(value: common::Value) -> Self {
+        Constant { value }
+    }
+}
+
+impl Formula for Constant {
+    fn physical(
+        &self,
+        physicalCreator: &mut PhysicalPlanCreator,
+    ) -> PhysicalResult<(Box<dyn execution::Formula>, common::Variables)> {
+        match self.value {
+            common::Value::Boolean(b) => {
+                let node = Box::new(execution::Constant::new(b));
+                let variables = common::empty_variables();
+
+                Ok((node, variables))
+            }
+            _ => Err(PhysicalError::TypeMisMatch),
+        }
+    }
 }
 
 pub(crate) struct Variable {
