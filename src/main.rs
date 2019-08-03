@@ -27,8 +27,9 @@ impl From<nom::Err<VerboseError<&str>>> for AppError {
     }
 }
 
-fn run(query_str: &str) -> AppResult<()> {
-    let stmt = syntax::parser::select_query(&query_str)?;
+fn run(query_str: &str, filename: &str) -> AppResult<()> {
+    let select_stmt = syntax::parser::select_query(&query_str)?;
+    dbg!(&select_stmt);
     Ok(())
 }
 
@@ -37,13 +38,14 @@ fn main() {
     let app_m = App::from_yaml(yaml).get_matches();
 
     match app_m.subcommand() {
-        ("select", Some(sub_m)) => {
+        ("query", Some(sub_m)) => {
             if let (Some(query_str), Some(filename)) = (sub_m.value_of("query"), sub_m.value_of("file_to_select")) {
-                run(query_str);
+                run(query_str, filename);
             } else {
                 sub_m.usage();
             }
         }
+        ("schema", Some(sub_m)) => {}
         _ => {
             app_m.usage();
         }

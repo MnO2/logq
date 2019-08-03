@@ -3,13 +3,20 @@ version: "0.1"
 author: Paul Meng <me@paulme.ng>
 about: query agasint log files 
 subcommands:
-    - select:
+    - query:
         about: select the data by query string
         args:
           - query:
               help: query string
-              long: query
-              takes_value: true
+              index: 1
           - file_to_select:
               help: file to select against
+              index: 2
+    - shema:
+        about: show the schema for log file format
+        args:
+          - type:
+              help: log format
               index: 1
+    - help:
+        about: help on the commands
