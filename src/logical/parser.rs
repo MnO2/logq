@@ -1,5 +1,3 @@
-#![feature(box_patterns)]
-
 use super::types;
 use crate::common::types as common;
 use crate::syntax::ast;
@@ -104,7 +102,7 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
     }
 }
 
-fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<types::Node> {
+pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<types::Node> {
     let mut root = types::Node::DataSource(data_source);
     let mut aggregating = false;
 
@@ -114,7 +112,7 @@ fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> P
             if parse_aggregate_result.is_ok() {
                 aggregating = true;
             } else {
-                parse_expression(select_expr);
+                parse_expression(select_expr)?;
             }
         }
     }
