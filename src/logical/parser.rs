@@ -59,6 +59,15 @@ fn parse_boolean(b: bool) -> ParseResult<Box<types::Formula>> {
     Ok(Box::new(types::Formula::Constant(common::Value::Boolean(b))))
 }
 
+fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
+    match value_expr {
+        ast::ValueExpression::Value(_) => unimplemented!(),
+        ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
+        ast::ValueExpression::Operator(_, _, _) => unimplemented!(),
+        _ => Err(ParseError::TypeMismatch),
+    }
+}
+
 fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Expression>> {
     match select_expr {
         ast::SelectExpression::Star => unimplemented!(),
@@ -67,7 +76,7 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
             ast::Expression::And(_, _) => parse_logic_expression(expr),
             ast::Expression::Or(_, _) => parse_logic_expression(expr),
             ast::Expression::Not(_) => parse_logic_expression(expr),
-            _ => Err(ParseError::TypeMismatch),
+            ast::Expression::Value(value_expr) => parse_value_expression(value_expr),
         },
     }
 }
@@ -146,6 +155,20 @@ mod test {
             types::Formula::InfixOperator(
                 "AND".to_string(),
                 Box::new(types::Formula::Constant(common::Value::Boolean(true))),
+                Box::new(types::Formula::Constant(common::Value::Boolean(false))),
+            ),
+        )));
+
+        let ans = parse_logic_expression(&before).unwrap();
+        assert_eq!(expected, ans);
+
+        let before = ast::Expression::Not(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+            ast::Value::Boolean(false),
+        )))));
+
+        let expected = Box::new(types::Expression::LogicExpression(Box::new(
+            types::Formula::PrefixOperator(
+                "NOT".to_string(),
                 Box::new(types::Formula::Constant(common::Value::Boolean(false))),
             ),
         )));

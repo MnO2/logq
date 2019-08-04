@@ -118,23 +118,42 @@ fn value_expression<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, Ve
 }
 
 fn condition<'a>(i: &'a str) -> IResult<&'a str, ast::Condition, VerboseError<&'a str>> {
+    alt((
+        map(
+            separated_pair(value_expression, tag("="), value_expression),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, Box::new(l), Box::new(r)),
+        ),
+        map(
+            separated_pair(value_expression, tag("/="), value_expression),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::NotEqual, Box::new(l), Box::new(r)),
+        ),
+    ))(i)
+}
+
+fn expression_term_opt_not<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     map(
-        separated_pair(value_expression, alt((tag("="), tag("/="))), value_expression),
-        |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, Box::new(l), Box::new(r)),
+        pair(opt(preceded(space1, tag("NOT"))), value_expression),
+        |(opt_not, val)| {
+            if opt_not.is_some() {
+                ast::Expression::Not(Box::new(ast::Expression::Value(Box::new(val))))
+            } else {
+                ast::Expression::Value(Box::new(val))
+            }
+        },
     )(i)
 }
 
 fn expression_term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let (i, init) = value_expression(i)?;
+    let (i, init) = expression_term_opt_not(i)?;
 
     fold_many0(
-        pair(alt((tag("OR"), tag("AND"))), value_expression),
-        ast::Expression::Value(Box::new(init)),
-        |acc, (op, val): (&str, ast::ValueExpression)| {
+        pair(alt((tag("OR"), tag("AND"))), expression_term_opt_not),
+        init,
+        |acc, (op, val): (&str, ast::Expression)| {
             if op == "AND" {
-                ast::Expression::And(Box::new(acc), Box::new(ast::Expression::Value(Box::new(val))))
+                ast::Expression::And(Box::new(acc), Box::new(val))
             } else {
-                ast::Expression::Or(Box::new(acc), Box::new(ast::Expression::Value(Box::new(val))))
+                ast::Expression::Or(Box::new(acc), Box::new(val))
             }
         },
     )(i)
@@ -244,11 +263,11 @@ mod test {
             Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
                 ast::Value::Boolean(true),
             )))),
-            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Boolean(true),
-            )))),
+            Box::new(ast::Expression::Not(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Value(ast::Value::Boolean(true)),
+            ))))),
         );
-        assert_eq!(expression_term("true AND true"), Ok(("", ans)));
+        assert_eq!(expression_term("true AND NOT true"), Ok(("", ans)));
     }
 
     #[test]
