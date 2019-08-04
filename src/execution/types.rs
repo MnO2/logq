@@ -5,7 +5,6 @@ use crate::common::types::{Value, VariableName, Variables};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io;
-use std::io::BufReader;
 use std::rc::Rc;
 use std::result;
 
@@ -99,6 +98,7 @@ impl From<EvaluateError> for ExpressionError {
 pub(crate) enum Expression {
     LogicExpression(Box<Formula>),
     Variable(VariableName),
+    FunctionExpression(String, Box<Vec<Expression>>),
 }
 
 impl Expression {
@@ -114,6 +114,9 @@ impl Expression {
                 } else {
                     Err(ExpressionError::KeyNotFound)
                 }
+            }
+            Expression::FunctionExpression(name, args) => {
+                unimplemented!();
             }
         }
     }
@@ -146,16 +149,6 @@ impl Relation {
 pub(crate) struct NamedExpression {
     pub(crate) expr: Expression,
     pub(crate) name: VariableName,
-}
-
-pub(crate) struct Variable {
-    name: VariableName,
-}
-
-impl Variable {
-    pub(crate) fn new(name: String) -> Self {
-        Variable { name }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

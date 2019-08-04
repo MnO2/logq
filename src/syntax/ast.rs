@@ -80,6 +80,12 @@ pub(crate) enum ValueOperator {
     Divide,
 }
 
+impl fmt::Display for ValueOperator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Value {
     Integral(i32),

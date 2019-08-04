@@ -4,12 +4,10 @@ use crate::execution::types as execution;
 use std::path::PathBuf;
 use std::result;
 
-pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalError>;
+pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
-pub enum PhysicalError {
-    #[fail(display = "Key Not Found")]
-    KeyNotFound,
+pub enum PhysicalPlanError {
     #[fail(display = "Type Mismatch")]
     TypeMisMatch,
 }
@@ -21,7 +19,7 @@ pub(crate) enum Node {
 }
 
 impl Node {
-    fn physical(
+    pub(crate) fn physical(
         &self,
         physicalCreator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
@@ -48,6 +46,7 @@ impl Node {
 pub(crate) enum Expression {
     Variable(VariableName),
     LogicExpression(Box<Formula>),
+    FunctionExpression(String, Vec<Box<Expression>>),
 }
 
 impl Expression {
@@ -65,6 +64,9 @@ impl Expression {
             Expression::LogicExpression(formula) => {
                 let (expr, variables) = formula.physical(physicalCreator)?;
                 Ok((Box::new(execution::Expression::LogicExpression(expr)), variables))
+            }
+            Expression::FunctionExpression(name, arguments) => {
+                unimplemented!();
             }
         }
     }
@@ -102,7 +104,7 @@ impl Formula {
 
                     Ok((node, variables))
                 }
-                _ => Err(PhysicalError::TypeMisMatch),
+                _ => Err(PhysicalPlanError::TypeMisMatch),
             },
         }
     }
@@ -117,6 +119,13 @@ pub(crate) enum DataSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhysicalPlanCreator {
     data_source: execution::Node,
+}
+
+impl PhysicalPlanCreator {
+    pub(crate) fn new(name: String) -> Self {
+        let data_source = execution::Node::DataSource(name);
+        PhysicalPlanCreator { data_source }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

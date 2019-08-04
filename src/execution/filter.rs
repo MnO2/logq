@@ -1,7 +1,5 @@
 use crate::common::types::{Value, Variables};
-use crate::execution::datasource::InMemoryStream;
-use crate::execution::types::{Formula, GetResult, Node, Record, RecordStream, StreamError, StreamResult, Variable};
-use hashbrown::HashMap;
+use crate::execution::types::{Formula, GetResult, Node, Record, RecordStream, StreamError, StreamResult};
 use std::rc::Rc;
 
 pub(crate) struct FilteredStream {
@@ -43,6 +41,7 @@ mod tests {
     use super::*;
     use crate::execution::datasource::InMemoryStream;
     use crate::execution::types;
+    use hashbrown::HashMap;
     use std::collections::VecDeque;
 
     #[test]

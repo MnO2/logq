@@ -20,6 +20,8 @@ pub(crate) type AppResult<T> = result::Result<T, AppError>;
 pub enum AppError {
     #[fail(display = "Parse Error")]
     Parse,
+    #[fail(display = "Physical Plan Error")]
+    PhysicalPlan,
 }
 
 impl From<nom::Err<VerboseError<&str>>> for AppError {
@@ -34,6 +36,12 @@ impl From<logical::parser::ParseError> for AppError {
     }
 }
 
+impl From<logical::types::PhysicalPlanError> for AppError {
+    fn from(_: logical::types::PhysicalPlanError) -> AppError {
+        AppError::PhysicalPlan
+    }
+}
+
 fn run(query_str: &str, filename: logical::types::DataSource) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
 
@@ -41,10 +49,11 @@ fn run(query_str: &str, filename: logical::types::DataSource) -> AppResult<()> {
         return Err(AppError::Parse);
     }
     dbg!(&select_stmt);
-
     let node = logical::parser::parse_query(select_stmt, filename)?;
     dbg!(&node);
-
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new("filename".to_string());
+    let physical_plan = node.physical(&mut physical_plan_creator)?;
+    dbg!(&physical_plan);
     Ok(())
 }
 

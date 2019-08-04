@@ -59,11 +59,26 @@ fn parse_boolean(b: bool) -> ParseResult<Box<types::Formula>> {
     Ok(Box::new(types::Formula::Constant(common::Value::Boolean(b))))
 }
 
+fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
+    match value_expr {
+        ast::ValueExpression::Operator(op, left_expr, right_expr) => {
+            let func_name = (*op).to_string();
+            let left = parse_value_expression(left_expr)?;
+            let right = parse_value_expression(right_expr)?;
+            let args = vec![left, right];
+            Ok(Box::new(types::Expression::FunctionExpression(func_name, args)))
+        }
+        _ => {
+            unimplemented!();
+        }
+    }
+}
+
 fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::ValueExpression::Value(_) => unimplemented!(),
         ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
-        ast::ValueExpression::Operator(_, _, _) => unimplemented!(),
+        ast::ValueExpression::Operator(_, _, _) => parse_arithemetic(value_expr),
         _ => Err(ParseError::TypeMismatch),
     }
 }
@@ -72,7 +87,7 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
     match select_expr {
         ast::SelectExpression::Star => unimplemented!(),
         ast::SelectExpression::Expression(expr) => match &**expr {
-            ast::Expression::Condition(c) => unimplemented!(),
+            ast::Expression::Condition(_) => unimplemented!(),
             ast::Expression::And(_, _) => parse_logic_expression(expr),
             ast::Expression::Or(_, _) => parse_logic_expression(expr),
             ast::Expression::Not(_) => parse_logic_expression(expr),
@@ -102,7 +117,7 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
     match select_expr {
         ast::SelectExpression::Expression(expr) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
-                ast::ValueExpression::FuncCall(func_name, args) => types::Aggregate::try_from(&**func_name),
+                ast::ValueExpression::FuncCall(func_name, _) => types::Aggregate::try_from(&**func_name),
                 _ => Err(ParseError::TypeMismatch),
             },
             _ => Err(ParseError::TypeMismatch),
