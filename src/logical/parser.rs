@@ -99,11 +99,32 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
     }
 }
 
+fn parse_relation(op: &ast::RelationOperator) -> ParseResult<Box<types::Relation>> {
+    match op {
+        ast::RelationOperator::Equal => Ok(Box::new(types::Relation::Equal)),
+        ast::RelationOperator::NotEqual => Ok(Box::new(types::Relation::NotEqual)),
+        _ => unimplemented!(),
+    }
+}
+
+fn parse_condition(condition: &ast::Condition) -> ParseResult<Box<types::Expression>> {
+    match condition {
+        ast::Condition::ComparisonExpression(op, left_expr, right_expr) => {
+            let left = parse_value_expression(left_expr)?;
+            let right = parse_value_expression(right_expr)?;
+            let rel_op = parse_relation(op)?;
+            let formula = Box::new(types::Formula::Predicate(rel_op, left, right));
+            let logic_expression = types::Expression::LogicExpression(formula);
+            Ok(Box::new(logic_expression))
+        }
+    }
+}
+
 fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Expression>> {
     match select_expr {
         ast::SelectExpression::Star => unimplemented!(),
         ast::SelectExpression::Expression(expr) => match &**expr {
-            ast::Expression::Condition(_) => unimplemented!(),
+            ast::Expression::Condition(c) => parse_condition(c),
             ast::Expression::And(_, _) => parse_logic_expression(expr),
             ast::Expression::Or(_, _) => parse_logic_expression(expr),
             ast::Expression::Not(_) => parse_logic_expression(expr),

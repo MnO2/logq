@@ -77,6 +77,7 @@ pub(crate) enum Formula {
     InfixOperator(String, Box<Formula>, Box<Formula>),
     PrefixOperator(String, Box<Formula>),
     Constant(common::Value),
+    Predicate(Box<Relation>, Box<Expression>, Box<Expression>),
 }
 
 impl Formula {
@@ -106,6 +107,18 @@ impl Formula {
                 }
                 _ => Err(PhysicalPlanError::TypeMisMatch),
             },
+            Formula::Predicate(relation, left_expr, right_expr) => {
+                let (left, left_variables) = left_expr.physical(physicalCreator)?;
+                let (right, right_variables) = right_expr.physical(physicalCreator)?;
+
+                let physical_relation = relation.physical(physicalCreator)?;
+
+                let return_variables = common::merge(left_variables, right_variables);
+                Ok((
+                    Box::new(execution::Formula::Predicate(physical_relation, left, right)),
+                    return_variables,
+                ))
+            }
         }
     }
 }
@@ -137,4 +150,30 @@ pub(crate) enum Aggregate {
     Max,
     Min,
     Sum,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Relation {
+    Equal,
+    NotEqual,
+    MoreThan,
+    LessThan,
+    GreaterEqual,
+    LessEqual,
+}
+
+impl Relation {
+    pub(crate) fn physical(
+        &self,
+        physicalCreator: &mut PhysicalPlanCreator,
+    ) -> PhysicalResult<Box<execution::Relation>> {
+        match self {
+            Relation::Equal => Ok(Box::new(execution::Relation::Equal)),
+            Relation::NotEqual => Ok(Box::new(execution::Relation::NotEqual)),
+            Relation::MoreThan => Ok(Box::new(execution::Relation::MoreThan)),
+            Relation::LessThan => Ok(Box::new(execution::Relation::LessThan)),
+            Relation::GreaterEqual => Ok(Box::new(execution::Relation::GreaterEqual)),
+            Relation::LessEqual => Ok(Box::new(execution::Relation::LessEqual)),
+        }
+    }
 }

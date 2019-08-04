@@ -126,6 +126,10 @@ impl Expression {
 pub(crate) enum Relation {
     Equal,
     NotEqual,
+    MoreThan,
+    LessThan,
+    GreaterEqual,
+    LessEqual,
 }
 
 impl Relation {
@@ -141,6 +145,7 @@ impl Relation {
         match self {
             Relation::Equal => Ok(left_result == right_result),
             Relation::NotEqual => Ok(left_result != right_result),
+            _ => unimplemented!(),
         }
     }
 }
