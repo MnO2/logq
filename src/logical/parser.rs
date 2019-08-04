@@ -228,4 +228,40 @@ mod test {
         let ans = parse_logic_expression(&before).unwrap();
         assert_eq!(expected, ans);
     }
+
+    #[test]
+    fn test_parse_value_expression() {
+        let before = ast::ValueExpression::Operator(
+            ast::ValueOperator::Plus,
+            Box::new(ast::ValueExpression::Operator(
+                ast::ValueOperator::Plus,
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(2))),
+            )),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
+        );
+
+        let expected = Box::new(types::Expression::FunctionExpression(
+            "Plus".to_string(),
+            vec![
+                Box::new(types::Expression::FunctionExpression(
+                    "Plus".to_string(),
+                    vec![
+                        Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
+                            common::Value::Int(1),
+                        )))),
+                        Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
+                            common::Value::Int(2),
+                        )))),
+                    ],
+                )),
+                Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
+                    common::Value::Int(3),
+                )))),
+            ],
+        ));
+
+        let ans = parse_value_expression(&before).unwrap();
+        assert_eq!(expected, ans);
+    }
 }
