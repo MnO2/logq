@@ -3,8 +3,8 @@ use ordered_float::OrderedFloat;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {
-    Int(i64),
-    Float(OrderedFloat<f64>),
+    Int(i32),
+    Float(OrderedFloat<f32>),
     Boolean(bool),
     String(String),
     Null,

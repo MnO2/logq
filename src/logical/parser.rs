@@ -40,10 +40,7 @@ fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
         ast::Expression::Or(l, r) => parse_infix_operator("OR", l, r),
         ast::Expression::Not(c) => parse_prefix_operator("NOT", c),
         ast::Expression::Value(value_expr) => match &**value_expr {
-            ast::ValueExpression::Value(v) => match v {
-                ast::Value::Boolean(b) => parse_boolean(*b),
-                _ => Err(ParseError::TypeMismatch),
-            },
+            ast::ValueExpression::Value(v) => parse_value(v),
             _ => Err(ParseError::TypeMismatch),
         },
         _ => Err(ParseError::UnsupportedLogicOperator),
@@ -55,8 +52,13 @@ fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expr
     Ok(Box::new(types::Expression::LogicExpression(formula)))
 }
 
-fn parse_boolean(b: bool) -> ParseResult<Box<types::Formula>> {
-    Ok(Box::new(types::Formula::Constant(common::Value::Boolean(b))))
+fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Formula>> {
+    match value {
+        ast::Value::Boolean(b) => Ok(Box::new(types::Formula::Constant(common::Value::Boolean(*b)))),
+        ast::Value::Float(f) => Ok(Box::new(types::Formula::Constant(common::Value::Float(*f)))),
+        ast::Value::Integral(i) => Ok(Box::new(types::Formula::Constant(common::Value::Int(*i)))),
+        ast::Value::StringLiteral(s) => Ok(Box::new(types::Formula::Constant(common::Value::String(s.clone())))),
+    }
 }
 
 fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
@@ -76,9 +78,23 @@ fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types
 
 fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
-        ast::ValueExpression::Value(_) => unimplemented!(),
+        ast::ValueExpression::Value(v) => {
+            let formula = parse_value(v)?;
+            Ok(Box::new(types::Expression::LogicExpression(formula)))
+        }
         ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
         ast::ValueExpression::Operator(_, _, _) => parse_arithemetic(value_expr),
+        ast::ValueExpression::FuncCall(func_name, select_exprs_opt) => {
+            let mut args = Vec::new();
+
+            if let Some(select_exprs) = select_exprs_opt {
+                for select_expr in select_exprs.iter() {
+                    let arg = parse_expression(select_expr)?;
+                    args.push(arg);
+                }
+            }
+            Ok(Box::new(types::Expression::FunctionExpression(func_name.clone(), args)))
+        }
         _ => Err(ParseError::TypeMismatch),
     }
 }

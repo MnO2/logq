@@ -20,7 +20,7 @@ pub(crate) trait AggregateIterator {
 
 #[derive(Debug)]
 pub(crate) struct AverageIterator {
-    pub(crate) averages: HashMap<Tuple, OrderedFloat<f64>>,
+    pub(crate) averages: HashMap<Tuple, OrderedFloat<f32>>,
     pub(crate) counts: HashMap<Tuple, i64>,
 }
 
@@ -33,8 +33,8 @@ impl AverageIterator {
     }
 
     fn add_record(&mut self, key: Tuple, value: Value) -> Result<()> {
-        let newValue: OrderedFloat<f64> = match value {
-            Value::Int(i) => OrderedFloat::from(i as f64),
+        let newValue: OrderedFloat<f32> = match value {
+            Value::Int(i) => OrderedFloat::from(i as f32),
             Value::Float(f) => f,
             _ => {
                 return Err(AggregateError::InvalidType);
@@ -43,9 +43,9 @@ impl AverageIterator {
 
         if let (Some(&average), Some(&count)) = (self.averages.get(&key), self.counts.get(&key)) {
             let newCount = count + 1;
-            let f64_average: f64 = average.into();
-            let f64_newValue: f64 = newValue.into();
-            let newAverage: f64 = (f64_average * (count as f64) + f64_newValue) / (newCount as f64);
+            let f32_average: f32 = average.into();
+            let f32_newValue: f32 = newValue.into();
+            let newAverage: f32 = (f32_average * (count as f32) + f32_newValue) / (newCount as f32);
             self.averages.insert(key.clone(), OrderedFloat::from(newAverage));
             self.counts.insert(key.clone(), newCount);
             Ok(())
