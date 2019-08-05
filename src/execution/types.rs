@@ -195,7 +195,7 @@ impl Formula {
 pub(crate) enum Node {
     DataSource(String),
     Filter(Box<Node>, Box<Formula>),
-    Map(Vec<Box<NamedExpression>>, Box<Node>),
+    Map(Vec<NamedExpression>, Box<Node>),
 }
 
 impl Node {

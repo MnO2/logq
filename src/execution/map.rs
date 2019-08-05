@@ -2,7 +2,7 @@ use crate::common::types::Variables;
 use crate::execution::types::{NamedExpression, Record, RecordStream, StreamResult};
 
 pub(crate) struct MappedStream {
-    pub(crate) expressions: Vec<Box<NamedExpression>>,
+    pub(crate) expressions: Vec<NamedExpression>,
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
 }

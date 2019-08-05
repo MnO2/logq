@@ -22,34 +22,34 @@ pub(crate) enum Node {
 impl Node {
     pub(crate) fn physical(
         &self,
-        physicalCreator: &mut PhysicalPlanCreator,
+        physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
         match self {
             Node::DataSource(data_source) => {
-                let node = physicalCreator.data_source.clone();
+                let node = physical_plan_creator.data_source.clone();
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
             }
             Node::Filter(formula, source) => {
-                let (physical_formula, formula_variables) = formula.physical(physicalCreator)?;
-                let (child, child_variables) = source.physical(physicalCreator)?;
+                let (physical_formula, formula_variables) = formula.physical(physical_plan_creator)?;
+                let (child, child_variables) = source.physical(physical_plan_creator)?;
 
                 let return_variables = common::merge(formula_variables, child_variables);
                 let filter = execution::Node::Filter(child, physical_formula);
                 Ok((Box::new(filter), return_variables))
             }
             Node::Map(expressions, source) => {
-                let mut physical_expressions: Vec<Box<execution::NamedExpression>> = Vec::new();
+                let mut physical_expressions: Vec<execution::NamedExpression> = Vec::new();
                 let mut total_expression_variables = common::empty_variables();
 
                 for expression in expressions.iter() {
-                    let (physical_expression, expression_variables) = expression.physical(physicalCreator)?;
-                    physical_expressions.push(physical_expression);
+                    let (physical_expression, expression_variables) = expression.physical(physical_plan_creator)?;
+                    physical_expressions.push(*physical_expression);
                     total_expression_variables = common::merge(total_expression_variables, expression_variables);
                 }
 
-                let (child, child_variables) = source.physical(physicalCreator)?;
+                let (child, child_variables) = source.physical(physical_plan_creator)?;
                 let return_variables = common::merge(total_expression_variables, child_variables);
 
                 let node = execution::Node::Map(physical_expressions, child);
@@ -73,9 +73,9 @@ impl NamedExpression {
 
     pub(crate) fn physical(
         &self,
-        physicalCreator: &mut PhysicalPlanCreator,
+        physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::NamedExpression>, common::Variables)> {
-        let (physical_expr, expr_variables) = self.expr.physical(physicalCreator)?;
+        let (physical_expr, expr_variables) = self.expr.physical(physical_plan_creator)?;
         Ok((
             Box::new(execution::NamedExpression {
                 expr: physical_expr,
@@ -96,7 +96,7 @@ pub(crate) enum Expression {
 impl Expression {
     pub(crate) fn physical(
         &self,
-        physicalCreator: &mut PhysicalPlanCreator,
+        physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Expression>, common::Variables)> {
         match self {
             Expression::Variable(name) => {
@@ -106,7 +106,7 @@ impl Expression {
                 Ok((node, variables))
             }
             Expression::LogicExpression(formula) => {
-                let (expr, variables) = formula.physical(physicalCreator)?;
+                let (expr, variables) = formula.physical(physical_plan_creator)?;
                 Ok((Box::new(execution::Expression::LogicExpression(expr)), variables))
             }
             Expression::FunctionExpression(name, arguments) => {
@@ -127,19 +127,19 @@ pub(crate) enum Formula {
 impl Formula {
     pub(crate) fn physical(
         &self,
-        physicalCreator: &mut PhysicalPlanCreator,
+        physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Formula>, common::Variables)> {
         match self {
             Formula::InfixOperator(op, left_formula, right_formula) => {
-                let (left, left_variables) = left_formula.physical(physicalCreator)?;
-                let (right, right_variables) = right_formula.physical(physicalCreator)?;
+                let (left, left_variables) = left_formula.physical(physical_plan_creator)?;
+                let (right, right_variables) = right_formula.physical(physical_plan_creator)?;
 
                 let return_variables = common::merge(left_variables, right_variables);
 
                 Ok((Box::new(execution::Formula::And(left, right)), return_variables))
             }
             Formula::PrefixOperator(op, child_formula) => {
-                let (child, child_variables) = child_formula.physical(physicalCreator)?;
+                let (child, child_variables) = child_formula.physical(physical_plan_creator)?;
                 Ok((Box::new(execution::Formula::Not(child)), child_variables))
             }
             Formula::Constant(value) => match value {
@@ -152,10 +152,10 @@ impl Formula {
                 _ => Err(PhysicalPlanError::TypeMisMatch),
             },
             Formula::Predicate(relation, left_expr, right_expr) => {
-                let (left, left_variables) = left_expr.physical(physicalCreator)?;
-                let (right, right_variables) = right_expr.physical(physicalCreator)?;
+                let (left, left_variables) = left_expr.physical(physical_plan_creator)?;
+                let (right, right_variables) = right_expr.physical(physical_plan_creator)?;
 
-                let physical_relation = relation.physical(physicalCreator)?;
+                let physical_relation = relation.physical(physical_plan_creator)?;
 
                 let return_variables = common::merge(left_variables, right_variables);
                 Ok((
