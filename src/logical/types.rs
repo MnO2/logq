@@ -142,7 +142,7 @@ impl PhysicalPlanCreator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Aggregate {
+pub(crate) enum AggregateFunction {
     Avg,
     Count,
     First,
@@ -150,6 +150,21 @@ pub(crate) enum Aggregate {
     Max,
     Min,
     Sum,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Aggregate {
+    aggregate_func: AggregateFunction,
+    argument: Option<Box<Expression>>,
+}
+
+impl Aggregate {
+    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Option<Box<Expression>>) -> Self {
+        Aggregate {
+            aggregate_func,
+            argument,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

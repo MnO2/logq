@@ -133,18 +133,18 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
     }
 }
 
-impl TryFrom<&str> for types::Aggregate {
+impl TryFrom<&str> for types::AggregateFunction {
     type Error = ParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "avg" => Ok(types::Aggregate::Avg),
-            "count" => Ok(types::Aggregate::Count),
-            "first" => Ok(types::Aggregate::First),
-            "last" => Ok(types::Aggregate::Last),
-            "max" => Ok(types::Aggregate::Max),
-            "min" => Ok(types::Aggregate::Min),
-            "sum" => Ok(types::Aggregate::Sum),
+            "avg" => Ok(types::AggregateFunction::Avg),
+            "count" => Ok(types::AggregateFunction::Count),
+            "first" => Ok(types::AggregateFunction::First),
+            "last" => Ok(types::AggregateFunction::Last),
+            "max" => Ok(types::AggregateFunction::Max),
+            "min" => Ok(types::AggregateFunction::Min),
+            "sum" => Ok(types::AggregateFunction::Sum),
             _ => Err(ParseError::NotAggregateFunction),
         }
     }
@@ -154,7 +154,19 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
     match select_expr {
         ast::SelectExpression::Expression(expr) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
-                ast::ValueExpression::FuncCall(func_name, _) => types::Aggregate::try_from(&**func_name),
+                ast::ValueExpression::FuncCall(func_name, args_opt) => {
+                    let argument = if let Some(args) = args_opt {
+                        let arg = &args[0];
+                        let expr = parse_expression(arg)?;
+                        Some(expr)
+                    } else {
+                        None
+                    };
+
+                    let aggregate_func = types::AggregateFunction::try_from(&**func_name)?;
+
+                    Ok(types::Aggregate::new(aggregate_func, argument))
+                }
                 _ => Err(ParseError::TypeMismatch),
             },
             _ => Err(ParseError::TypeMismatch),
@@ -262,6 +274,24 @@ mod test {
         ));
 
         let ans = parse_value_expression(&before).unwrap();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_aggregate() {
+        let before = ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+            ast::ValueExpression::FuncCall(
+                "avg".to_string(),
+                Some(vec![ast::SelectExpression::Expression(Box::new(
+                    ast::Expression::Value(Box::new(ast::ValueExpression::Column("a".to_string()))),
+                ))]),
+            ),
+        ))));
+
+        let argument = types::Expression::Variable("a".to_string());
+        let expected = types::Aggregate::new(types::AggregateFunction::Avg, Some(Box::new(argument)));
+
+        let ans = parse_aggregate(&before).unwrap();
         assert_eq!(expected, ans);
     }
 }
