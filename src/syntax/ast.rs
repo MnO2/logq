@@ -5,19 +5,19 @@ use std::fmt;
 pub(crate) struct SelectStatement {
     pub(crate) select_exprs: Vec<SelectExpression>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
-    pub(crate) group_by_expr_opt: Option<GroupByExpression>,
+    pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
 }
 
 impl SelectStatement {
     pub fn new(
         select_exprs: Vec<SelectExpression>,
         where_expr_opt: Option<WhereExpression>,
-        group_by_expr_opt: Option<GroupByExpression>,
+        group_by_exprs_opt: Option<GroupByExpression>,
     ) -> Self {
         SelectStatement {
             select_exprs,
             where_expr_opt,
-            group_by_expr_opt,
+            group_by_exprs_opt,
         }
     }
 }
@@ -69,7 +69,7 @@ pub(crate) enum ValueExpression {
     Column(ColumnName),
     Value(Value),
     Operator(ValueOperator, Box<ValueExpression>, Box<ValueExpression>),
-    FuncCall(FuncName, Option<Vec<SelectExpression>>),
+    FuncCall(FuncName, Vec<SelectExpression>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -107,12 +107,12 @@ impl WhereExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct GroupByExpression {
-    pub(crate) expr: Expression,
+    pub(crate) exprs: Vec<ColumnName>,
 }
 
 impl GroupByExpression {
-    pub(crate) fn new(expr: Expression) -> Self {
-        GroupByExpression { expr }
+    pub(crate) fn new(exprs: Vec<ColumnName>) -> Self {
+        GroupByExpression { exprs }
     }
 }
 

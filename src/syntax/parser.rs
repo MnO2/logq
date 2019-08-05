@@ -68,7 +68,13 @@ fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseEr
             tuple((alpha1, delimited(tag("("), opt(select_expression_list), tag(")")))),
             space0,
         ),
-        |(func_name, select_expr_list)| ast::ValueExpression::FuncCall(func_name.to_string(), select_expr_list),
+        |(func_name, select_expr_list_opt)| {
+            if let Some(select_expr_list) = select_expr_list_opt {
+                ast::ValueExpression::FuncCall(func_name.to_string(), select_expr_list)
+            } else {
+                ast::ValueExpression::FuncCall(func_name.to_string(), vec![])
+            }
+        },
     )(i)
 }
 
@@ -184,10 +190,21 @@ fn where_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, Ve
     map(preceded(tag("where"), expression), ast::WhereExpression::new)(i)
 }
 
+fn column_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::ColumnName>, VerboseError<&'a str>> {
+    context(
+        "column_expression_list",
+        map(
+            terminated(separated_list(preceded(space0, char(',')), column_name), space0),
+            |v| v.into_iter().map(|s| s.to_string()).collect(),
+        ),
+    )(i)
+}
+
 fn group_by_expression<'a>(i: &'a str) -> IResult<&'a str, ast::GroupByExpression, VerboseError<&'a str>> {
-    map(preceded(tuple((tag("group"), space1, tag("by"))), expression), |e| {
-        ast::GroupByExpression::new(e)
-    })(i)
+    map(
+        preceded(tuple((tag("group"), space1, tag("by"), space1)), column_expression_list),
+        |exprs| ast::GroupByExpression::new(exprs),
+    )(i)
 }
 
 pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
@@ -346,9 +363,7 @@ mod test {
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         )));
 
-        let group_by_expr = ast::GroupByExpression::new(ast::Expression::Value(Box::new(
-            ast::ValueExpression::Column("b".to_string()),
-        )));
+        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
         let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr));
 
         assert_eq!(select_query("select a, b, c where a = 1 group by b"), Ok(("", ans)));
@@ -360,9 +375,9 @@ mod test {
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
                 ast::ValueExpression::FuncCall(
                     "avg".to_string(),
-                    Some(vec![ast::SelectExpression::Expression(Box::new(
-                        ast::Expression::Value(Box::new(ast::ValueExpression::Column("a".to_string()))),
-                    ))]),
+                    vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
+                        Box::new(ast::ValueExpression::Column("a".to_string())),
+                    )))],
                 ),
             )))),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(

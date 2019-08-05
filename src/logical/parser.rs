@@ -11,6 +11,8 @@ pub enum ParseError {
     UnsupportedLogicOperator,
     #[fail(display = "Not Aggregate Function")]
     NotAggregateFunction,
+    #[fail(display = "Select Expression Must Be Named")]
+    SelectExprMustBeNamed,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -85,14 +87,11 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
         }
         ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
         ast::ValueExpression::Operator(_, _, _) => parse_arithemetic(value_expr),
-        ast::ValueExpression::FuncCall(func_name, select_exprs_opt) => {
+        ast::ValueExpression::FuncCall(func_name, select_exprs) => {
             let mut args = Vec::new();
-
-            if let Some(select_exprs) = select_exprs_opt {
-                for select_expr in select_exprs.iter() {
-                    let arg = parse_expression(select_expr)?;
-                    args.push(arg);
-                }
+            for select_expr in select_exprs.iter() {
+                let arg = parse_expression(select_expr)?;
+                args.push(arg);
             }
             Ok(Box::new(types::Expression::FunctionExpression(func_name.clone(), args)))
         }
@@ -157,18 +156,17 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
     match select_expr {
         ast::SelectExpression::Expression(expr) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
-                ast::ValueExpression::FuncCall(func_name, args_opt) => {
-                    let argument = if let Some(args) = args_opt {
-                        let arg = &args[0];
-                        let expr = parse_expression(arg)?;
-                        Some(expr)
-                    } else {
-                        None
-                    };
-
+                ast::ValueExpression::FuncCall(func_name, args) => {
+                    let argument = *parse_expression(&args[0])?;
                     let aggregate_func = types::AggregateFunction::try_from(&**func_name)?;
 
-                    Ok(types::Aggregate::new(aggregate_func, argument))
+                    match &argument {
+                        types::Expression::Variable(name) => {
+                            let named_expression = types::NamedExpression::new(argument.clone(), name.clone());
+                            Ok(types::Aggregate::new(aggregate_func, Some(named_expression)))
+                        }
+                        _ => Err(ParseError::SelectExprMustBeNamed),
+                    }
                 }
                 _ => Err(ParseError::TypeMismatch),
             },
@@ -180,23 +178,38 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
 
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<types::Node> {
     let mut root = types::Node::DataSource(data_source);
-    let mut aggregating = false;
 
+    let mut aggregates = Vec::new();
     if !query.select_exprs.is_empty() {
         let mut named_expressions = Vec::new();
         for select_expr in query.select_exprs.iter() {
             let parse_aggregate_result = parse_aggregate(select_expr);
             if parse_aggregate_result.is_ok() {
-                aggregating = true;
+                let aggregate = parse_aggregate_result.unwrap();
+                aggregates.push(aggregate.clone());
+
+                let types::Aggregate {
+                    aggregate_func,
+                    argument,
+                } = aggregate;
+                if let Some(expr) = argument {
+                    named_expressions.push(expr);
+                } else {
+                    let star_named_expr = types::NamedExpression::new(
+                        types::Expression::Variable("**star**".to_string()),
+                        "**star**".to_string(),
+                    );
+                    named_expressions.push(star_named_expr);
+                }
             } else {
-                let expression = parse_expression(select_expr)?;
-
-                let named_expression = types::NamedExpression {
-                    name: "".to_string(), //FIXME
-                    expr: *expression,
-                };
-
-                named_expressions.push(named_expression);
+                let expression = *parse_expression(select_expr)?;
+                match &expression {
+                    types::Expression::Variable(name) => {
+                        let named_expression = types::NamedExpression::new(expression.clone(), name.clone());
+                        named_expressions.push(named_expression);
+                    }
+                    _ => return Err(ParseError::SelectExprMustBeNamed),
+                }
             }
         }
 
@@ -208,7 +221,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataS
         root = types::Node::Filter(filter_formula, Box::new(root));
     }
 
-    if query.group_by_expr_opt.is_some() {}
+    if let Some(group_by) = query.group_by_exprs_opt {
+        let mut fields = group_by.exprs.clone();
+        root = types::Node::GroupBy(fields, aggregates, Box::new(root));
+    }
 
     Ok(root)
 }
@@ -295,14 +311,14 @@ mod test {
         let before = ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
             ast::ValueExpression::FuncCall(
                 "avg".to_string(),
-                Some(vec![ast::SelectExpression::Expression(Box::new(
-                    ast::Expression::Value(Box::new(ast::ValueExpression::Column("a".to_string()))),
-                ))]),
+                vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
+                    Box::new(ast::ValueExpression::Column("a".to_string())),
+                )))],
             ),
         ))));
 
-        let argument = types::Expression::Variable("a".to_string());
-        let expected = types::Aggregate::new(types::AggregateFunction::Avg, Some(Box::new(argument)));
+        let argument = types::NamedExpression::new(types::Expression::Variable("a".to_string()), "a".to_string());
+        let expected = types::Aggregate::new(types::AggregateFunction::Avg, Some(argument));
 
         let ans = parse_aggregate(&before).unwrap();
         assert_eq!(expected, ans);
@@ -329,16 +345,23 @@ mod test {
     }
 
     #[test]
-    fn test_parse_query() {
-        let select_exprs = vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-        )))];
+    fn test_parse_query_with_simple_select_where() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("a".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("b".to_string()),
+            )))),
+        ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
             Box::new(ast::ValueExpression::Column("a".to_string())),
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         )));
+        //let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+
         let before = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
         let data_source = types::DataSource::Stdin;
 
@@ -353,13 +376,87 @@ mod test {
         let expected = types::Node::Filter(
             filtered_formula,
             Box::new(types::Node::Map(
-                vec![types::NamedExpression::new(
-                    types::Expression::Variable("a".to_string()),
-                    "".to_string(),
-                )],
+                vec![
+                    types::NamedExpression::new(types::Expression::Variable("a".to_string()), "a".to_string()),
+                    types::NamedExpression::new(types::Expression::Variable("b".to_string()), "b".to_string()),
+                ],
                 Box::new(types::Node::DataSource(types::DataSource::Stdin)),
             )),
         );
+
+        let ans = parse_query(before, data_source).unwrap();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query_with_group_by() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::FuncCall(
+                    "avg".to_string(),
+                    vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
+                        Box::new(ast::ValueExpression::Column("a".to_string())),
+                    )))],
+                ),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::FuncCall(
+                    "count".to_string(),
+                    vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
+                        Box::new(ast::ValueExpression::Column("b".to_string())),
+                    )))],
+                ),
+            )))),
+        ];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
+            ast::RelationOperator::Equal,
+            Box::new(ast::ValueExpression::Column("a".to_string())),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+        )));
+        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+
+        let before = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr));
+        let data_source = types::DataSource::Stdin;
+
+        let filtered_formula = Box::new(types::Formula::Predicate(
+            Box::new(types::Relation::Equal),
+            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
+                common::Value::Int(1),
+            )))),
+        ));
+
+        let filter = types::Node::Filter(
+            filtered_formula,
+            Box::new(types::Node::Map(
+                vec![
+                    types::NamedExpression::new(types::Expression::Variable("a".to_string()), "a".to_string()),
+                    types::NamedExpression::new(types::Expression::Variable("b".to_string()), "b".to_string()),
+                ],
+                Box::new(types::Node::DataSource(types::DataSource::Stdin)),
+            )),
+        );
+
+        let aggregates = vec![
+            types::Aggregate::new(
+                types::AggregateFunction::Avg,
+                Some(types::NamedExpression::new(
+                    types::Expression::Variable("a".to_string()),
+                    "a".to_string(),
+                )),
+            ),
+            types::Aggregate::new(
+                types::AggregateFunction::Count,
+                Some(types::NamedExpression::new(
+                    types::Expression::Variable("b".to_string()),
+                    "b".to_string(),
+                )),
+            ),
+        ];
+
+        let fields = vec!["b".to_string()];
+        let expected = types::Node::GroupBy(fields, aggregates, Box::new(filter));
 
         let ans = parse_query(before, data_source).unwrap();
         assert_eq!(expected, ans);

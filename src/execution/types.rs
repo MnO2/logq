@@ -196,6 +196,7 @@ pub(crate) enum Node {
     DataSource(String),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<NamedExpression>, Box<Node>),
+    GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
 }
 
 impl Node {
@@ -226,6 +227,35 @@ impl Node {
 
                 Ok(Box::new(stream))
             }
+            Node::GroupBy(fields, aggregates, source) => {
+                unimplemented!();
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AggregateFunction {
+    Avg,
+    Count,
+    First,
+    Last,
+    Max,
+    Min,
+    Sum,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Aggregate {
+    pub(crate) aggregate_func: AggregateFunction,
+    pub(crate) argument: Option<Expression>,
+}
+
+impl Aggregate {
+    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Option<Expression>) -> Self {
+        Aggregate {
+            aggregate_func,
+            argument,
         }
     }
 }

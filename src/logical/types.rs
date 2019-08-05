@@ -17,6 +17,7 @@ pub(crate) enum Node {
     DataSource(DataSource),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<NamedExpression>, Box<Node>),
+    GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
 }
 
 impl Node {
@@ -53,6 +54,22 @@ impl Node {
                 let return_variables = common::merge(total_expression_variables, child_variables);
 
                 let node = execution::Node::Map(physical_expressions, child);
+
+                Ok((Box::new(node), return_variables))
+            }
+            Node::GroupBy(fields, aggergates, source) => {
+                let mut variables = common::empty_variables();
+
+                let mut physical_aggregates = Vec::new();
+                for aggregate in aggergates.iter() {
+                    let (physical_aggregate, aggregate_variables) = aggregate.physical(physical_plan_creator)?;
+                    variables = common::merge(variables, aggregate_variables);
+                    physical_aggregates.push(physical_aggregate);
+                }
+                let (child, child_variables) = source.physical(physical_plan_creator)?;
+                let return_variables = common::merge(variables, child_variables);
+
+                let node = execution::Node::GroupBy(fields.clone(), physical_aggregates, child);
 
                 Ok((Box::new(node), return_variables))
             }
@@ -196,18 +213,52 @@ pub(crate) enum AggregateFunction {
     Sum,
 }
 
+impl AggregateFunction {
+    pub(crate) fn physical(
+        &self,
+        physical_plan_creator: &mut PhysicalPlanCreator,
+    ) -> PhysicalResult<execution::AggregateFunction> {
+        match self {
+            AggregateFunction::Avg => Ok(execution::AggregateFunction::Avg),
+            _ => {
+                unimplemented!();
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Aggregate {
-    aggregate_func: AggregateFunction,
-    argument: Option<Box<Expression>>,
+    pub(crate) aggregate_func: AggregateFunction,
+    pub(crate) argument: Option<NamedExpression>,
 }
 
 impl Aggregate {
-    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Option<Box<Expression>>) -> Self {
+    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Option<NamedExpression>) -> Self {
         Aggregate {
             aggregate_func,
             argument,
         }
+    }
+
+    pub(crate) fn physical(
+        &self,
+        physical_plan_creator: &mut PhysicalPlanCreator,
+    ) -> PhysicalResult<(execution::Aggregate, common::Variables)> {
+        let aggregate_func = self.aggregate_func.physical(physical_plan_creator)?;
+
+        let mut variables = common::empty_variables();
+
+        let arg = if let Some(named_expr) = &self.argument {
+            let (physical_expr, expr_variables) = named_expr.expr.physical(physical_plan_creator)?;
+            variables = common::merge(variables, expr_variables);
+            Some(*physical_expr)
+        } else {
+            None
+        };
+        let aggregate = execution::Aggregate::new(aggregate_func, arg);
+
+        Ok((aggregate, variables))
     }
 }
 
