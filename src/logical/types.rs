@@ -16,6 +16,7 @@ pub enum PhysicalPlanError {
 pub(crate) enum Node {
     DataSource(DataSource),
     Filter(Box<Formula>, Box<Node>),
+    Map(Vec<NamedExpression>, Box<Node>),
 }
 
 impl Node {
@@ -38,7 +39,50 @@ impl Node {
                 let filter = execution::Node::Filter(child, physical_formula);
                 Ok((Box::new(filter), return_variables))
             }
+            Node::Map(expressions, source) => {
+                let mut physical_expressions: Vec<Box<execution::NamedExpression>> = Vec::new();
+                let mut total_expression_variables = common::empty_variables();
+
+                for expression in expressions.iter() {
+                    let (physical_expression, expression_variables) = expression.physical(physicalCreator)?;
+                    physical_expressions.push(physical_expression);
+                    total_expression_variables = common::merge(total_expression_variables, expression_variables);
+                }
+
+                let (child, child_variables) = source.physical(physicalCreator)?;
+                let return_variables = common::merge(total_expression_variables, child_variables);
+
+                let node = execution::Node::Map(physical_expressions, child);
+
+                Ok((Box::new(node), return_variables))
+            }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedExpression {
+    pub(crate) expr: Expression,
+    pub(crate) name: VariableName,
+}
+
+impl NamedExpression {
+    pub(crate) fn new(expr: Expression, name: VariableName) -> Self {
+        NamedExpression { expr, name }
+    }
+
+    pub(crate) fn physical(
+        &self,
+        physicalCreator: &mut PhysicalPlanCreator,
+    ) -> PhysicalResult<(Box<execution::NamedExpression>, common::Variables)> {
+        let (physical_expr, expr_variables) = self.expr.physical(physicalCreator)?;
+        Ok((
+            Box::new(execution::NamedExpression {
+                expr: physical_expr,
+                name: self.name.clone(),
+            }),
+            expr_variables,
+        ))
     }
 }
 

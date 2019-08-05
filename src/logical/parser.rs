@@ -36,6 +36,7 @@ fn parse_infix_operator(
 
 fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match expr {
+        ast::Expression::Condition(c) => parse_condition(c),
         ast::Expression::And(l, r) => parse_infix_operator("AND", l, r),
         ast::Expression::Or(l, r) => parse_infix_operator("OR", l, r),
         ast::Expression::Not(c) => parse_prefix_operator("NOT", c),
@@ -107,15 +108,13 @@ fn parse_relation(op: &ast::RelationOperator) -> ParseResult<Box<types::Relation
     }
 }
 
-fn parse_condition(condition: &ast::Condition) -> ParseResult<Box<types::Expression>> {
+fn parse_condition(condition: &ast::Condition) -> ParseResult<Box<types::Formula>> {
     match condition {
         ast::Condition::ComparisonExpression(op, left_expr, right_expr) => {
             let left = parse_value_expression(left_expr)?;
             let right = parse_value_expression(right_expr)?;
             let rel_op = parse_relation(op)?;
-            let formula = Box::new(types::Formula::Predicate(rel_op, left, right));
-            let logic_expression = types::Expression::LogicExpression(formula);
-            Ok(Box::new(logic_expression))
+            Ok(Box::new(types::Formula::Predicate(rel_op, left, right)))
         }
     }
 }
@@ -124,7 +123,11 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
     match select_expr {
         ast::SelectExpression::Star => unimplemented!(),
         ast::SelectExpression::Expression(expr) => match &**expr {
-            ast::Expression::Condition(c) => parse_condition(c),
+            ast::Expression::Condition(c) => {
+                let formula = parse_condition(c)?;
+                let logic_expression = types::Expression::LogicExpression(formula);
+                Ok(Box::new(logic_expression))
+            }
             ast::Expression::And(_, _) => parse_logic_expression(expr),
             ast::Expression::Or(_, _) => parse_logic_expression(expr),
             ast::Expression::Not(_) => parse_logic_expression(expr),
@@ -180,14 +183,24 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataS
     let mut aggregating = false;
 
     if !query.select_exprs.is_empty() {
+        let mut named_expressions = Vec::new();
         for select_expr in query.select_exprs.iter() {
             let parse_aggregate_result = parse_aggregate(select_expr);
             if parse_aggregate_result.is_ok() {
                 aggregating = true;
             } else {
-                parse_expression(select_expr)?;
+                let expression = parse_expression(select_expr)?;
+
+                let named_expression = types::NamedExpression {
+                    name: "".to_string(), //FIXME
+                    expr: *expression,
+                };
+
+                named_expressions.push(named_expression);
             }
         }
+
+        root = types::Node::Map(named_expressions, Box::new(root));
     }
 
     if let Some(where_expr) = query.where_expr_opt {
@@ -303,15 +316,52 @@ mod test {
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         );
 
-        let expected = Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Predicate(
+        let expected = Box::new(types::Formula::Predicate(
             Box::new(types::Relation::Equal),
             Box::new(types::Expression::Variable("a".to_string())),
             Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
                 common::Value::Int(1),
             )))),
-        ))));
+        ));
 
         let ans = parse_condition(&before).unwrap();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query() {
+        let select_exprs = vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
+            Box::new(ast::ValueExpression::Column("a".to_string())),
+        )))];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
+            ast::RelationOperator::Equal,
+            Box::new(ast::ValueExpression::Column("a".to_string())),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+        )));
+        let before = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
+        let data_source = types::DataSource::Stdin;
+
+        let filtered_formula = Box::new(types::Formula::Predicate(
+            Box::new(types::Relation::Equal),
+            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
+                common::Value::Int(1),
+            )))),
+        ));
+
+        let expected = types::Node::Filter(
+            filtered_formula,
+            Box::new(types::Node::Map(
+                vec![types::NamedExpression::new(
+                    types::Expression::Variable("a".to_string()),
+                    "".to_string(),
+                )],
+                Box::new(types::Node::DataSource(types::DataSource::Stdin)),
+            )),
+        );
+
+        let ans = parse_query(before, data_source).unwrap();
         assert_eq!(expected, ans);
     }
 }

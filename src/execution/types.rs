@@ -152,7 +152,7 @@ impl Relation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NamedExpression {
-    pub(crate) expr: Expression,
+    pub(crate) expr: Box<Expression>,
     pub(crate) name: VariableName,
 }
 
@@ -195,7 +195,7 @@ impl Formula {
 pub(crate) enum Node {
     DataSource(String),
     Filter(Box<Node>, Box<Formula>),
-    Map(Vec<Rc<NamedExpression>>, Box<Node>),
+    Map(Vec<Box<NamedExpression>>, Box<Node>),
 }
 
 impl Node {
