@@ -294,4 +294,24 @@ mod test {
         let ans = parse_aggregate(&before).unwrap();
         assert_eq!(expected, ans);
     }
+
+    #[test]
+    fn test_parse_condition() {
+        let before = ast::Condition::ComparisonExpression(
+            ast::RelationOperator::Equal,
+            Box::new(ast::ValueExpression::Column("a".to_string())),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+        );
+
+        let expected = Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Predicate(
+            Box::new(types::Relation::Equal),
+            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
+                common::Value::Int(1),
+            )))),
+        ))));
+
+        let ans = parse_condition(&before).unwrap();
+        assert_eq!(expected, ans);
+    }
 }
