@@ -99,11 +99,14 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
     }
 }
 
-fn parse_relation(op: &ast::RelationOperator) -> ParseResult<Box<types::Relation>> {
+fn parse_relation(op: &ast::RelationOperator) -> ParseResult<types::Relation> {
     match op {
-        ast::RelationOperator::Equal => Ok(Box::new(types::Relation::Equal)),
-        ast::RelationOperator::NotEqual => Ok(Box::new(types::Relation::NotEqual)),
-        _ => unimplemented!(),
+        ast::RelationOperator::Equal => Ok(types::Relation::Equal),
+        ast::RelationOperator::NotEqual => Ok(types::Relation::NotEqual),
+        ast::RelationOperator::GreaterEqual => Ok(types::Relation::GreaterEqual),
+        ast::RelationOperator::LessEqual => Ok(types::Relation::LessEqual),
+        ast::RelationOperator::LessThan => Ok(types::Relation::LessThan),
+        ast::RelationOperator::MoreThan => Ok(types::Relation::MoreThan),
     }
 }
 
@@ -333,7 +336,7 @@ mod test {
         );
 
         let expected = Box::new(types::Formula::Predicate(
-            Box::new(types::Relation::Equal),
+            types::Relation::Equal,
             Box::new(types::Expression::Variable("a".to_string())),
             Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
                 common::Value::Int(1),
@@ -366,7 +369,7 @@ mod test {
         let data_source = types::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
-            Box::new(types::Relation::Equal),
+            types::Relation::Equal,
             Box::new(types::Expression::Variable("a".to_string())),
             Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
                 common::Value::Int(1),
@@ -420,7 +423,7 @@ mod test {
         let data_source = types::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
-            Box::new(types::Relation::Equal),
+            types::Relation::Equal,
             Box::new(types::Expression::Variable("a".to_string())),
             Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
                 common::Value::Int(1),

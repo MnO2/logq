@@ -59,6 +59,10 @@ pub(crate) enum Condition {
 pub(crate) enum RelationOperator {
     Equal,
     NotEqual,
+    MoreThan,
+    LessThan,
+    GreaterEqual,
+    LessEqual,
 }
 
 pub(crate) type FuncName = String;

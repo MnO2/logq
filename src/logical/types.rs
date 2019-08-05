@@ -138,7 +138,7 @@ pub(crate) enum Formula {
     InfixOperator(String, Box<Formula>, Box<Formula>),
     PrefixOperator(String, Box<Formula>),
     Constant(common::Value),
-    Predicate(Box<Relation>, Box<Expression>, Box<Expression>),
+    Predicate(Relation, Box<Expression>, Box<Expression>),
 }
 
 impl Formula {
