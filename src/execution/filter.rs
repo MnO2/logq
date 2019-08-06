@@ -19,7 +19,7 @@ impl FilteredStream {
 }
 
 impl RecordStream for FilteredStream {
-    fn next(&mut self) -> StreamResult<Record> {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
         loop {
             let record = self.source.next()?;
             let variables = self.variables.clone();
@@ -40,9 +40,9 @@ impl RecordStream for FilteredStream {
 mod tests {
     use super::*;
     use crate::common::types::Value;
-    use crate::execution::datasource::InMemoryStream;
+    use crate::execution::datasource::tests::InMemoryStream;
     use crate::execution::types;
-    use crate::execution::types::{Record, RecordStream, StreamError};
+    use crate::execution::types::{Record, RecordStream};
     use std::collections::VecDeque;
 
     #[test]
@@ -74,18 +74,8 @@ mod tests {
         let mut filtered_stream = FilteredStream::new(predicate, variables, stream);
 
         let mut result = Vec::new();
-        loop {
-            let n = filtered_stream.next();
-            match n {
-                Ok(r) => result.push(r),
-                Err(e) => {
-                    if e == StreamError::EndOfStream {
-                        break;
-                    } else {
-                        panic!("{:?}", e);
-                    }
-                }
-            }
+        while let Some(n) = filtered_stream.next().unwrap() {
+            result.push(n);
         }
 
         let expected = vec![Record::new(

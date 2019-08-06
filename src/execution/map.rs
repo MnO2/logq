@@ -12,7 +12,7 @@ impl RecordStream for MappedStream {
         self.source.close();
     }
 
-    fn next(&mut self) -> StreamResult<Record> {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
         let record = self.source.next()?;
         let variables = self.variables.clone();
 
@@ -33,6 +33,6 @@ impl RecordStream for MappedStream {
         }
 
         let record = Record::new(field_names, data);
-        Ok(record)
+        Ok(Some(record))
     }
 }

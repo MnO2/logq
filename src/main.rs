@@ -22,6 +22,10 @@ pub enum AppError {
     Parse,
     #[fail(display = "Physical Plan Error")]
     PhysicalPlan,
+    #[fail(display = "Create Stream Error")]
+    CreateStream,
+    #[fail(display = "Stream Error")]
+    Stream,
 }
 
 impl From<nom::Err<VerboseError<&str>>> for AppError {
@@ -42,6 +46,18 @@ impl From<logical::types::PhysicalPlanError> for AppError {
     }
 }
 
+impl From<execution::types::CreateStreamError> for AppError {
+    fn from(_: execution::types::CreateStreamError) -> AppError {
+        AppError::CreateStream
+    }
+}
+
+impl From<execution::types::StreamError> for AppError {
+    fn from(_: execution::types::StreamError) -> AppError {
+        AppError::Stream
+    }
+}
+
 fn run(query_str: &str, filename: logical::types::DataSource) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
 
@@ -52,8 +68,14 @@ fn run(query_str: &str, filename: logical::types::DataSource) -> AppResult<()> {
     let node = logical::parser::parse_query(select_stmt, filename)?;
     dbg!(&node);
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new("filename".to_string());
-    let physical_plan = node.physical(&mut physical_plan_creator)?;
+    let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
     dbg!(&physical_plan);
+    let mut stream = physical_plan.get(variables)?;
+
+    while let Some(record) = stream.next()? {
+        print!("{:?}", record);
+    }
+
     Ok(())
 }
 

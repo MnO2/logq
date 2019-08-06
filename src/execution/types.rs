@@ -24,19 +24,19 @@ impl From<ExpressionError> for EvaluateError {
     }
 }
 
-pub(crate) type GetResult<T> = result::Result<T, GetError>;
+pub(crate) type StreamGetResult<T> = result::Result<T, CreateStreamError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
-pub enum GetError {
+pub enum CreateStreamError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
     #[fail(display = "Io Error")]
     Io,
 }
 
-impl From<io::Error> for GetError {
-    fn from(_: io::Error) -> GetError {
-        GetError::Io
+impl From<io::Error> for CreateStreamError {
+    fn from(_: io::Error) -> CreateStreamError {
+        CreateStreamError::Io
     }
 }
 
@@ -45,19 +45,17 @@ pub(crate) type StreamResult<T> = result::Result<T, StreamError>;
 #[derive(Fail, PartialEq, Eq, Debug)]
 pub enum StreamError {
     #[fail(display = "{}", _0)]
-    Get(#[cause] GetError),
+    Get(#[cause] CreateStreamError),
     #[fail(display = "{}", _0)]
     Evaluate(#[cause] EvaluateError),
     #[fail(display = "{}", _0)]
     Expression(#[cause] ExpressionError),
     #[fail(display = "Reader Error")]
     Reader,
-    #[fail(display = "End Of Stream")]
-    EndOfStream,
 }
 
-impl From<GetError> for StreamError {
-    fn from(err: GetError) -> StreamError {
+impl From<CreateStreamError> for StreamError {
+    fn from(err: CreateStreamError) -> StreamError {
         StreamError::Get(err)
     }
 }
@@ -195,7 +193,7 @@ pub(crate) enum Node {
 }
 
 impl Node {
-    fn get(&self, variables: Variables) -> GetResult<Box<dyn RecordStream>> {
+    pub(crate) fn get(&self, variables: Variables) -> StreamGetResult<Box<dyn RecordStream>> {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream = source.get(variables.clone())?;
@@ -268,6 +266,6 @@ impl Record {
 }
 
 pub(crate) trait RecordStream {
-    fn next(&mut self) -> StreamResult<Record>;
+    fn next(&mut self) -> StreamResult<Option<Record>>;
     fn close(&self);
 }
