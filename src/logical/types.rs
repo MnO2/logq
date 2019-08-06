@@ -211,15 +211,15 @@ pub(crate) enum AggregateFunction {
 }
 
 impl AggregateFunction {
-    pub(crate) fn physical(
-        &self,
-        physical_plan_creator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<execution::AggregateFunction> {
+    pub(crate) fn physical(&self) -> PhysicalResult<execution::AggregateFunction> {
         match self {
             AggregateFunction::Avg => Ok(execution::AggregateFunction::Avg),
-            _ => {
-                unimplemented!();
-            }
+            AggregateFunction::Count => Ok(execution::AggregateFunction::Count),
+            AggregateFunction::First => Ok(execution::AggregateFunction::First),
+            AggregateFunction::Last => Ok(execution::AggregateFunction::Last),
+            AggregateFunction::Max => Ok(execution::AggregateFunction::Max),
+            AggregateFunction::Min => Ok(execution::AggregateFunction::Min),
+            AggregateFunction::Sum => Ok(execution::AggregateFunction::Sum),
         }
     }
 }
@@ -242,7 +242,7 @@ impl Aggregate {
         &self,
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(execution::Aggregate, common::Variables)> {
-        let aggregate_func = self.aggregate_func.physical(physical_plan_creator)?;
+        let aggregate_func = self.aggregate_func.physical()?;
 
         let mut variables = common::empty_variables();
 
@@ -293,6 +293,21 @@ mod test {
         let rel = Relation::Equal;
         let ans = rel.physical().unwrap();
         let expected = execution::Relation::Equal;
+
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_aggregate_function_gen_physical() {
+        let aggregate_function = AggregateFunction::Avg;
+        let ans = aggregate_function.physical().unwrap();
+        let expected = execution::AggregateFunction::Avg;
+
+        assert_eq!(expected, ans);
+
+        let aggregate_function = AggregateFunction::Count;
+        let ans = aggregate_function.physical().unwrap();
+        let expected = execution::AggregateFunction::Count;
 
         assert_eq!(expected, ans);
     }
