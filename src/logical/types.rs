@@ -16,7 +16,7 @@ pub enum PhysicalPlanError {
 pub(crate) enum Node {
     DataSource(DataSource),
     Filter(Box<Formula>, Box<Node>),
-    Map(Vec<NamedExpression>, Box<Node>),
+    Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
 }
 
@@ -41,7 +41,7 @@ impl Node {
                 Ok((Box::new(filter), return_variables))
             }
             Node::Map(expressions, source) => {
-                let mut physical_expressions: Vec<execution::NamedExpression> = Vec::new();
+                let mut physical_expressions: Vec<execution::Named> = Vec::new();
                 let mut total_expression_variables = common::empty_variables();
 
                 for expression in expressions.iter() {
@@ -78,28 +78,26 @@ impl Node {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NamedExpression {
-    pub(crate) expr: Expression,
-    pub(crate) name: VariableName,
+pub(crate) enum Named {
+    Expression(Expression, VariableName),
+    Star,
 }
 
-impl NamedExpression {
-    pub(crate) fn new(expr: Expression, name: VariableName) -> Self {
-        NamedExpression { expr, name }
-    }
-
+impl Named {
     pub(crate) fn physical(
         &self,
         physical_plan_creator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<(Box<execution::NamedExpression>, common::Variables)> {
-        let (physical_expr, expr_variables) = self.expr.physical(physical_plan_creator)?;
-        Ok((
-            Box::new(execution::NamedExpression {
-                expr: physical_expr,
-                name: self.name.clone(),
-            }),
-            expr_variables,
-        ))
+    ) -> PhysicalResult<(Box<execution::Named>, common::Variables)> {
+        match self {
+            Named::Expression(expr, name) => {
+                let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                Ok((
+                    Box::new(execution::Named::Expression(*physical_expr, name.clone())),
+                    expr_variables,
+                ))
+            }
+            Named::Star => Ok((Box::new(execution::Named::Star), common::empty_variables())),
+        }
     }
 }
 
@@ -230,11 +228,11 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Aggregate {
     pub(crate) aggregate_func: AggregateFunction,
-    pub(crate) argument: Option<NamedExpression>,
+    pub(crate) argument: Named,
 }
 
 impl Aggregate {
-    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Option<NamedExpression>) -> Self {
+    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Named) -> Self {
         Aggregate {
             aggregate_func,
             argument,
@@ -249,13 +247,15 @@ impl Aggregate {
 
         let mut variables = common::empty_variables();
 
-        let arg = if let Some(named_expr) = &self.argument {
-            let (physical_expr, expr_variables) = named_expr.expr.physical(physical_plan_creator)?;
-            variables = common::merge(variables, expr_variables);
-            Some(*physical_expr)
-        } else {
-            None
+        let arg = match &self.argument {
+            Named::Expression(expr, name) => {
+                let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                variables = common::merge(variables, expr_variables);
+                execution::Named::Expression(*physical_expr, name.clone())
+            }
+            Named::Star => execution::Named::Star,
         };
+
         let aggregate = execution::Aggregate::new(aggregate_func, arg);
 
         Ok((aggregate, variables))

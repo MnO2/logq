@@ -151,9 +151,9 @@ impl Relation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NamedExpression {
-    pub(crate) expr: Box<Expression>,
-    pub(crate) name: VariableName,
+pub(crate) enum Named {
+    Expression(Expression, VariableName),
+    Star,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +195,7 @@ impl Formula {
 pub(crate) enum Node {
     DataSource(String),
     Filter(Box<Node>, Box<Formula>),
-    Map(Vec<NamedExpression>, Box<Node>),
+    Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
 }
 
@@ -208,11 +208,11 @@ impl Node {
                 let stream = FilteredStream::new(rc_formula, variables, record_stream);
                 Ok(Box::new(stream))
             }
-            Node::Map(expressions, source) => {
+            Node::Map(named_list, source) => {
                 let record_stream = source.get(variables.clone())?;
 
                 let stream = MappedStream {
-                    expressions: expressions.clone(),
+                    named_list: named_list.clone(),
                     variables,
                     source: record_stream,
                 };
@@ -248,11 +248,11 @@ pub(crate) enum AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Aggregate {
     pub(crate) aggregate_func: AggregateFunction,
-    pub(crate) argument: Option<Expression>,
+    pub(crate) argument: Named,
 }
 
 impl Aggregate {
-    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Option<Expression>) -> Self {
+    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Named) -> Self {
         Aggregate {
             aggregate_func,
             argument,

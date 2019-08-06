@@ -203,7 +203,7 @@ fn column_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::ColumnNam
 fn group_by_expression<'a>(i: &'a str) -> IResult<&'a str, ast::GroupByExpression, VerboseError<&'a str>> {
     map(
         preceded(tuple((tag("group"), space1, tag("by"), space1)), column_expression_list),
-        |exprs| ast::GroupByExpression::new(exprs),
+        ast::GroupByExpression::new,
     )(i)
 }
 

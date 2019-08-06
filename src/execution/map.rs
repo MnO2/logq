@@ -1,8 +1,8 @@
 use crate::common::types::Variables;
-use crate::execution::types::{NamedExpression, Record, RecordStream, StreamResult};
+use crate::execution::types::{Named, Record, RecordStream, StreamResult};
 
 pub(crate) struct MappedStream {
-    pub(crate) expressions: Vec<NamedExpression>,
+    pub(crate) named_list: Vec<Named>,
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
 }
@@ -18,11 +18,18 @@ impl RecordStream for MappedStream {
 
         let mut field_names = Vec::new();
         let mut data = Vec::new();
-        for i in 0..self.expressions.len() {
-            let field_name = self.expressions[i].name.clone();
-            field_names.push(field_name.clone());
-            let v = self.expressions[i].expr.expression_value(variables.clone())?;
-            data.push(v);
+        for named in self.named_list.iter() {
+            match named {
+                Named::Expression(expr, name) => {
+                    field_names.push(name.clone());
+                    let v = expr.expression_value(variables.clone())?;
+                    data.push(v);
+                }
+                Named::Star => {
+                    //TODO: Insert all of the variables in records
+                    unimplemented!();
+                }
+            }
         }
 
         let record = Record::new(field_names, data);
