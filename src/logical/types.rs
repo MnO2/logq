@@ -124,7 +124,7 @@ impl Expression {
                 Ok((node, variables))
             }
             Expression::Variable(name) => {
-                let node = Box::new(execution::Expression::Variable("a".to_string()));
+                let node = Box::new(execution::Expression::Variable(name.clone()));
                 let variables = common::empty_variables();
 
                 Ok((node, variables))
@@ -183,7 +183,7 @@ impl Formula {
             },
             Formula::Constant(b) => {
                 let node = Box::new(execution::Formula::Constant(*b));
-                let mut variables = common::Variables::default();
+                let variables = common::Variables::default();
 
                 Ok((node, variables))
             }
@@ -351,7 +351,7 @@ mod test {
             Box::new(Formula::Constant(false)),
         );
         let mut physical_plan_creator = PhysicalPlanCreator::new("filename".to_string());
-        let (physical_formual, variables) = formula.physical(&mut physical_plan_creator).unwrap();
+        let (physical_formula, variables) = formula.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Formula::And(
             Box::new(execution::Formula::Constant(true)),
             Box::new(execution::Formula::Constant(false)),
@@ -359,7 +359,7 @@ mod test {
 
         let expected_variables = common::Variables::default();
 
-        assert_eq!(expected_formula, *physical_formual);
+        assert_eq!(expected_formula, *physical_formula);
         assert_eq!(expected_variables, variables);
     }
 
@@ -373,6 +373,128 @@ mod test {
         let mut expected_variables = common::Variables::default();
         expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
         assert_eq!(expected_formula, *physical_expr);
+        assert_eq!(expected_variables, variables);
+    }
+
+    #[test]
+    fn test_filter_with_map_gen_physical() {
+        let filtered_formula = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Variable("a".to_string())),
+            Box::new(Expression::Constant(common::Value::Int(1))),
+        );
+
+        let filter = Node::Filter(
+            Box::new(filtered_formula),
+            Box::new(Node::Map(
+                vec![
+                    Named::Expression(Expression::Variable("a".to_string()), "a".to_string()),
+                    Named::Expression(Expression::Variable("b".to_string()), "b".to_string()),
+                ],
+                Box::new(Node::DataSource(DataSource::File(
+                    std::path::Path::new("filename").to_path_buf(),
+                ))),
+            )),
+        );
+
+        let mut physical_plan_creator = PhysicalPlanCreator::new("a".to_string());
+        let (physical_formula, variables) = filter.physical(&mut physical_plan_creator).unwrap();
+
+        let expected_filtered_formula = execution::Formula::Predicate(
+            execution::Relation::Equal,
+            Box::new(execution::Expression::Variable("a".to_string())),
+            Box::new(execution::Expression::Variable("const_000000000".to_string())),
+        );
+
+        let expected_source = execution::Node::Map(
+            vec![
+                execution::Named::Expression(execution::Expression::Variable("a".to_string()), "a".to_string()),
+                execution::Named::Expression(execution::Expression::Variable("b".to_string()), "b".to_string()),
+            ],
+            Box::new(execution::Node::DataSource("a".to_string())),
+        );
+
+        let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
+
+        let mut expected_variables = common::Variables::default();
+        expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
+
+        assert_eq!(expected_filter, *physical_formula);
+        assert_eq!(expected_variables, variables);
+    }
+
+    #[test]
+    fn test_group_by_gen_physical() {
+        let filtered_formula = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Variable("a".to_string())),
+            Box::new(Expression::Constant(common::Value::Int(1))),
+        );
+
+        let filter = Node::Filter(
+            Box::new(filtered_formula),
+            Box::new(Node::Map(
+                vec![
+                    Named::Expression(Expression::Variable("a".to_string()), "a".to_string()),
+                    Named::Expression(Expression::Variable("b".to_string()), "b".to_string()),
+                ],
+                Box::new(Node::DataSource(DataSource::File(
+                    std::path::Path::new("filename").to_path_buf(),
+                ))),
+            )),
+        );
+
+        let aggregates = vec![
+            Aggregate::new(
+                AggregateFunction::Avg,
+                Named::Expression(Expression::Variable("a".to_string()), "a".to_string()),
+            ),
+            Aggregate::new(
+                AggregateFunction::Count,
+                Named::Expression(Expression::Variable("b".to_string()), "b".to_string()),
+            ),
+        ];
+
+        let fields = vec!["b".to_string()];
+        let group_by = Node::GroupBy(fields, aggregates, Box::new(filter));
+
+        let mut physical_plan_creator = PhysicalPlanCreator::new("a".to_string());
+        let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
+
+        let expected_filtered_formula = execution::Formula::Predicate(
+            execution::Relation::Equal,
+            Box::new(execution::Expression::Variable("a".to_string())),
+            Box::new(execution::Expression::Variable("const_000000000".to_string())),
+        );
+
+        let expected_source = execution::Node::Map(
+            vec![
+                execution::Named::Expression(execution::Expression::Variable("a".to_string()), "a".to_string()),
+                execution::Named::Expression(execution::Expression::Variable("b".to_string()), "b".to_string()),
+            ],
+            Box::new(execution::Node::DataSource("a".to_string())),
+        );
+
+        let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
+        let expected_group_by = execution::Node::GroupBy(
+            vec!["b".to_string()],
+            vec![
+                execution::Aggregate::new(
+                    execution::AggregateFunction::Avg,
+                    execution::Named::Expression(execution::Expression::Variable("a".to_string()), "a".to_string()),
+                ),
+                execution::Aggregate::new(
+                    execution::AggregateFunction::Count,
+                    execution::Named::Expression(execution::Expression::Variable("b".to_string()), "b".to_string()),
+                ),
+            ],
+            Box::new(expected_filter),
+        );
+
+        let mut expected_variables = common::Variables::default();
+        expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
+
+        assert_eq!(expected_group_by, *physical_formula);
         assert_eq!(expected_variables, variables);
     }
 }
