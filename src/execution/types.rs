@@ -162,7 +162,7 @@ pub(crate) enum Formula {
     And(Box<Formula>, Box<Formula>),
     Or(Box<Formula>, Box<Formula>),
     Not(Box<Formula>),
-    Predicate(Box<Relation>, Box<Expression>, Box<Expression>),
+    Predicate(Relation, Box<Expression>, Box<Expression>),
 }
 
 impl Formula {

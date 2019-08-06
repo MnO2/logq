@@ -49,7 +49,7 @@ mod tests {
     fn test_filtered_stream() {
         let left = Box::new(types::Expression::Variable("host".to_string()));
         let right = Box::new(types::Expression::Variable("const".to_string()));
-        let rel = Box::new(types::Relation::Equal);
+        let rel = types::Relation::Equal;
         let predicate = Rc::new(types::Formula::Predicate(rel, left, right));
 
         let mut variables: Variables = HashMap::new();

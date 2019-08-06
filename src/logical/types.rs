@@ -169,8 +169,7 @@ impl Formula {
             Formula::Predicate(relation, left_expr, right_expr) => {
                 let (left, left_variables) = left_expr.physical(physical_plan_creator)?;
                 let (right, right_variables) = right_expr.physical(physical_plan_creator)?;
-
-                let physical_relation = relation.physical(physical_plan_creator)?;
+                let physical_relation = relation.physical()?;
 
                 let return_variables = common::merge(left_variables, right_variables);
                 Ok((
@@ -273,17 +272,28 @@ pub(crate) enum Relation {
 }
 
 impl Relation {
-    pub(crate) fn physical(
-        &self,
-        physicalCreator: &mut PhysicalPlanCreator,
-    ) -> PhysicalResult<Box<execution::Relation>> {
+    pub(crate) fn physical(&self) -> PhysicalResult<execution::Relation> {
         match self {
-            Relation::Equal => Ok(Box::new(execution::Relation::Equal)),
-            Relation::NotEqual => Ok(Box::new(execution::Relation::NotEqual)),
-            Relation::MoreThan => Ok(Box::new(execution::Relation::MoreThan)),
-            Relation::LessThan => Ok(Box::new(execution::Relation::LessThan)),
-            Relation::GreaterEqual => Ok(Box::new(execution::Relation::GreaterEqual)),
-            Relation::LessEqual => Ok(Box::new(execution::Relation::LessEqual)),
+            Relation::Equal => Ok(execution::Relation::Equal),
+            Relation::NotEqual => Ok(execution::Relation::NotEqual),
+            Relation::MoreThan => Ok(execution::Relation::MoreThan),
+            Relation::LessThan => Ok(execution::Relation::LessThan),
+            Relation::GreaterEqual => Ok(execution::Relation::GreaterEqual),
+            Relation::LessEqual => Ok(execution::Relation::LessEqual),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_relation_gen_physical() {
+        let rel = Relation::Equal;
+        let ans = rel.physical().unwrap();
+        let expected = execution::Relation::Equal;
+
+        assert_eq!(expected, ans);
     }
 }
