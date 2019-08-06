@@ -115,17 +115,14 @@ impl Expression {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Expression>, common::Variables)> {
         match self {
-            Expression::Constant(value) => match value {
-                common::Value::Boolean(b) => {
-                    let constant_name = physical_plan_creator.new_constant_name();
-                    let node = Box::new(execution::Expression::Variable(constant_name.clone()));
-                    let mut variables = common::Variables::default();
-                    variables.insert(constant_name, common::Value::Boolean(*b));
+            Expression::Constant(value) => {
+                let constant_name = physical_plan_creator.new_constant_name();
+                let node = Box::new(execution::Expression::Variable(constant_name.clone()));
+                let mut variables = common::Variables::default();
+                variables.insert(constant_name, value.clone());
 
-                    Ok((node, variables))
-                }
-                _ => Err(PhysicalPlanError::TypeMisMatch),
-            },
+                Ok((node, variables))
+            }
             Expression::Variable(name) => {
                 let node = Box::new(execution::Expression::Variable("a".to_string()));
                 let variables = common::empty_variables();
@@ -360,9 +357,22 @@ mod test {
             Box::new(execution::Formula::Constant(false)),
         );
 
-        let mut expected_variables = common::Variables::default();
+        let expected_variables = common::Variables::default();
 
         assert_eq!(expected_formula, *physical_formual);
+        assert_eq!(expected_variables, variables);
+    }
+
+    #[test]
+    fn test_expression_gen_physical() {
+        let expr = Expression::Constant(common::Value::Int(1));
+        let mut physical_plan_creator = PhysicalPlanCreator::new("filename".to_string());
+        let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
+        let expected_formula = execution::Expression::Variable("const_000000000".to_string());
+
+        let mut expected_variables = common::Variables::default();
+        expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
+        assert_eq!(expected_formula, *physical_expr);
         assert_eq!(expected_variables, variables);
     }
 }
