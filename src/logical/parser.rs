@@ -17,35 +17,32 @@ pub enum ParseError {
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
-fn parse_prefix_operator(operator: &str, child: &ast::Expression) -> ParseResult<Box<types::Formula>> {
+fn parse_prefix_operator(op: types::LogicPrefixOp, child: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     let child_parsed = parse_logic(child)?;
 
-    let prefix_op = types::Formula::PrefixOperator(operator.to_string(), child_parsed);
+    let prefix_op = types::Formula::PrefixOperator(op, child_parsed);
     Ok(Box::new(prefix_op))
 }
 
 fn parse_infix_operator(
-    operator: &str,
+    op: types::LogicInfixOp,
     left: &ast::Expression,
     right: &ast::Expression,
 ) -> ParseResult<Box<types::Formula>> {
     let left_parsed = parse_logic(left)?;
     let right_parsed = parse_logic(right)?;
 
-    let infix_op = types::Formula::InfixOperator(operator.to_string(), left_parsed, right_parsed);
+    let infix_op = types::Formula::InfixOperator(op, left_parsed, right_parsed);
     Ok(Box::new(infix_op))
 }
 
 fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match expr {
         ast::Expression::Condition(c) => parse_condition(c),
-        ast::Expression::And(l, r) => parse_infix_operator("AND", l, r),
-        ast::Expression::Or(l, r) => parse_infix_operator("OR", l, r),
-        ast::Expression::Not(c) => parse_prefix_operator("NOT", c),
-        ast::Expression::Value(value_expr) => match &**value_expr {
-            ast::ValueExpression::Value(v) => parse_value(v),
-            _ => Err(ParseError::TypeMismatch),
-        },
+        ast::Expression::And(l, r) => parse_infix_operator(types::LogicInfixOp::And, l, r),
+        ast::Expression::Or(l, r) => parse_infix_operator(types::LogicInfixOp::Or, l, r),
+        ast::Expression::Not(c) => parse_prefix_operator(types::LogicPrefixOp::Not, c),
+        ast::Expression::Value(value_expr) => parse_boolean_value(value_expr),
     }
 }
 
@@ -54,12 +51,22 @@ fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expr
     Ok(Box::new(types::Expression::LogicExpression(formula)))
 }
 
-fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Formula>> {
+fn parse_boolean_value(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Formula>> {
+    match value_expr {
+        ast::ValueExpression::Value(val) => match val {
+            ast::Value::Boolean(b) => Ok(Box::new(types::Formula::Constant(*b))),
+            _ => Err(ParseError::TypeMismatch),
+        },
+        _ => Err(ParseError::TypeMismatch),
+    }
+}
+
+fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
     match value {
-        ast::Value::Boolean(b) => Ok(Box::new(types::Formula::Constant(common::Value::Boolean(*b)))),
-        ast::Value::Float(f) => Ok(Box::new(types::Formula::Constant(common::Value::Float(*f)))),
-        ast::Value::Integral(i) => Ok(Box::new(types::Formula::Constant(common::Value::Int(*i)))),
-        ast::Value::StringLiteral(s) => Ok(Box::new(types::Formula::Constant(common::Value::String(s.clone())))),
+        ast::Value::Boolean(b) => Ok(Box::new(types::Expression::Constant(common::Value::Boolean(*b)))),
+        ast::Value::Float(f) => Ok(Box::new(types::Expression::Constant(common::Value::Float(*f)))),
+        ast::Value::Integral(i) => Ok(Box::new(types::Expression::Constant(common::Value::Int(*i)))),
+        ast::Value::StringLiteral(s) => Ok(Box::new(types::Expression::Constant(common::Value::String(s.clone())))),
     }
 }
 
@@ -81,8 +88,8 @@ fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types
 fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::ValueExpression::Value(v) => {
-            let formula = parse_value(v)?;
-            Ok(Box::new(types::Expression::LogicExpression(formula)))
+            let expr = parse_value(v)?;
+            Ok(expr)
         }
         ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
         ast::ValueExpression::Operator(_, _, _) => parse_arithemetic(value_expr),
@@ -237,9 +244,9 @@ mod test {
 
         let expected = Box::new(types::Expression::LogicExpression(Box::new(
             types::Formula::InfixOperator(
-                "AND".to_string(),
-                Box::new(types::Formula::Constant(common::Value::Boolean(true))),
-                Box::new(types::Formula::Constant(common::Value::Boolean(false))),
+                types::LogicInfixOp::And,
+                Box::new(types::Formula::Constant(true)),
+                Box::new(types::Formula::Constant(false)),
             ),
         )));
 
@@ -251,10 +258,7 @@ mod test {
         )))));
 
         let expected = Box::new(types::Expression::LogicExpression(Box::new(
-            types::Formula::PrefixOperator(
-                "NOT".to_string(),
-                Box::new(types::Formula::Constant(common::Value::Boolean(false))),
-            ),
+            types::Formula::PrefixOperator(types::LogicPrefixOp::Not, Box::new(types::Formula::Constant(false))),
         )));
 
         let ans = parse_logic_expression(&before).unwrap();
@@ -279,17 +283,11 @@ mod test {
                 Box::new(types::Expression::FunctionExpression(
                     "Plus".to_string(),
                     vec![
-                        Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
-                            common::Value::Int(1),
-                        )))),
-                        Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
-                            common::Value::Int(2),
-                        )))),
+                        Box::new(types::Expression::Constant(common::Value::Int(1))),
+                        Box::new(types::Expression::Constant(common::Value::Int(2))),
                     ],
                 )),
-                Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
-                    common::Value::Int(3),
-                )))),
+                Box::new(types::Expression::Constant(common::Value::Int(3))),
             ],
         ));
 
@@ -326,9 +324,7 @@ mod test {
         let expected = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
             Box::new(types::Expression::Variable("a".to_string())),
-            Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
-                common::Value::Int(1),
-            )))),
+            Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
         let ans = parse_condition(&before).unwrap();
@@ -359,9 +355,7 @@ mod test {
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
             Box::new(types::Expression::Variable("a".to_string())),
-            Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
-                common::Value::Int(1),
-            )))),
+            Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
         let expected = types::Node::Filter(
@@ -413,9 +407,7 @@ mod test {
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
             Box::new(types::Expression::Variable("a".to_string())),
-            Box::new(types::Expression::LogicExpression(Box::new(types::Formula::Constant(
-                common::Value::Int(1),
-            )))),
+            Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
         let filter = types::Node::Filter(

@@ -52,7 +52,7 @@ mod tests {
         let rel = types::Relation::Equal;
         let predicate = Rc::new(types::Formula::Predicate(rel, left, right));
 
-        let mut variables: Variables = HashMap::new();
+        let mut variables: Variables = Variables::default();
         variables.insert("const".to_string(), Value::String("example.com".to_string()));
 
         let mut records = VecDeque::new();

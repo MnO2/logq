@@ -15,7 +15,7 @@ pub(crate) type VariableName = String;
 pub(crate) type Variables = HashMap<VariableName, Value>;
 
 pub(crate) fn empty_variables() -> Variables {
-    HashMap::new()
+    Variables::default()
 }
 
 pub(crate) fn merge(left: Variables, right: Variables) -> Variables {

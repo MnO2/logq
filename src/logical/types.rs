@@ -103,6 +103,7 @@ impl Named {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Expression {
+    Constant(common::Value),
     Variable(VariableName),
     LogicExpression(Box<Formula>),
     FunctionExpression(String, Vec<Box<Expression>>),
@@ -114,6 +115,17 @@ impl Expression {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Expression>, common::Variables)> {
         match self {
+            Expression::Constant(value) => match value {
+                common::Value::Boolean(b) => {
+                    let constant_name = physical_plan_creator.new_constant_name();
+                    let node = Box::new(execution::Expression::Variable(constant_name.clone()));
+                    let mut variables = common::Variables::default();
+                    variables.insert(constant_name, common::Value::Boolean(*b));
+
+                    Ok((node, variables))
+                }
+                _ => Err(PhysicalPlanError::TypeMisMatch),
+            },
             Expression::Variable(name) => {
                 let node = Box::new(execution::Expression::Variable("a".to_string()));
                 let variables = common::empty_variables();
@@ -133,10 +145,21 @@ impl Expression {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Formula {
-    InfixOperator(String, Box<Formula>, Box<Formula>),
-    PrefixOperator(String, Box<Formula>),
-    Constant(common::Value),
+    InfixOperator(LogicInfixOp, Box<Formula>, Box<Formula>),
+    PrefixOperator(LogicPrefixOp, Box<Formula>),
+    Constant(bool),
     Predicate(Relation, Box<Expression>, Box<Expression>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LogicInfixOp {
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LogicPrefixOp {
+    Not,
 }
 
 impl Formula {
@@ -148,24 +171,25 @@ impl Formula {
             Formula::InfixOperator(op, left_formula, right_formula) => {
                 let (left, left_variables) = left_formula.physical(physical_plan_creator)?;
                 let (right, right_variables) = right_formula.physical(physical_plan_creator)?;
-
                 let return_variables = common::merge(left_variables, right_variables);
 
-                Ok((Box::new(execution::Formula::And(left, right)), return_variables))
-            }
-            Formula::PrefixOperator(op, child_formula) => {
-                let (child, child_variables) = child_formula.physical(physical_plan_creator)?;
-                Ok((Box::new(execution::Formula::Not(child)), child_variables))
-            }
-            Formula::Constant(value) => match value {
-                common::Value::Boolean(b) => {
-                    let node = Box::new(execution::Formula::Constant(*b));
-                    let variables = common::empty_variables();
-
-                    Ok((node, variables))
+                match op {
+                    LogicInfixOp::And => Ok((Box::new(execution::Formula::And(left, right)), return_variables)),
+                    LogicInfixOp::Or => Ok((Box::new(execution::Formula::Or(left, right)), return_variables)),
                 }
-                _ => Err(PhysicalPlanError::TypeMisMatch),
+            }
+            Formula::PrefixOperator(op, child_formula) => match op {
+                LogicPrefixOp::Not => {
+                    let (child, child_variables) = child_formula.physical(physical_plan_creator)?;
+                    Ok((Box::new(execution::Formula::Not(child)), child_variables))
+                }
             },
+            Formula::Constant(b) => {
+                let node = Box::new(execution::Formula::Constant(*b));
+                let mut variables = common::Variables::default();
+
+                Ok((node, variables))
+            }
             Formula::Predicate(relation, left_expr, right_expr) => {
                 let (left, left_variables) = left_expr.physical(physical_plan_creator)?;
                 let (right, right_variables) = right_expr.physical(physical_plan_creator)?;
@@ -189,13 +213,23 @@ pub(crate) enum DataSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhysicalPlanCreator {
+    counter: u32,
     data_source: execution::Node,
 }
 
 impl PhysicalPlanCreator {
     pub(crate) fn new(name: String) -> Self {
         let data_source = execution::Node::DataSource(name);
-        PhysicalPlanCreator { data_source }
+        PhysicalPlanCreator {
+            counter: 0,
+            data_source,
+        }
+    }
+
+    pub(crate) fn new_constant_name(&mut self) -> VariableName {
+        let constant_name = format!("const_{:09}", self.counter);
+        self.counter += 1;
+        constant_name
     }
 }
 
@@ -310,5 +344,25 @@ mod test {
         let expected = execution::AggregateFunction::Count;
 
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_formula_gen_physical() {
+        let formula = Formula::InfixOperator(
+            LogicInfixOp::And,
+            Box::new(Formula::Constant(true)),
+            Box::new(Formula::Constant(false)),
+        );
+        let mut physical_plan_creator = PhysicalPlanCreator::new("filename".to_string());
+        let (physical_formual, variables) = formula.physical(&mut physical_plan_creator).unwrap();
+        let expected_formula = execution::Formula::And(
+            Box::new(execution::Formula::Constant(true)),
+            Box::new(execution::Formula::Constant(false)),
+        );
+
+        let mut expected_variables = common::Variables::default();
+
+        assert_eq!(expected_formula, *physical_formual);
+        assert_eq!(expected_variables, variables);
     }
 }
