@@ -35,7 +35,7 @@ pub enum GetError {
 }
 
 impl From<io::Error> for GetError {
-    fn from(err: io::Error) -> GetError {
+    fn from(_: io::Error) -> GetError {
         GetError::Io
     }
 }
@@ -115,7 +115,7 @@ impl Expression {
                     Err(ExpressionError::KeyNotFound)
                 }
             }
-            Expression::FunctionExpression(name, args) => {
+            Expression::FunctionExpression(_, _) => {
                 unimplemented!();
             }
         }
@@ -133,12 +133,7 @@ pub(crate) enum Relation {
 }
 
 impl Relation {
-    pub(crate) fn apply(
-        &self,
-        variables: Variables,
-        left: &Box<Expression>,
-        right: &Box<Expression>,
-    ) -> ExpressionResult<bool> {
+    pub(crate) fn apply(&self, variables: Variables, left: &Expression, right: &Expression) -> ExpressionResult<bool> {
         let left_result = left.expression_value(variables.clone())?;
         let right_result = right.expression_value(variables.clone())?;
 
@@ -221,13 +216,13 @@ impl Node {
             }
             Node::DataSource(filename) => {
                 let f = File::open(filename)?;
-                let mut reader = Reader::from_reader(f);
+                let reader = Reader::from_reader(f);
                 let rdr = Rc::new(RefCell::new(reader));
                 let stream = LogFileStream { rdr };
 
                 Ok(Box::new(stream))
             }
-            Node::GroupBy(fields, aggregates, source) => {
+            Node::GroupBy(_, _, _) => {
                 unimplemented!();
             }
         }

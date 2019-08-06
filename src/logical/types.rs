@@ -287,7 +287,6 @@ impl Aggregate {
         };
 
         let aggregate = execution::Aggregate::new(aggregate_func, arg);
-
         Ok((aggregate, variables))
     }
 }

@@ -7,7 +7,6 @@ pub(crate) enum Value {
     Float(OrderedFloat<f32>),
     Boolean(bool),
     String(String),
-    Null,
 }
 
 pub(crate) type Tuple = Vec<Value>;
