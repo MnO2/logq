@@ -46,7 +46,6 @@ fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
             ast::ValueExpression::Value(v) => parse_value(v),
             _ => Err(ParseError::TypeMismatch),
         },
-        _ => Err(ParseError::UnsupportedLogicOperator),
     }
 }
 
@@ -95,7 +94,6 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
             }
             Ok(Box::new(types::Expression::FunctionExpression(func_name.clone(), args)))
         }
-        _ => Err(ParseError::TypeMismatch),
     }
 }
 
@@ -191,10 +189,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataS
                 let aggregate = parse_aggregate_result.unwrap();
                 aggregates.push(aggregate.clone());
 
-                let types::Aggregate {
-                    aggregate_func,
-                    argument,
-                } = aggregate;
+                let types::Aggregate { argument, .. } = aggregate;
 
                 named_list.push(argument);
             } else {
@@ -218,7 +213,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataS
     }
 
     if let Some(group_by) = query.group_by_exprs_opt {
-        let mut fields = group_by.exprs.clone();
+        let fields = group_by.exprs.clone();
         root = types::Node::GroupBy(fields, aggregates, Box::new(root));
     }
 
