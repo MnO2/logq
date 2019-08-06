@@ -121,12 +121,6 @@ impl GroupByExpression {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Ordering {
-    Asc,
-    Desc,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct FuncCallExpression {
     pub(crate) func_name: String,
     pub(crate) arguments: Vec<ValueExpression>,

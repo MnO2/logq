@@ -133,6 +133,24 @@ fn condition<'a>(i: &'a str) -> IResult<&'a str, ast::Condition, VerboseError<&'
             separated_pair(value_expression, tag("/="), value_expression),
             |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::NotEqual, Box::new(l), Box::new(r)),
         ),
+        map(
+            separated_pair(value_expression, tag(">="), value_expression),
+            |(l, r)| {
+                ast::Condition::ComparisonExpression(ast::RelationOperator::GreaterEqual, Box::new(l), Box::new(r))
+            },
+        ),
+        map(
+            separated_pair(value_expression, tag("<="), value_expression),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::LessEqual, Box::new(l), Box::new(r)),
+        ),
+        map(
+            separated_pair(value_expression, tag(">"), value_expression),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::MoreThan, Box::new(l), Box::new(r)),
+        ),
+        map(
+            separated_pair(value_expression, tag("<"), value_expression),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::LessThan, Box::new(l), Box::new(r)),
+        ),
     ))(i)
 }
 
