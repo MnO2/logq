@@ -164,20 +164,16 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
     }
 }
 
-impl TryFrom<&str> for types::AggregateFunction {
-    type Error = ParseError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "avg" => Ok(types::AggregateFunction::Avg),
-            "count" => Ok(types::AggregateFunction::Count),
-            "first" => Ok(types::AggregateFunction::First),
-            "last" => Ok(types::AggregateFunction::Last),
-            "max" => Ok(types::AggregateFunction::Max),
-            "min" => Ok(types::AggregateFunction::Min),
-            "sum" => Ok(types::AggregateFunction::Sum),
-            _ => Err(ParseError::NotAggregateFunction),
-        }
+fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
+    match value {
+        "avg" => Ok(types::Aggregate::Avg(named)),
+        "count" => Ok(types::Aggregate::Count(named)),
+        "first" => Ok(types::Aggregate::First(named)),
+        "last" => Ok(types::Aggregate::Last(named)),
+        "max" => Ok(types::Aggregate::Max(named)),
+        "min" => Ok(types::Aggregate::Min(named)),
+        "sum" => Ok(types::Aggregate::Sum(named)),
+        _ => Err(ParseError::NotAggregateFunction),
     }
 }
 
@@ -187,8 +183,8 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
             ast::Expression::Value(value_expr) => match &**value_expr {
                 ast::ValueExpression::FuncCall(func_name, args) => {
                     let named = *parse_expression(&args[0])?;
-                    let aggregate_func = types::AggregateFunction::try_from(&**func_name)?;
-                    Ok(types::Aggregate::new(aggregate_func, named))
+                    let aggregate = from_str(&**func_name, named)?;
+                    Ok(aggregate)
                 }
                 _ => Err(ParseError::TypeMismatch),
             },
@@ -210,9 +206,15 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 let aggregate = parse_aggregate_result.unwrap();
                 aggregates.push(aggregate.clone());
 
-                let types::Aggregate { argument, .. } = aggregate;
-
-                named_list.push(argument);
+                match aggregate {
+                    types::Aggregate::Avg(named) => {
+                        named_list.push(named);
+                    }
+                    types::Aggregate::Count(named) => {
+                        named_list.push(named);
+                    }
+                    _ => unimplemented!(),
+                }
             } else {
                 let named = *parse_expression(select_expr)?;
                 named_list.push(named);
@@ -316,8 +318,8 @@ mod test {
             ),
         ))));
 
-        let argument = types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string()));
-        let expected = types::Aggregate::new(types::AggregateFunction::Avg, argument);
+        let named = types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string()));
+        let expected = types::Aggregate::Avg(named);
 
         let ans = parse_aggregate(&before).unwrap();
         assert_eq!(expected, ans);
@@ -432,14 +434,14 @@ mod test {
         );
 
         let aggregates = vec![
-            types::Aggregate::new(
-                types::AggregateFunction::Avg,
-                types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
-            ),
-            types::Aggregate::new(
-                types::AggregateFunction::Count,
-                types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
-            ),
+            types::Aggregate::Avg(types::Named::Expression(
+                types::Expression::Variable("a".to_string()),
+                Some("a".to_string()),
+            )),
+            types::Aggregate::Count(types::Named::Expression(
+                types::Expression::Variable("b".to_string()),
+                Some("b".to_string()),
+            )),
         ];
 
         let fields = vec!["b".to_string()];

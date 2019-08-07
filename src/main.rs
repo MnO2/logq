@@ -2,7 +2,6 @@
 extern crate failure;
 extern crate nom;
 
-mod classic_load_balancer_log_field;
 mod common;
 mod execution;
 mod logical;

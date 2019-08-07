@@ -1,10 +1,93 @@
 use regex::Regex;
 
+use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
 use std::result;
+use std::str::FromStr;
+
+//Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
+pub enum ClassicLoadBalancerLogField {
+    Timestamp = 0,
+    Elbname = 1,
+    ClientAndPort = 2,
+    BackendAndPort = 3,
+    RequestProcessingTime = 4,
+    BackendProcessingTime = 5,
+    ResponseProcessingTime = 6,
+    ELBStatusCode = 7,
+    BackendStatusCode = 8,
+    ReceivedBytes = 9,
+    SentBytes = 10,
+    Request = 11,
+    UserAgent = 12,
+    SSLCipher = 13,
+    SSLProtocol = 14,
+}
+
+impl fmt::Display for ClassicLoadBalancerLogField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            ClassicLoadBalancerLogField::Timestamp => "timestamp",
+            ClassicLoadBalancerLogField::Elbname => "elbname",
+            ClassicLoadBalancerLogField::ClientAndPort => "client_and_port",
+            ClassicLoadBalancerLogField::BackendAndPort => "backend_and_port",
+            _ => unimplemented!(),
+        };
+
+        write!(f, "{}", name)
+    }
+}
+
+impl FromStr for ClassicLoadBalancerLogField {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "timestamp" => Ok(ClassicLoadBalancerLogField::Timestamp),
+            "elbname" => Ok(ClassicLoadBalancerLogField::Elbname),
+            "client_and_port" => Ok(ClassicLoadBalancerLogField::ClientAndPort),
+            "backend_and_port" => Ok(ClassicLoadBalancerLogField::BackendAndPort),
+            "request_processing_time" => Ok(ClassicLoadBalancerLogField::RequestProcessingTime),
+            "backend_processing_time" => Ok(ClassicLoadBalancerLogField::BackendProcessingTime),
+            "response_processing_time" => Ok(ClassicLoadBalancerLogField::ResponseProcessingTime),
+            "elb_status_code" => Ok(ClassicLoadBalancerLogField::ELBStatusCode),
+            "backend_status_code" => Ok(ClassicLoadBalancerLogField::BackendStatusCode),
+            "received_bytes" => Ok(ClassicLoadBalancerLogField::ReceivedBytes),
+            "sent_bytes" => Ok(ClassicLoadBalancerLogField::SentBytes),
+            "request" => Ok(ClassicLoadBalancerLogField::Request),
+            "user_agent" => Ok(ClassicLoadBalancerLogField::UserAgent),
+            "ssl_cipher" => Ok(ClassicLoadBalancerLogField::SSLCipher),
+            "ssl_protocol" => Ok(ClassicLoadBalancerLogField::SSLProtocol),
+            _ => Err("unknown column name".to_string()),
+        }
+    }
+}
+
+impl ClassicLoadBalancerLogField {
+    fn from_i32(i: i32) -> result::Result<Self, String> {
+        match i {
+            0 => Ok(ClassicLoadBalancerLogField::Timestamp),
+            1 => Ok(ClassicLoadBalancerLogField::Elbname),
+            2 => Ok(ClassicLoadBalancerLogField::ClientAndPort),
+            3 => Ok(ClassicLoadBalancerLogField::BackendAndPort),
+            4 => Ok(ClassicLoadBalancerLogField::RequestProcessingTime),
+            5 => Ok(ClassicLoadBalancerLogField::BackendProcessingTime),
+            6 => Ok(ClassicLoadBalancerLogField::ResponseProcessingTime),
+            7 => Ok(ClassicLoadBalancerLogField::ELBStatusCode),
+            8 => Ok(ClassicLoadBalancerLogField::BackendStatusCode),
+            9 => Ok(ClassicLoadBalancerLogField::ReceivedBytes),
+            10 => Ok(ClassicLoadBalancerLogField::SentBytes),
+            11 => Ok(ClassicLoadBalancerLogField::Request),
+            12 => Ok(ClassicLoadBalancerLogField::UserAgent),
+            13 => Ok(ClassicLoadBalancerLogField::SSLCipher),
+            14 => Ok(ClassicLoadBalancerLogField::SSLProtocol),
+            _ => Err("unknown column name".to_string()),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct StringRecord {
@@ -21,6 +104,18 @@ impl StringRecord {
             fields: String::new(),
             split_the_line_regex,
         }
+    }
+
+    pub(crate) fn field_names() -> Vec<String> {
+        let mut fields = Vec::new();
+
+        for i in 0..15 {
+            let f = ClassicLoadBalancerLogField::from_i32(i).unwrap();
+            let field = format!("{}", f);
+            fields.push(field)
+        }
+
+        fields
     }
 
     pub fn get(&self, i: usize) -> Option<&str> {

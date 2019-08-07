@@ -235,63 +235,58 @@ impl PhysicalPlanCreator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AggregateFunction {
-    Avg,
-    Count,
-    First,
-    Last,
-    Max,
-    Min,
-    Sum,
-}
-
-impl AggregateFunction {
-    pub(crate) fn physical(&self) -> PhysicalResult<execution::AggregateFunction> {
-        match self {
-            AggregateFunction::Avg => Ok(execution::AggregateFunction::Avg),
-            AggregateFunction::Count => Ok(execution::AggregateFunction::Count),
-            AggregateFunction::First => Ok(execution::AggregateFunction::First),
-            AggregateFunction::Last => Ok(execution::AggregateFunction::Last),
-            AggregateFunction::Max => Ok(execution::AggregateFunction::Max),
-            AggregateFunction::Min => Ok(execution::AggregateFunction::Min),
-            AggregateFunction::Sum => Ok(execution::AggregateFunction::Sum),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Aggregate {
-    pub(crate) aggregate_func: AggregateFunction,
-    pub(crate) argument: Named,
+pub(crate) enum Aggregate {
+    Avg(Named),
+    Count(Named),
+    First(Named),
+    Last(Named),
+    Max(Named),
+    Min(Named),
+    Sum(Named),
 }
 
 impl Aggregate {
-    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Named) -> Self {
-        Aggregate {
-            aggregate_func,
-            argument,
-        }
-    }
-
     pub(crate) fn physical(
         &self,
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(execution::Aggregate, common::Variables)> {
-        let aggregate_func = self.aggregate_func.physical()?;
+        match self {
+            Aggregate::Avg(named) => {
+                let mut variables = common::empty_variables();
 
-        let mut variables = common::empty_variables();
+                let arg = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
 
-        let arg = match &self.argument {
-            Named::Expression(expr, name) => {
-                let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                variables = common::merge(variables, expr_variables);
-                execution::Named::Expression(*physical_expr, name.clone())
+                let avg_aggregate = execution::AvgAggregate::new();
+
+                let aggregate = execution::Aggregate::Avg(avg_aggregate);
+                Ok((aggregate, variables))
             }
-            Named::Star => execution::Named::Star,
-        };
+            Aggregate::Count(named) => {
+                let mut variables = common::empty_variables();
 
-        let aggregate = execution::Aggregate::new(aggregate_func, arg);
-        Ok((aggregate, variables))
+                let arg = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let count_aggregate = execution::CountAggregate::new();
+
+                let aggregate = execution::Aggregate::Count(count_aggregate);
+                Ok((aggregate, variables))
+            }
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -327,21 +322,6 @@ mod test {
         let rel = Relation::Equal;
         let ans = rel.physical().unwrap();
         let expected = execution::Relation::Equal;
-
-        assert_eq!(expected, ans);
-    }
-
-    #[test]
-    fn test_aggregate_function_gen_physical() {
-        let aggregate_function = AggregateFunction::Avg;
-        let ans = aggregate_function.physical().unwrap();
-        let expected = execution::AggregateFunction::Avg;
-
-        assert_eq!(expected, ans);
-
-        let aggregate_function = AggregateFunction::Count;
-        let ans = aggregate_function.physical().unwrap();
-        let expected = execution::AggregateFunction::Count;
 
         assert_eq!(expected, ans);
     }
@@ -394,9 +374,7 @@ mod test {
                     Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(Node::DataSource(DataSource::File(
-                    std::path::Path::new("filename").to_path_buf(),
-                ))),
+                Box::new(Node::DataSource(DataSource::Stdin)),
             )),
         );
 
@@ -441,21 +419,19 @@ mod test {
                     Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(Node::DataSource(DataSource::File(
-                    std::path::Path::new("filename").to_path_buf(),
-                ))),
+                Box::new(Node::DataSource(DataSource::Stdin)),
             )),
         );
 
         let aggregates = vec![
-            Aggregate::new(
-                AggregateFunction::Avg,
-                Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
-            ),
-            Aggregate::new(
-                AggregateFunction::Count,
-                Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
-            ),
+            Aggregate::Avg(Named::Expression(
+                Expression::Variable("a".to_string()),
+                Some("a".to_string()),
+            )),
+            Aggregate::Count(Named::Expression(
+                Expression::Variable("b".to_string()),
+                Some("b".to_string()),
+            )),
         ];
 
         let fields = vec!["b".to_string()];
@@ -482,20 +458,8 @@ mod test {
         let expected_group_by = execution::Node::GroupBy(
             vec!["b".to_string()],
             vec![
-                execution::Aggregate::new(
-                    execution::AggregateFunction::Avg,
-                    execution::Named::Expression(
-                        execution::Expression::Variable("a".to_string()),
-                        Some("a".to_string()),
-                    ),
-                ),
-                execution::Aggregate::new(
-                    execution::AggregateFunction::Count,
-                    execution::Named::Expression(
-                        execution::Expression::Variable("b".to_string()),
-                        Some("b".to_string()),
-                    ),
-                ),
+                execution::Aggregate::Avg(execution::AvgAggregate::new()),
+                execution::Aggregate::Count(execution::CountAggregate::new()),
             ],
             Box::new(expected_filter),
         );

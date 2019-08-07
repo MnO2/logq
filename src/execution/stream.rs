@@ -141,7 +141,7 @@ impl RecordStream for LogFileStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         let mut record = StringRecord::new();
         if self.reader.read_record(&mut record)? {
-            let field_names = Vec::new();
+            let field_names = StringRecord::field_names();
             let data = Vec::new();
 
             let record = Record::new(field_names, data);

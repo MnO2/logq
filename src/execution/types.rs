@@ -1,6 +1,8 @@
 use super::datasource::{Reader, ReaderError};
 use super::stream::{FilterStream, LogFileStream, MapStream, RecordStream};
-use crate::common::types::{DataSource, Value, VariableName, Variables};
+use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
+use hashbrown::HashMap;
+use ordered_float::OrderedFloat;
 use std::fs::File;
 use std::io;
 use std::result;
@@ -289,10 +291,20 @@ impl Node {
     }
 }
 
+pub(crate) type AggregateResult<T> = result::Result<T, AggregateError>;
+
+#[derive(Fail, PartialEq, Eq, Debug)]
+pub enum AggregateError {
+    #[fail(display = "Key Not Found")]
+    KeyNotFound,
+    #[fail(display = "Invalid Type")]
+    InvalidType,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AggregateFunction {
-    Avg,
-    Count,
+pub(crate) enum Aggregate {
+    Avg(AvgAggregate),
+    Count(CountAggregate),
     First,
     Last,
     Max,
@@ -300,17 +312,122 @@ pub(crate) enum AggregateFunction {
     Sum,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Aggregate {
-    pub(crate) aggregate_func: AggregateFunction,
-    pub(crate) argument: Named,
+impl Aggregate {
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        match self {
+            Aggregate::Avg(agg) => agg.add_record(key, value),
+            Aggregate::Count(agg) => agg.add_record(key, value),
+            _ => unimplemented!(),
+        }
+    }
+    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+        match self {
+            Aggregate::Avg(agg) => agg.get_aggregated(key),
+            Aggregate::Count(agg) => agg.get_aggregated(key),
+            _ => unimplemented!(),
+        }
+    }
 }
 
-impl Aggregate {
-    pub(crate) fn new(aggregate_func: AggregateFunction, argument: Named) -> Self {
-        Aggregate {
-            aggregate_func,
-            argument,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AvgAggregate {
+    pub(crate) averages: HashMap<Tuple, OrderedFloat<f32>>,
+    pub(crate) counts: HashMap<Tuple, i64>,
+}
+
+impl AvgAggregate {
+    pub(crate) fn new() -> Self {
+        AvgAggregate {
+            averages: HashMap::new(),
+            counts: HashMap::new(),
         }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        let newValue: OrderedFloat<f32> = match value {
+            Value::Int(i) => OrderedFloat::from(i as f32),
+            Value::Float(f) => f,
+            _ => {
+                return Err(AggregateError::InvalidType);
+            }
+        };
+
+        if let (Some(&average), Some(&count)) = (self.averages.get(&key), self.counts.get(&key)) {
+            let newCount = count + 1;
+            let f32_average: f32 = average.into();
+            let f32_newValue: f32 = newValue.into();
+            let newAverage: f32 = (f32_average * (count as f32) + f32_newValue) / (newCount as f32);
+            self.averages.insert(key.clone(), OrderedFloat::from(newAverage));
+            self.counts.insert(key.clone(), newCount);
+            Ok(())
+        } else {
+            self.averages.insert(key.clone(), newValue);
+            self.counts.insert(key.clone(), 1);
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+        if let Some(&average) = self.averages.get(key) {
+            Ok(Value::Float(average))
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CountAggregate {
+    pub(crate) counts: HashMap<Tuple, i64>,
+}
+
+impl CountAggregate {
+    pub(crate) fn new() -> Self {
+        CountAggregate { counts: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        let newValue: OrderedFloat<f32> = match value {
+            Value::Int(i) => OrderedFloat::from(i as f32),
+            Value::Float(f) => f,
+            _ => {
+                return Err(AggregateError::InvalidType);
+            }
+        };
+
+        if let Some(&count) = self.counts.get(&key) {
+            let newCount = count + 1;
+            self.counts.insert(key.clone(), newCount);
+            Ok(())
+        } else {
+            self.counts.insert(key.clone(), 1);
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+        if let Some(&counts) = self.counts.get(key) {
+            Ok(Value::Int(counts as i32))
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_avg_iterator_with_one_element() {
+        let mut iter = Aggregate::Avg(AvgAggregate::new());
+        let tuple = vec![Value::String("key".to_string())];
+        let value = Value::Float(OrderedFloat::from(5.0));
+
+        iter.add_record(tuple.clone(), value.clone());
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(value), aggregate);
     }
 }
