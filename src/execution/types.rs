@@ -81,6 +81,10 @@ pub(crate) type ExpressionResult<T> = result::Result<T, ExpressionError>;
 pub enum ExpressionError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
+    #[fail(display = "Invalid Arguments")]
+    InvalidArguments,
+    #[fail(display = "Unknown Function")]
+    UnknownFunction,
 }
 
 impl From<EvaluateError> for ExpressionError {
@@ -91,15 +95,15 @@ impl From<EvaluateError> for ExpressionError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Expression {
-    LogicExpression(Box<Formula>),
+    Logic(Box<Formula>),
     Variable(VariableName),
-    FunctionExpression(String, Box<Vec<Expression>>),
+    Function(String, Vec<Expression>),
 }
 
 impl Expression {
     pub(crate) fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
         match self {
-            Expression::LogicExpression(formula) => {
+            Expression::Logic(formula) => {
                 let out = formula.evaluate(variables)?;
                 Ok(Value::Boolean(out))
             }
@@ -110,10 +114,63 @@ impl Expression {
                     Err(ExpressionError::KeyNotFound)
                 }
             }
-            Expression::FunctionExpression(_, _) => {
-                unimplemented!();
+            Expression::Function(name, arguments) => {
+                let mut values: Vec<Value> = Vec::new();
+                for arg in arguments.iter() {
+                    let value = arg.expression_value(variables.clone())?;
+                    values.push(value);
+                }
+
+                let return_value: Value = evaluate(&*name, &values)?;
+                Ok(return_value)
             }
         }
+    }
+}
+
+fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
+    match func_name {
+        "Plus" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "Minus" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "Times" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "Divide" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        _ => Err(ExpressionError::InvalidArguments),
     }
 }
 

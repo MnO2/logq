@@ -48,7 +48,7 @@ fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
 
 fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     let formula = parse_logic(expr)?;
-    Ok(Box::new(types::Expression::LogicExpression(formula)))
+    Ok(Box::new(types::Expression::Logic(formula)))
 }
 
 fn parse_boolean_value(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Formula>> {
@@ -76,8 +76,8 @@ fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types
             let func_name = (*op).to_string();
             let left = parse_value_expression(left_expr)?;
             let right = parse_value_expression(right_expr)?;
-            let args = vec![left, right];
-            Ok(Box::new(types::Expression::FunctionExpression(func_name, args)))
+            let args = vec![*left, *right];
+            Ok(Box::new(types::Expression::Function(func_name, args)))
         }
         _ => {
             unimplemented!();
@@ -97,9 +97,9 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
             let mut args = Vec::new();
             for select_expr in select_exprs.iter() {
                 let arg = parse_expression(select_expr)?;
-                args.push(arg);
+                args.push(*arg);
             }
-            Ok(Box::new(types::Expression::FunctionExpression(func_name.clone(), args)))
+            Ok(Box::new(types::Expression::Function(func_name.clone(), args)))
         }
     }
 }
@@ -132,7 +132,7 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
         ast::SelectExpression::Expression(expr) => match &**expr {
             ast::Expression::Condition(c) => {
                 let formula = parse_condition(c)?;
-                let logic_expression = types::Expression::LogicExpression(formula);
+                let logic_expression = types::Expression::Logic(formula);
                 Ok(Box::new(logic_expression))
             }
             ast::Expression::And(_, _) => parse_logic_expression(expr),
@@ -242,13 +242,11 @@ mod test {
             )))),
         );
 
-        let expected = Box::new(types::Expression::LogicExpression(Box::new(
-            types::Formula::InfixOperator(
-                types::LogicInfixOp::And,
-                Box::new(types::Formula::Constant(true)),
-                Box::new(types::Formula::Constant(false)),
-            ),
-        )));
+        let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
+            types::LogicInfixOp::And,
+            Box::new(types::Formula::Constant(true)),
+            Box::new(types::Formula::Constant(false)),
+        ))));
 
         let ans = parse_logic_expression(&before).unwrap();
         assert_eq!(expected, ans);
@@ -257,9 +255,10 @@ mod test {
             ast::Value::Boolean(false),
         )))));
 
-        let expected = Box::new(types::Expression::LogicExpression(Box::new(
-            types::Formula::PrefixOperator(types::LogicPrefixOp::Not, Box::new(types::Formula::Constant(false))),
-        )));
+        let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::PrefixOperator(
+            types::LogicPrefixOp::Not,
+            Box::new(types::Formula::Constant(false)),
+        ))));
 
         let ans = parse_logic_expression(&before).unwrap();
         assert_eq!(expected, ans);
@@ -277,17 +276,17 @@ mod test {
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
         );
 
-        let expected = Box::new(types::Expression::FunctionExpression(
+        let expected = Box::new(types::Expression::Function(
             "Plus".to_string(),
             vec![
-                Box::new(types::Expression::FunctionExpression(
+                types::Expression::Function(
                     "Plus".to_string(),
                     vec![
-                        Box::new(types::Expression::Constant(common::Value::Int(1))),
-                        Box::new(types::Expression::Constant(common::Value::Int(2))),
+                        types::Expression::Constant(common::Value::Int(1)),
+                        types::Expression::Constant(common::Value::Int(2)),
                     ],
-                )),
-                Box::new(types::Expression::Constant(common::Value::Int(3))),
+                ),
+                types::Expression::Constant(common::Value::Int(3)),
             ],
         ));
 

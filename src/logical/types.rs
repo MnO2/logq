@@ -105,8 +105,8 @@ impl Named {
 pub(crate) enum Expression {
     Constant(common::Value),
     Variable(VariableName),
-    LogicExpression(Box<Formula>),
-    FunctionExpression(String, Vec<Box<Expression>>),
+    Logic(Box<Formula>),
+    Function(String, Vec<Expression>),
 }
 
 impl Expression {
@@ -129,12 +129,24 @@ impl Expression {
 
                 Ok((node, variables))
             }
-            Expression::LogicExpression(formula) => {
+            Expression::Logic(formula) => {
                 let (expr, variables) = formula.physical(physical_plan_creator)?;
-                Ok((Box::new(execution::Expression::LogicExpression(expr)), variables))
+                Ok((Box::new(execution::Expression::Logic(expr)), variables))
             }
-            Expression::FunctionExpression(name, arguments) => {
-                unimplemented!();
+            Expression::Function(name, arguments) => {
+                let mut physical_args = Vec::new();
+                let mut variables = common::empty_variables();
+
+                for arg in arguments.iter() {
+                    let (physical_arg, physical_variables) = arg.physical(physical_plan_creator)?;
+                    physical_args.push(*physical_arg);
+                    variables = common::merge(variables, physical_variables);
+                }
+
+                Ok((
+                    Box::new(execution::Expression::Function(name.clone(), physical_args)),
+                    variables,
+                ))
             }
         }
     }
