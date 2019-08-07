@@ -1,11 +1,8 @@
-use super::datasource::{LogFileStream, Reader, ReaderError};
-use super::filter::FilteredStream;
-use super::map::MappedStream;
+use super::datasource::{Reader, ReaderError};
+use super::stream::{FilterStream, LogFileStream, MapStream};
 use crate::common::types::{Value, VariableName, Variables};
-use std::cell::RefCell;
 use std::fs::File;
 use std::io;
-use std::rc::Rc;
 use std::result;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
@@ -197,14 +194,13 @@ impl Node {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream = source.get(variables.clone())?;
-                let rc_formula = Rc::from(formula.clone());
-                let stream = FilteredStream::new(rc_formula, variables, record_stream);
+                let stream = FilterStream::new(*formula.clone(), variables, record_stream);
                 Ok(Box::new(stream))
             }
             Node::Map(named_list, source) => {
                 let record_stream = source.get(variables.clone())?;
 
-                let stream = MappedStream {
+                let stream = MapStream {
                     named_list: named_list.clone(),
                     variables,
                     source: record_stream,
@@ -215,8 +211,7 @@ impl Node {
             Node::DataSource(filename) => {
                 let f = File::open(filename)?;
                 let reader = Reader::from_reader(f);
-                let rdr = Rc::new(RefCell::new(reader));
-                let stream = LogFileStream { rdr };
+                let stream = LogFileStream { reader };
 
                 Ok(Box::new(stream))
             }

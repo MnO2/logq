@@ -1,5 +1,4 @@
 mod aggregate;
 pub mod datasource;
-mod filter;
-mod map;
+pub mod stream;
 pub mod types;
