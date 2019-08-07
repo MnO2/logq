@@ -1,7 +1,35 @@
 use super::datasource::{Reader, StringRecord};
-use super::types::{Formula, Named, Record, RecordStream, StreamResult};
-use crate::common::types::Variables;
+use super::types::{Formula, Named, StreamResult};
+use crate::common;
+use crate::common::types::{Value, VariableName, Variables};
 use std::fs::File;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Record {
+    field_names: Vec<VariableName>,
+    data: Vec<Value>,
+}
+
+impl Record {
+    pub(crate) fn new(field_names: Vec<VariableName>, data: Vec<Value>) -> Self {
+        Record { field_names, data }
+    }
+
+    pub(crate) fn to_variables(&self) -> Variables {
+        let mut variables = Variables::default();
+
+        for i in 0..self.field_names.len() {
+            variables.insert(self.field_names[i].clone(), self.data[i].clone());
+        }
+
+        variables
+    }
+}
+
+pub(crate) trait RecordStream {
+    fn next(&mut self) -> StreamResult<Option<Record>>;
+    fn close(&self);
+}
 
 pub(crate) struct MapStream {
     pub(crate) named_list: Vec<Named>,
@@ -57,15 +85,16 @@ impl FilterStream {
 
 impl RecordStream for FilterStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        loop {
-            let record = self.source.next()?;
-            let variables = self.variables.clone();
+        while let Some(record) = self.source.next()? {
+            let variables = common::types::merge(self.variables.clone(), record.to_variables());
             let predicate = self.formula.evaluate(variables)?;
 
             if predicate {
-                return Ok(record);
+                return Ok(Some(record));
             }
         }
+
+        Ok(None)
     }
 
     fn close(&self) {
@@ -98,8 +127,8 @@ impl RecordStream for LogFileStream {
 mod tests {
     use super::*;
     use crate::common::types::Value;
+    use crate::execution::stream::{Record, RecordStream};
     use crate::execution::types;
-    use crate::execution::types::{Record, RecordStream};
     use std::collections::VecDeque;
 
     #[derive(Debug)]
@@ -126,8 +155,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn test_filtered_stream() {
+    fn test_filter_stream() {
         let left = Box::new(types::Expression::Variable("host".to_string()));
         let right = Box::new(types::Expression::Variable("const".to_string()));
         let rel = types::Relation::Equal;

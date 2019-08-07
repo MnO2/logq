@@ -1,12 +1,9 @@
-use crate::execution::types::{Record, RecordStream, StreamError, StreamResult};
 use regex::Regex;
-use std::cell::RefCell;
 
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
-use std::rc::Rc;
 use std::result;
 
 #[derive(Debug)]
@@ -121,53 +118,4 @@ impl<R: io::Read> Reader<R> {
     }
 
     fn close(&self) {}
-}
-
-pub(crate) struct LogFileStream {
-    pub(crate) rdr: Rc<RefCell<Reader<File>>>,
-}
-
-impl RecordStream for LogFileStream {
-    fn next(&mut self) -> StreamResult<Option<Record>> {
-        let mut record = StringRecord::new();
-        let more_records = self.rdr.borrow_mut().read_record(&mut record)?;
-
-        let field_names = Vec::new();
-        let data = Vec::new();
-
-        let record = Record::new(field_names, data);
-        Ok(Some(record))
-    }
-
-    fn close(&self) {}
-}
-
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-
-    #[derive(Debug)]
-    pub(crate) struct InMemoryStream {
-        pub(crate) data: VecDeque<Record>,
-    }
-
-    impl InMemoryStream {
-        pub(crate) fn new(data: VecDeque<Record>) -> InMemoryStream {
-            InMemoryStream { data }
-        }
-    }
-
-    impl RecordStream for InMemoryStream {
-        fn next(&mut self) -> StreamResult<Option<Record>> {
-            if let Some(record) = self.data.pop_front() {
-                Ok(Some(record))
-            } else {
-                Ok(None)
-            }
-        }
-
-        fn close(&self) {}
-    }
-
 }

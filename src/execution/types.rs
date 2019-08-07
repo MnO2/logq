@@ -1,5 +1,5 @@
 use super::datasource::{Reader, ReaderError};
-use super::stream::{FilterStream, LogFileStream, MapStream};
+use super::stream::{FilterStream, LogFileStream, MapStream, RecordStream};
 use crate::common::types::{Value, VariableName, Variables};
 use std::fs::File;
 use std::io;
@@ -246,21 +246,4 @@ impl Aggregate {
             argument,
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Record {
-    field_names: Vec<VariableName>,
-    data: Vec<Value>,
-}
-
-impl Record {
-    pub(crate) fn new(field_names: Vec<VariableName>, data: Vec<Value>) -> Self {
-        Record { field_names, data }
-    }
-}
-
-pub(crate) trait RecordStream {
-    fn next(&mut self) -> StreamResult<Option<Record>>;
-    fn close(&self);
 }
