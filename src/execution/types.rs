@@ -1,6 +1,6 @@
 use super::datasource::{Reader, ReaderError};
 use super::stream::{FilterStream, LogFileStream, MapStream, RecordStream};
-use crate::common::types::{Value, VariableName, Variables};
+use crate::common::types::{DataSource, Value, VariableName, Variables};
 use std::fs::File;
 use std::io;
 use std::result;
@@ -249,7 +249,7 @@ impl Formula {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(String),
+    DataSource(DataSource),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
@@ -266,21 +266,22 @@ impl Node {
             Node::Map(named_list, source) => {
                 let record_stream = source.get(variables.clone())?;
 
-                let stream = MapStream {
-                    named_list: named_list.clone(),
-                    variables,
-                    source: record_stream,
-                };
+                let stream = MapStream::new(named_list.clone(), variables, record_stream);
 
                 Ok(Box::new(stream))
             }
-            Node::DataSource(filename) => {
-                let f = File::open(filename)?;
-                let reader = Reader::from_reader(f);
-                let stream = LogFileStream { reader };
+            Node::DataSource(data_source) => match data_source {
+                DataSource::File(path) => {
+                    let f = File::open(path)?;
+                    let reader = Reader::from_reader(f);
+                    let stream = LogFileStream { reader };
 
-                Ok(Box::new(stream))
-            }
+                    Ok(Box::new(stream))
+                }
+                DataSource::Stdin => {
+                    unimplemented!();
+                }
+            },
             Node::GroupBy(_, _, _) => {
                 unimplemented!();
             }

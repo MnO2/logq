@@ -198,7 +198,7 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
     }
 }
 
-pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataSource) -> ParseResult<types::Node> {
+pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     let mut root = types::Node::DataSource(data_source);
 
     let mut aggregates = Vec::new();
@@ -360,7 +360,7 @@ mod test {
         //let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
         let before = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
-        let data_source = types::DataSource::Stdin;
+        let data_source = common::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
@@ -375,7 +375,7 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(types::Node::DataSource(types::DataSource::Stdin)),
+                Box::new(types::Node::DataSource(common::DataSource::Stdin)),
             )),
         );
 
@@ -412,7 +412,7 @@ mod test {
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
         let before = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr));
-        let data_source = types::DataSource::Stdin;
+        let data_source = common::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
@@ -427,7 +427,7 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(types::Node::DataSource(types::DataSource::Stdin)),
+                Box::new(types::Node::DataSource(common::DataSource::Stdin)),
             )),
         );
 

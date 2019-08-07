@@ -58,16 +58,16 @@ impl From<execution::types::StreamError> for AppError {
     }
 }
 
-fn run(query_str: &str, filename: logical::types::DataSource) -> AppResult<()> {
+fn run(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
 
     if rest_of_str.is_empty() {
         return Err(AppError::Parse);
     }
     dbg!(&select_stmt);
-    let node = logical::parser::parse_query(select_stmt, filename)?;
+    let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
     dbg!(&node);
-    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new("filename".to_string());
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
     dbg!(&physical_plan);
     let mut stream = physical_plan.get(variables)?;
@@ -88,10 +88,10 @@ fn main() {
             if let Some(query_str) = sub_m.value_of("query") {
                 let result = if let Some(filename) = sub_m.value_of("file_to_select") {
                     let path = Path::new(filename);
-                    let data_source = logical::types::DataSource::File(path.to_path_buf());
+                    let data_source = common::types::DataSource::File(path.to_path_buf());
                     run(query_str, data_source)
                 } else {
-                    let data_source = logical::types::DataSource::Stdin;
+                    let data_source = common::types::DataSource::Stdin;
                     run(query_str, data_source)
                 };
 

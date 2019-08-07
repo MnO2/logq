@@ -1,5 +1,5 @@
 use super::datasource::{Reader, StringRecord};
-use super::types::{Expression, Formula, Named, StreamResult};
+use super::types::{Formula, Named, StreamResult};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};
 use std::fs::File;
@@ -160,6 +160,7 @@ mod tests {
     use crate::common::types::Value;
     use crate::execution::stream::{Record, RecordStream};
     use crate::execution::types;
+    use crate::execution::types::Expression;
     use std::collections::VecDeque;
 
     #[derive(Debug)]

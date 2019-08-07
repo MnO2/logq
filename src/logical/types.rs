@@ -1,7 +1,6 @@
 use crate::common::types as common;
-use crate::common::types::VariableName;
+use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
-use std::path::PathBuf;
 use std::result;
 
 pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
@@ -27,7 +26,7 @@ impl Node {
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
         match self {
             Node::DataSource(data_source) => {
-                let node = physical_plan_creator.data_source.clone();
+                let node = execution::Node::DataSource(data_source.clone());
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
@@ -215,20 +214,13 @@ impl Formula {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DataSource {
-    File(PathBuf),
-    Stdin,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhysicalPlanCreator {
     counter: u32,
-    data_source: execution::Node,
+    data_source: DataSource,
 }
 
 impl PhysicalPlanCreator {
-    pub(crate) fn new(name: String) -> Self {
-        let data_source = execution::Node::DataSource(name);
+    pub(crate) fn new(data_source: DataSource) -> Self {
         PhysicalPlanCreator {
             counter: 0,
             data_source,
@@ -361,7 +353,7 @@ mod test {
             Box::new(Formula::Constant(true)),
             Box::new(Formula::Constant(false)),
         );
-        let mut physical_plan_creator = PhysicalPlanCreator::new("filename".to_string());
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
         let (physical_formula, variables) = formula.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Formula::And(
             Box::new(execution::Formula::Constant(true)),
@@ -377,7 +369,7 @@ mod test {
     #[test]
     fn test_expression_gen_physical() {
         let expr = Expression::Constant(common::Value::Int(1));
-        let mut physical_plan_creator = PhysicalPlanCreator::new("filename".to_string());
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Expression::Variable("const_000000000".to_string());
 
@@ -408,7 +400,7 @@ mod test {
             )),
         );
 
-        let mut physical_plan_creator = PhysicalPlanCreator::new("a".to_string());
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
         let (physical_formula, variables) = filter.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -422,7 +414,7 @@ mod test {
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
-            Box::new(execution::Node::DataSource("a".to_string())),
+            Box::new(execution::Node::DataSource(DataSource::Stdin)),
         );
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
@@ -469,7 +461,7 @@ mod test {
         let fields = vec!["b".to_string()];
         let group_by = Node::GroupBy(fields, aggregates, Box::new(filter));
 
-        let mut physical_plan_creator = PhysicalPlanCreator::new("a".to_string());
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
         let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -483,7 +475,7 @@ mod test {
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
-            Box::new(execution::Node::DataSource("a".to_string())),
+            Box::new(execution::Node::DataSource(DataSource::Stdin)),
         );
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
