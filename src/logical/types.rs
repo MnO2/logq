@@ -79,7 +79,7 @@ impl Node {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Named {
-    Expression(Expression, VariableName),
+    Expression(Expression, Option<VariableName>),
     Star,
 }
 
@@ -106,7 +106,7 @@ pub(crate) enum Expression {
     Constant(common::Value),
     Variable(VariableName),
     Logic(Box<Formula>),
-    Function(String, Vec<Expression>),
+    Function(String, Vec<Named>),
 }
 
 impl Expression {
@@ -399,8 +399,8 @@ mod test {
             Box::new(filtered_formula),
             Box::new(Node::Map(
                 vec![
-                    Named::Expression(Expression::Variable("a".to_string()), "a".to_string()),
-                    Named::Expression(Expression::Variable("b".to_string()), "b".to_string()),
+                    Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
+                    Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(Node::DataSource(DataSource::File(
                     std::path::Path::new("filename").to_path_buf(),
@@ -419,8 +419,8 @@ mod test {
 
         let expected_source = execution::Node::Map(
             vec![
-                execution::Named::Expression(execution::Expression::Variable("a".to_string()), "a".to_string()),
-                execution::Named::Expression(execution::Expression::Variable("b".to_string()), "b".to_string()),
+                execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
+                execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
             Box::new(execution::Node::DataSource("a".to_string())),
         );
@@ -446,8 +446,8 @@ mod test {
             Box::new(filtered_formula),
             Box::new(Node::Map(
                 vec![
-                    Named::Expression(Expression::Variable("a".to_string()), "a".to_string()),
-                    Named::Expression(Expression::Variable("b".to_string()), "b".to_string()),
+                    Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
+                    Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(Node::DataSource(DataSource::File(
                     std::path::Path::new("filename").to_path_buf(),
@@ -458,11 +458,11 @@ mod test {
         let aggregates = vec![
             Aggregate::new(
                 AggregateFunction::Avg,
-                Named::Expression(Expression::Variable("a".to_string()), "a".to_string()),
+                Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
             ),
             Aggregate::new(
                 AggregateFunction::Count,
-                Named::Expression(Expression::Variable("b".to_string()), "b".to_string()),
+                Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
             ),
         ];
 
@@ -480,8 +480,8 @@ mod test {
 
         let expected_source = execution::Node::Map(
             vec![
-                execution::Named::Expression(execution::Expression::Variable("a".to_string()), "a".to_string()),
-                execution::Named::Expression(execution::Expression::Variable("b".to_string()), "b".to_string()),
+                execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
+                execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
             Box::new(execution::Node::DataSource("a".to_string())),
         );
@@ -492,11 +492,17 @@ mod test {
             vec![
                 execution::Aggregate::new(
                     execution::AggregateFunction::Avg,
-                    execution::Named::Expression(execution::Expression::Variable("a".to_string()), "a".to_string()),
+                    execution::Named::Expression(
+                        execution::Expression::Variable("a".to_string()),
+                        Some("a".to_string()),
+                    ),
                 ),
                 execution::Aggregate::new(
                     execution::AggregateFunction::Count,
-                    execution::Named::Expression(execution::Expression::Variable("b".to_string()), "b".to_string()),
+                    execution::Named::Expression(
+                        execution::Expression::Variable("b".to_string()),
+                        Some("b".to_string()),
+                    ),
                 ),
             ],
             Box::new(expected_filter),

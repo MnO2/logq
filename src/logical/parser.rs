@@ -76,7 +76,10 @@ fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types
             let func_name = (*op).to_string();
             let left = parse_value_expression(left_expr)?;
             let right = parse_value_expression(right_expr)?;
-            let args = vec![*left, *right];
+            let args = vec![
+                types::Named::Expression(*left, None),
+                types::Named::Expression(*right, None),
+            ];
             Ok(Box::new(types::Expression::Function(func_name, args)))
         }
         _ => {
@@ -126,19 +129,37 @@ fn parse_condition(condition: &ast::Condition) -> ParseResult<Box<types::Formula
     }
 }
 
-fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Expression>> {
+fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Named>> {
     match select_expr {
-        ast::SelectExpression::Star => unimplemented!(),
+        ast::SelectExpression::Star => Ok(Box::new(types::Named::Star)),
         ast::SelectExpression::Expression(expr) => match &**expr {
             ast::Expression::Condition(c) => {
                 let formula = parse_condition(c)?;
                 let logic_expression = types::Expression::Logic(formula);
-                Ok(Box::new(logic_expression))
+                let expr = types::Named::Expression(logic_expression, None);
+                Ok(Box::new(expr))
             }
-            ast::Expression::And(_, _) => parse_logic_expression(expr),
-            ast::Expression::Or(_, _) => parse_logic_expression(expr),
-            ast::Expression::Not(_) => parse_logic_expression(expr),
-            ast::Expression::Value(value_expr) => parse_value_expression(value_expr),
+            ast::Expression::And(_, _) => {
+                let e = parse_logic_expression(expr)?;
+                Ok(Box::new(types::Named::Expression(*e, None)))
+            }
+            ast::Expression::Or(_, _) => {
+                let e = parse_logic_expression(expr)?;
+                Ok(Box::new(types::Named::Expression(*e, None)))
+            }
+            ast::Expression::Not(_) => {
+                let e = parse_logic_expression(expr)?;
+                Ok(Box::new(types::Named::Expression(*e, None)))
+            }
+            ast::Expression::Value(value_expr) => {
+                let e = parse_value_expression(value_expr)?;
+                match &*e {
+                    types::Expression::Variable(name) => {
+                        Ok(Box::new(types::Named::Expression(*e.clone(), Some(name.clone()))))
+                    }
+                    _ => Ok(Box::new(types::Named::Expression(*e, None))),
+                }
+            }
         },
     }
 }
@@ -165,16 +186,9 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Ag
         ast::SelectExpression::Expression(expr) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
                 ast::ValueExpression::FuncCall(func_name, args) => {
-                    let argument = *parse_expression(&args[0])?;
+                    let named = *parse_expression(&args[0])?;
                     let aggregate_func = types::AggregateFunction::try_from(&**func_name)?;
-
-                    match &argument {
-                        types::Expression::Variable(name) => {
-                            let named = types::Named::Expression(argument.clone(), name.clone());
-                            Ok(types::Aggregate::new(aggregate_func, named))
-                        }
-                        _ => Err(ParseError::SelectExprMustBeNamed),
-                    }
+                    Ok(types::Aggregate::new(aggregate_func, named))
                 }
                 _ => Err(ParseError::TypeMismatch),
             },
@@ -200,14 +214,8 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: types::DataS
 
                 named_list.push(argument);
             } else {
-                let expression = *parse_expression(select_expr)?;
-                match &expression {
-                    types::Expression::Variable(name) => {
-                        let named = types::Named::Expression(expression.clone(), name.clone());
-                        named_list.push(named);
-                    }
-                    _ => return Err(ParseError::SelectExprMustBeNamed),
-                }
+                let named = *parse_expression(select_expr)?;
+                named_list.push(named);
             }
         }
 
@@ -279,14 +287,17 @@ mod test {
         let expected = Box::new(types::Expression::Function(
             "Plus".to_string(),
             vec![
-                types::Expression::Function(
-                    "Plus".to_string(),
-                    vec![
-                        types::Expression::Constant(common::Value::Int(1)),
-                        types::Expression::Constant(common::Value::Int(2)),
-                    ],
+                types::Named::Expression(
+                    types::Expression::Function(
+                        "Plus".to_string(),
+                        vec![
+                            types::Named::Expression(types::Expression::Constant(common::Value::Int(1)), None),
+                            types::Named::Expression(types::Expression::Constant(common::Value::Int(2)), None),
+                        ],
+                    ),
+                    None,
                 ),
-                types::Expression::Constant(common::Value::Int(3)),
+                types::Named::Expression(types::Expression::Constant(common::Value::Int(3)), None),
             ],
         ));
 
@@ -305,7 +316,7 @@ mod test {
             ),
         ))));
 
-        let argument = types::Named::Expression(types::Expression::Variable("a".to_string()), "a".to_string());
+        let argument = types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string()));
         let expected = types::Aggregate::new(types::AggregateFunction::Avg, argument);
 
         let ans = parse_aggregate(&before).unwrap();
@@ -361,8 +372,8 @@ mod test {
             filtered_formula,
             Box::new(types::Node::Map(
                 vec![
-                    types::Named::Expression(types::Expression::Variable("a".to_string()), "a".to_string()),
-                    types::Named::Expression(types::Expression::Variable("b".to_string()), "b".to_string()),
+                    types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
+                    types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(types::DataSource::Stdin)),
             )),
@@ -413,8 +424,8 @@ mod test {
             filtered_formula,
             Box::new(types::Node::Map(
                 vec![
-                    types::Named::Expression(types::Expression::Variable("a".to_string()), "a".to_string()),
-                    types::Named::Expression(types::Expression::Variable("b".to_string()), "b".to_string()),
+                    types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
+                    types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(types::DataSource::Stdin)),
             )),
@@ -423,11 +434,11 @@ mod test {
         let aggregates = vec![
             types::Aggregate::new(
                 types::AggregateFunction::Avg,
-                types::Named::Expression(types::Expression::Variable("a".to_string()), "a".to_string()),
+                types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
             ),
             types::Aggregate::new(
                 types::AggregateFunction::Count,
-                types::Named::Expression(types::Expression::Variable("b".to_string()), "b".to_string()),
+                types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
             ),
         ];
 

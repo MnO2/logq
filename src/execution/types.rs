@@ -85,6 +85,8 @@ pub enum ExpressionError {
     InvalidArguments,
     #[fail(display = "Unknown Function")]
     UnknownFunction,
+    #[fail(display = "Invalid Star")]
+    InvalidStar,
 }
 
 impl From<EvaluateError> for ExpressionError {
@@ -97,7 +99,7 @@ impl From<EvaluateError> for ExpressionError {
 pub(crate) enum Expression {
     Logic(Box<Formula>),
     Variable(VariableName),
-    Function(String, Vec<Expression>),
+    Function(String, Vec<Named>),
 }
 
 impl Expression {
@@ -117,8 +119,15 @@ impl Expression {
             Expression::Function(name, arguments) => {
                 let mut values: Vec<Value> = Vec::new();
                 for arg in arguments.iter() {
-                    let value = arg.expression_value(variables.clone())?;
-                    values.push(value);
+                    match arg {
+                        Named::Expression(expr, _) => {
+                            let value = expr.expression_value(variables.clone())?;
+                            values.push(value);
+                        }
+                        Named::Star => {
+                            return Err(ExpressionError::InvalidStar);
+                        }
+                    }
                 }
 
                 let return_value: Value = evaluate(&*name, &values)?;
@@ -199,7 +208,7 @@ impl Relation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Named {
-    Expression(Expression, VariableName),
+    Expression(Expression, Option<VariableName>),
     Star,
 }
 

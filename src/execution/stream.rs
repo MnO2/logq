@@ -67,10 +67,17 @@ impl RecordStream for MapStream {
 
             let mut field_names = Vec::new();
             let mut data = Vec::new();
-            for named in self.named_list.iter() {
+            for (idx, named) in self.named_list.iter().enumerate() {
                 match named {
-                    Named::Expression(expr, name) => {
-                        field_names.push(name.clone());
+                    Named::Expression(expr, name_opt) => {
+                        let name = if let Some(name) = name_opt {
+                            name.clone()
+                        } else {
+                            //Give the column a positional name if not provided.
+                            format!("{:02}", idx)
+                        };
+
+                        field_names.push(name);
                         let v = expr.expression_value(variables.clone())?;
                         data.push(v);
                     }
@@ -269,7 +276,7 @@ mod tests {
     fn test_map_stream_with_names() {
         let named_list = vec![Named::Expression(
             Expression::Variable("port".to_string()),
-            "port".to_string(),
+            Some("port".to_string()),
         )];
 
         let mut variables: Variables = Variables::default();
