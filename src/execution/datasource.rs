@@ -155,18 +155,29 @@ impl<R: io::Read> Reader<R> {
 impl<R: io::Read> RecordRead for Reader<R> {
     fn read_record(&mut self) -> ReaderResult<Option<Record>> {
         let mut buf = String::new();
-        self.rdr.read_line(&mut buf)?;
+        let more_data = self.rdr.read_line(&mut buf)?;
 
-        let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
-        let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
-        //FIXME: parse to the more specific
-        let values: Vec<Value> = split_the_line_regex
-            .find_iter(&buf)
-            .map(|x| Value::String(x.as_str().to_string()))
-            .collect();
-        let record = Record::new(ClassicLoadBalancerLogField::field_names(), values);
+        if more_data > 0 {
+            let field_names = ClassicLoadBalancerLogField::field_names();
+            let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
+            let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
+            //FIXME: parse to the more specific
+            let mut values: Vec<Value> = split_the_line_regex
+                .find_iter(&buf)
+                .map(|x| Value::String(x.as_str().to_string()))
+                .collect();
 
-        Ok(Some(record))
+            //Adjust the width to be the same
+            while values.len() < field_names.len() {
+                values.push(Value::String("".to_string()));
+            }
+
+            let record = Record::new(field_names, values);
+
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
     }
 }
 
