@@ -353,12 +353,12 @@ impl AvgAggregate {
         };
 
         if let (Some(&average), Some(&count)) = (self.averages.get(&key), self.counts.get(&key)) {
-            let newCount = count + 1;
+            let new_count = count + 1;
             let f32_average: f32 = average.into();
-            let f32_newValue: f32 = newValue.into();
-            let newAverage: f32 = (f32_average * (count as f32) + f32_newValue) / (newCount as f32);
-            self.averages.insert(key.clone(), OrderedFloat::from(newAverage));
-            self.counts.insert(key.clone(), newCount);
+            let f32_new_value: f32 = newValue.into();
+            let new_average: f32 = (f32_average * (count as f32) + f32_new_value) / (new_count as f32);
+            self.averages.insert(key.clone(), OrderedFloat::from(new_average));
+            self.counts.insert(key.clone(), new_count);
             Ok(())
         } else {
             self.averages.insert(key.clone(), newValue);
