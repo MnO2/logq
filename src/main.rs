@@ -15,10 +15,14 @@ use std::result;
 
 pub(crate) type AppResult<T> = result::Result<T, AppError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(Fail, Debug)]
 pub enum AppError {
-    #[fail(display = "Parse Error")]
-    Parse,
+    #[fail(display = "Syntax Error: {}", _0)]
+    Syntax(String),
+    #[fail(display = "Input is Not All Consumed")]
+    InputNotAllConsumed,
+    #[fail(display = "{}", _0)]
+    Parse(#[cause] logical::parser::ParseError),
     #[fail(display = "Physical Plan Error")]
     PhysicalPlan,
     #[fail(display = "Create Stream Error")]
@@ -30,14 +34,34 @@ pub enum AppError {
 }
 
 impl From<nom::Err<VerboseError<&str>>> for AppError {
-    fn from(_: nom::Err<VerboseError<&str>>) -> AppError {
-        AppError::Parse
+    fn from(e: nom::Err<VerboseError<&str>>) -> AppError {
+        match e {
+            nom::Err::Failure(v) => {
+                let mut errors: String = String::new();
+                for (s, _) in v.errors {
+                    errors.push_str(&s.to_string());
+                    errors.push('\n');
+                }
+
+                AppError::Syntax(errors)
+            }
+            nom::Err::Error(v) => {
+                let mut errors: String = String::new();
+                for (s, _) in v.errors {
+                    errors.push_str(&s.to_string());
+                    errors.push('\n');
+                }
+
+                AppError::Syntax(errors)
+            }
+            _ => AppError::Syntax(String::new()),
+        }
     }
 }
 
 impl From<logical::parser::ParseError> for AppError {
-    fn from(_: logical::parser::ParseError) -> AppError {
-        AppError::Parse
+    fn from(e: logical::parser::ParseError) -> AppError {
+        AppError::Parse(e)
     }
 }
 
@@ -63,7 +87,7 @@ fn run(query_str: &str, data_source: common::types::DataSource) -> AppResult<()>
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
     dbg!(&rest_of_str);
     if !rest_of_str.is_empty() {
-        return Err(AppError::Parse);
+        return Err(AppError::InputNotAllConsumed);
     }
     dbg!(&select_stmt);
     let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
