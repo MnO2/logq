@@ -200,6 +200,33 @@ mod tests {
         ];
         let expected: Option<Record> = Some(Record::new(fields, data));
 
+        assert_eq!(expected, record);
+
+        let content = r#"2015-11-07T18:45:37.691548Z elb1 176.219.166.226:48384 10.0.2.143:80 0.000023 0.000348 0.000025 200 200 0 41690 "GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1" "Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]" - - arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354""#;
+        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record().unwrap();
+        let fields = ClassicLoadBalancerLogField::field_names();
+        let data = vec![
+            Value::String("2015-11-07T18:45:37.691548Z".to_string()),
+            Value::String("elb1".to_string()),
+            Value::String("176.219.166.226:48384".to_string()),
+            Value::String("10.0.2.143:80".to_string()),
+            Value::String("0.000023".to_string()),
+            Value::String("0.000348".to_string()),
+            Value::String("0.000025".to_string()),
+            Value::String("200".to_string()),
+            Value::String("200".to_string()),
+            Value::String("0".to_string()),
+            Value::String("41690".to_string()),
+            Value::String("\"GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1\"".to_string()),
+            Value::String("\"Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]\"".to_string()),
+            Value::String("-".to_string()),
+            Value::String("-".to_string()),
+            Value::String("arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067".to_string()),
+            Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string()),
+        ];
+        let expected: Option<Record> = Some(Record::new(fields, data));
+
         assert_eq!(expected, record)
     }
 }
