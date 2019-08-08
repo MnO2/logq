@@ -10,7 +10,7 @@ use nom::{
     multi::{fold_many0, separated_list},
     number::complete,
     sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
-    IResult,
+    AsChar, IResult, InputTakeAtPosition,
 };
 
 fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
@@ -27,8 +27,23 @@ fn string_literal<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&
     )(i)
 }
 
+fn identifier<T, E: nom::error::ParseError<T>>(input: T) -> IResult<T, T, E>
+where
+    T: InputTakeAtPosition,
+    <T as InputTakeAtPosition>::Item: AsChar,
+{
+    fn is_alphanumeric_or_underscore(chr: char) -> bool {
+        chr.is_alphabetic() || chr == '_'
+    }
+
+    input.split_at_position1_complete(
+        |item| !is_alphanumeric_or_underscore(item.as_char()),
+        nom::error::ErrorKind::Alpha,
+    )
+}
+
 fn column_name<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
-    alpha1(i)
+    identifier(i)
 }
 
 fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
