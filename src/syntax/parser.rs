@@ -452,4 +452,24 @@ mod test {
 
         assert_eq!(select_query("select avg(a), b, c where a = 1"), Ok(("", ans)));
     }
+
+    #[test]
+    fn test_select_statement_with_limit() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("a".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("b".to_string()),
+            )))),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
+                ast::ValueExpression::Column("c".to_string()),
+            )))),
+        ];
+
+        let limit_expr = ast::LimitExpression::new(1);
+        let ans = ast::SelectStatement::new(select_exprs, None, None, Some(limit_expr));
+
+        assert_eq!(select_query("select a, b, c limit 1"), Ok(("", ans)));
+    }
 }
