@@ -1,5 +1,5 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{FilterStream, LogFileStream, MapStream, RecordStream};
+use super::stream::{FilterStream, LogFileStream, MapStream, GroupByStream, RecordStream};
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
@@ -313,8 +313,10 @@ impl Node {
                     unimplemented!();
                 }
             },
-            Node::GroupBy(_, _, _) => {
-                unimplemented!();
+            Node::GroupBy(fields, aggregates, source) => {
+                let record_stream = source.get(variables.clone())?;
+                let stream = GroupByStream::new(fields.clone(), variables, aggregates.clone(), record_stream);
+                Ok(Box::new(stream))
             }
         }
     }
@@ -332,8 +334,8 @@ pub enum AggregateError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Aggregate {
-    Avg(AvgAggregate),
-    Count(CountAggregate),
+    Avg(AvgAggregate, Named),
+    Count(CountAggregate, Named),
     First,
     Last,
     Max,
@@ -344,15 +346,15 @@ pub(crate) enum Aggregate {
 impl Aggregate {
     pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
         match self {
-            Aggregate::Avg(agg) => agg.add_record(key, value),
-            Aggregate::Count(agg) => agg.add_record(key, value),
+            Aggregate::Avg(agg, _) => agg.add_record(key, value),
+            Aggregate::Count(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
     pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
         match self {
-            Aggregate::Avg(agg) => agg.get_aggregated(key),
-            Aggregate::Count(agg) => agg.get_aggregated(key),
+            Aggregate::Avg(agg, _) => agg.get_aggregated(key),
+            Aggregate::Count(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
     }
@@ -451,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_avg_iterator_with_one_element() {
-        let mut iter = Aggregate::Avg(AvgAggregate::new());
+        let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
         let tuple = vec![Value::String("key".to_string())];
         let value = Value::Float(OrderedFloat::from(5.0));
 

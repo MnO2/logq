@@ -254,7 +254,7 @@ impl Aggregate {
             Aggregate::Avg(named) => {
                 let mut variables = common::empty_variables();
 
-                let arg = match named {
+                let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
                         variables = common::merge(variables, expr_variables);
@@ -264,14 +264,13 @@ impl Aggregate {
                 };
 
                 let avg_aggregate = execution::AvgAggregate::new();
-
-                let aggregate = execution::Aggregate::Avg(avg_aggregate);
+                let aggregate = execution::Aggregate::Avg(avg_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
             Aggregate::Count(named) => {
                 let mut variables = common::empty_variables();
 
-                let arg = match named {
+                let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
                         variables = common::merge(variables, expr_variables);
@@ -281,8 +280,7 @@ impl Aggregate {
                 };
 
                 let count_aggregate = execution::CountAggregate::new();
-
-                let aggregate = execution::Aggregate::Count(count_aggregate);
+                let aggregate = execution::Aggregate::Count(count_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
             _ => unimplemented!(),
@@ -458,8 +456,14 @@ mod test {
         let expected_group_by = execution::Node::GroupBy(
             vec!["b".to_string()],
             vec![
-                execution::Aggregate::Avg(execution::AvgAggregate::new()),
-                execution::Aggregate::Count(execution::CountAggregate::new()),
+                execution::Aggregate::Avg(execution::AvgAggregate::new(), execution::Named::Expression(
+                    execution::Expression::Variable("a".to_string()),
+                    Some("a".to_string()),
+                )),
+                execution::Aggregate::Count(execution::CountAggregate::new(), execution::Named::Expression(
+                execution::Expression::Variable("b".to_string()),
+                Some("b".to_string()),
+            )),
             ],
             Box::new(expected_filter),
         );

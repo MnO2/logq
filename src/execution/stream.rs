@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Formula, Named, StreamResult};
+use super::types::{Formula, Named, StreamResult, Aggregate};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};
 use prettytable::Cell;
@@ -13,6 +13,19 @@ pub(crate) struct Record {
 impl Record {
     pub(crate) fn new(field_names: Vec<VariableName>, data: Vec<Value>) -> Self {
         Record { field_names, data }
+    }
+
+    pub(crate) fn get(&self, field_names: &[VariableName]) -> Vec<Value> {
+        let variables = self.to_variables();
+       
+        let mut ret = Vec::new();
+        for name in field_names.iter() {
+            if let Some(var) = variables.get(name) {
+                ret.push(var.clone());
+            }
+        }
+
+        ret
     }
 
     pub(crate) fn to_variables(&self) -> Variables {
@@ -134,6 +147,58 @@ impl RecordStream for FilterStream {
 
             if predicate {
                 return Ok(Some(record));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn close(&self) {
+        self.source.close();
+    }
+}
+
+pub(crate) struct GroupByStream {
+    fields: Vec<VariableName>,
+    variables: Variables,
+    aggregates: Vec<Aggregate>,
+    source: Box<dyn RecordStream>,
+}
+
+impl GroupByStream {
+    pub(crate) fn new(fields: Vec<VariableName>, variables: Variables, aggregates: Vec<Aggregate>, source: Box<dyn RecordStream>) -> Self {
+        GroupByStream {
+            fields,
+            variables,
+            aggregates,
+            source
+        }
+    }
+}
+
+impl RecordStream for GroupByStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        while let Some(record) = self.source.next()? {
+            let variables = common::types::merge(self.variables.clone(), record.to_variables());
+            let key = record.get(&self.fields);
+
+            for agg in self.aggregates.iter() {
+                match agg {
+                    Aggregate::Avg(inner, named) => {
+                        let val = match named {
+                            Named::Expression(expr, named_opt) => {
+                                expr.expression_value(variables.clone())?
+                            },
+                            Named::Star => {
+                                unimplemented!();
+                            }
+                        };
+
+                        unimplemented!();
+                        //inner.add_record(key.clone(), val);
+                    },
+                    _ => { unimplemented!() }
+                }
             }
         }
 
