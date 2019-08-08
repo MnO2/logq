@@ -96,6 +96,8 @@ pub enum ExpressionError {
     UnknownFunction,
     #[fail(display = "Invalid Star")]
     InvalidStar,
+    #[fail(display = "Type Mismatch")]
+    TypeMismatch,
 }
 
 impl From<EvaluateError> for ExpressionError {
@@ -210,7 +212,26 @@ impl Relation {
         match self {
             Relation::Equal => Ok(left_result == right_result),
             Relation::NotEqual => Ok(left_result != right_result),
-            _ => unimplemented!(),
+            Relation::GreaterEqual => match (left_result, right_result) {
+                (Value::Int(l), Value::Int(r)) => Ok(l >= r),
+                (Value::Float(l), Value::Float(r)) => Ok(l >= r),
+                _ => Err(ExpressionError::TypeMismatch),
+            },
+            Relation::LessEqual => match (left_result, right_result) {
+                (Value::Int(l), Value::Int(r)) => Ok(l <= r),
+                (Value::Float(l), Value::Float(r)) => Ok(l <= r),
+                _ => Err(ExpressionError::TypeMismatch),
+            },
+            Relation::MoreThan => match (left_result, right_result) {
+                (Value::Int(l), Value::Int(r)) => Ok(l > r),
+                (Value::Float(l), Value::Float(r)) => Ok(l > r),
+                _ => Err(ExpressionError::TypeMismatch),
+            },
+            Relation::LessThan => match (left_result, right_result) {
+                (Value::Int(l), Value::Int(r)) => Ok(l < r),
+                (Value::Float(l), Value::Float(r)) => Ok(l < r),
+                _ => Err(ExpressionError::TypeMismatch),
+            },
         }
     }
 }
