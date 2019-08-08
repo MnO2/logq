@@ -129,6 +129,10 @@ impl ReaderBuilder {
     pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<File>> {
         Ok(Reader::new(self, File::open(path)?))
     }
+
+    pub(crate) fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
+        Reader::new(self, rdr)
+    }
 }
 
 #[derive(Debug)]
@@ -160,5 +164,39 @@ impl<R: io::Read> RecordRead for Reader<R> {
         let record = Record::new(ClassicLoadBalancerLogField::field_names(), values);
 
         Ok(Some(record))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::BufReader;
+
+    #[test]
+    fn test_reader() {
+        let content = r#"2015-11-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#;
+        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record().unwrap();
+        let fields = ClassicLoadBalancerLogField::field_names();
+        let data = vec![
+            Value::String("2015-11-07T18:45:33.559871Z".to_string()),
+            Value::String("elb1".to_string()),
+            Value::String("78.168.134.92:4586".to_string()),
+            Value::String("10.0.0.215:80".to_string()),
+            Value::String("0.000036".to_string()),
+            Value::String("0.001035".to_string()),
+            Value::String("0.000025".to_string()),
+            Value::String("200".to_string()),
+            Value::String("200".to_string()),
+            Value::String("0".to_string()),
+            Value::String("42355".to_string()),
+            Value::String("\"GET https://example.com:443/ HTTP/1.1\"".to_string()),
+            Value::String("\"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36\"".to_string()),
+            Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
+            Value::String("TLSv1.2".to_string()),
+        ];
+        let expected: Option<Record> = Some(Record::new(fields, data));
+
+        assert_eq!(expected, record)
     }
 }
