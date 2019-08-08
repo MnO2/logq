@@ -1,9 +1,8 @@
-use super::datasource::{Reader, ReaderError};
+use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{FilterStream, LogFileStream, MapStream, RecordStream};
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
-use std::fs::File;
 use std::io;
 use std::result;
 
@@ -23,7 +22,7 @@ impl From<ExpressionError> for EvaluateError {
     }
 }
 
-pub(crate) type StreamGetResult<T> = result::Result<T, CreateStreamError>;
+pub(crate) type CreateStreamResult<T> = result::Result<T, CreateStreamError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
 pub enum CreateStreamError {
@@ -31,11 +30,19 @@ pub enum CreateStreamError {
     KeyNotFound,
     #[fail(display = "Io Error")]
     Io,
+    #[fail(display = "Reader Error")]
+    Reader,
 }
 
 impl From<io::Error> for CreateStreamError {
     fn from(_: io::Error) -> CreateStreamError {
         CreateStreamError::Io
+    }
+}
+
+impl From<ReaderError> for CreateStreamError {
+    fn from(_: ReaderError) -> CreateStreamError {
+        CreateStreamError::Reader
     }
 }
 
@@ -258,7 +265,7 @@ pub(crate) enum Node {
 }
 
 impl Node {
-    pub(crate) fn get(&self, variables: Variables) -> StreamGetResult<Box<dyn RecordStream>> {
+    pub(crate) fn get(&self, variables: Variables) -> CreateStreamResult<Box<dyn RecordStream>> {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream = source.get(variables.clone())?;
@@ -274,9 +281,10 @@ impl Node {
             }
             Node::DataSource(data_source) => match data_source {
                 DataSource::ClassicLoadBalancerLogFile(path) => {
-                    let f = File::open(path)?;
-                    let reader = Reader::from_reader(f);
-                    let stream = LogFileStream { reader };
+                    let reader = ReaderBuilder::new().with_path(path)?;
+                    let stream = LogFileStream {
+                        reader: Box::new(reader),
+                    };
 
                     Ok(Box::new(stream))
                 }

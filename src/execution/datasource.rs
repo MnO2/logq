@@ -1,3 +1,5 @@
+use super::stream::Record;
+use crate::common::types::Value;
 use regex::Regex;
 
 use std::fmt;
@@ -67,76 +69,31 @@ impl FromStr for ClassicLoadBalancerLogField {
 }
 
 impl ClassicLoadBalancerLogField {
-    fn from_i32(i: i32) -> result::Result<Self, String> {
-        match i {
-            0 => Ok(ClassicLoadBalancerLogField::Timestamp),
-            1 => Ok(ClassicLoadBalancerLogField::Elbname),
-            2 => Ok(ClassicLoadBalancerLogField::ClientAndPort),
-            3 => Ok(ClassicLoadBalancerLogField::BackendAndPort),
-            4 => Ok(ClassicLoadBalancerLogField::RequestProcessingTime),
-            5 => Ok(ClassicLoadBalancerLogField::BackendProcessingTime),
-            6 => Ok(ClassicLoadBalancerLogField::ResponseProcessingTime),
-            7 => Ok(ClassicLoadBalancerLogField::ELBStatusCode),
-            8 => Ok(ClassicLoadBalancerLogField::BackendStatusCode),
-            9 => Ok(ClassicLoadBalancerLogField::ReceivedBytes),
-            10 => Ok(ClassicLoadBalancerLogField::SentBytes),
-            11 => Ok(ClassicLoadBalancerLogField::Request),
-            12 => Ok(ClassicLoadBalancerLogField::UserAgent),
-            13 => Ok(ClassicLoadBalancerLogField::SSLCipher),
-            14 => Ok(ClassicLoadBalancerLogField::SSLProtocol),
-            _ => Err("unknown column name".to_string()),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct StringRecord {
-    pub fields: String,
-    split_the_line_regex: Regex,
-}
-
-impl StringRecord {
-    pub fn new() -> Self {
-        let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
-        let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
-
-        StringRecord {
-            fields: String::new(),
-            split_the_line_regex,
-        }
-    }
-
     pub(crate) fn field_names() -> Vec<String> {
-        let mut fields = Vec::new();
-
-        for i in 0..15 {
-            let f = ClassicLoadBalancerLogField::from_i32(i).unwrap();
-            let field = format!("{}", f);
-            fields.push(field)
-        }
-
-        fields
-    }
-
-    pub fn get(&self, i: usize) -> Option<&str> {
-        let r: Vec<&str> = self
-            .split_the_line_regex
-            .find_iter(&self.fields)
-            .map(|x| x.as_str())
-            .collect();
-
-        if i < r.len() {
-            Some(r[i])
-        } else {
-            None
-        }
+        vec![
+            "timestamp".to_string(),
+            "elbname".to_string(),
+            "client_and_port".to_string(),
+            "backend_and_port".to_string(),
+            "request_processing_time".to_string(),
+            "backend_processing_time".to_string(),
+            "response_processing_time".to_string(),
+            "elb_status_code".to_string(),
+            "backend_status_code".to_string(),
+            "received_bytes".to_string(),
+            "sent_bytes".to_string(),
+            "request".to_string(),
+            "user_agent".to_string(),
+            "ssl_cipher".to_string(),
+            "ssl_protocol".to_string(),
+        ]
     }
 }
 
-pub type Result<T> = result::Result<T, ReaderError>;
+pub(crate) type ReaderResult<T> = result::Result<T, ReaderError>;
 
 #[derive(Fail, Debug)]
-pub enum ReaderError {
+pub(crate) enum ReaderError {
     #[fail(display = "{}", _0)]
     Io(#[cause] io::Error),
 }
@@ -148,7 +105,7 @@ impl From<io::Error> for ReaderError {
 }
 
 #[derive(Debug)]
-pub struct ReaderBuilder {
+pub(crate) struct ReaderBuilder {
     capacity: usize,
 }
 
@@ -160,57 +117,48 @@ impl Default for ReaderBuilder {
     }
 }
 
+pub(crate) trait RecordRead {
+    fn read_record(&mut self) -> ReaderResult<Option<Record>>;
+}
+
 impl ReaderBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         ReaderBuilder::default()
     }
 
-    #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_path<P: AsRef<Path>>(&self, path: P) -> Result<Reader<File>> {
+    pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<File>> {
         Ok(Reader::new(self, File::open(path)?))
-    }
-    #[allow(dead_code, clippy::wrong_self_convention)]
-    pub fn from_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
-        Reader::new(self, rdr)
-    }
-
-    #[allow(dead_code)]
-    pub fn buffer_capacity(&mut self, capacity: usize) -> &mut ReaderBuilder {
-        self.capacity = capacity;
-        self
     }
 }
 
 #[derive(Debug)]
-pub struct Reader<R> {
+pub(crate) struct Reader<R> {
     rdr: io::BufReader<R>,
 }
 
 impl<R: io::Read> Reader<R> {
-    fn new(builder: &ReaderBuilder, rdr: R) -> Reader<R> {
+    pub(crate) fn new(builder: &ReaderBuilder, rdr: R) -> Reader<R> {
         Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
         }
     }
-
-    pub fn from_reader(rdr: R) -> Reader<R> {
-        ReaderBuilder::new().from_reader(rdr)
-    }
-
-    pub fn read_record(&mut self, record: &mut StringRecord) -> Result<bool> {
-        let mut buf = String::new();
-
-        if let Ok(num_of_bytes) = self.rdr.read_line(&mut buf) {
-            if num_of_bytes == 0 {
-                return Ok(false);
-            }
-
-            record.fields = buf;
-            return Ok(true);
-        }
-
-        Ok(true)
-    }
-
     fn close(&self) {}
+}
+
+impl<R: io::Read> RecordRead for Reader<R> {
+    fn read_record(&mut self) -> ReaderResult<Option<Record>> {
+        let mut buf = String::new();
+        self.rdr.read_line(&mut buf);
+
+        let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
+        let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
+        //FIXME: parse to the more specific
+        let values: Vec<Value> = split_the_line_regex
+            .find_iter(&buf)
+            .map(|x| Value::String(x.as_str().to_string()))
+            .collect();
+        let record = Record::new(ClassicLoadBalancerLogField::field_names(), values);
+
+        Ok(Some(record))
+    }
 }

@@ -1,8 +1,7 @@
-use super::datasource::{Reader, StringRecord};
+use super::datasource::{RecordRead};
 use super::types::{Formula, Named, StreamResult};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};
-use std::fs::File;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
@@ -134,17 +133,12 @@ impl RecordStream for FilterStream {
 }
 
 pub(crate) struct LogFileStream {
-    pub(crate) reader: Reader<File>,
+    pub(crate) reader: Box<dyn RecordRead>,
 }
 
 impl RecordStream for LogFileStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        let mut record = StringRecord::new();
-        if self.reader.read_record(&mut record)? {
-            let field_names = StringRecord::field_names();
-            let data = Vec::new();
-
-            let record = Record::new(field_names, data);
+        if let Some(record) = self.reader.read_record()? {
             Ok(Some(record))
         } else {
             Ok(None)
