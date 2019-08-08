@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Formula, Named, StreamResult, Aggregate};
+use super::types::{Aggregate, Formula, Named, StreamResult};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};
 use prettytable::Cell;
@@ -17,7 +17,7 @@ impl Record {
 
     pub(crate) fn get(&self, field_names: &[VariableName]) -> Vec<Value> {
         let variables = self.to_variables();
-       
+
         let mut ret = Vec::new();
         for name in field_names.iter() {
             if let Some(var) = variables.get(name) {
@@ -166,12 +166,17 @@ pub(crate) struct GroupByStream {
 }
 
 impl GroupByStream {
-    pub(crate) fn new(fields: Vec<VariableName>, variables: Variables, aggregates: Vec<Aggregate>, source: Box<dyn RecordStream>) -> Self {
+    pub(crate) fn new(
+        fields: Vec<VariableName>,
+        variables: Variables,
+        aggregates: Vec<Aggregate>,
+        source: Box<dyn RecordStream>,
+    ) -> Self {
         GroupByStream {
             fields,
             variables,
             aggregates,
-            source
+            source,
         }
     }
 }
@@ -186,9 +191,7 @@ impl RecordStream for GroupByStream {
                 match agg {
                     Aggregate::Avg(inner, named) => {
                         let val = match named {
-                            Named::Expression(expr, named_opt) => {
-                                expr.expression_value(variables.clone())?
-                            },
+                            Named::Expression(expr, named_opt) => expr.expression_value(variables.clone())?,
                             Named::Star => {
                                 unimplemented!();
                             }
@@ -196,8 +199,8 @@ impl RecordStream for GroupByStream {
 
                         unimplemented!();
                         //inner.add_record(key.clone(), val);
-                    },
-                    _ => { unimplemented!() }
+                    }
+                    _ => unimplemented!(),
                 }
             }
         }

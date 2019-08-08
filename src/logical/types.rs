@@ -456,14 +456,20 @@ mod test {
         let expected_group_by = execution::Node::GroupBy(
             vec!["b".to_string()],
             vec![
-                execution::Aggregate::Avg(execution::AvgAggregate::new(), execution::Named::Expression(
-                    execution::Expression::Variable("a".to_string()),
-                    Some("a".to_string()),
-                )),
-                execution::Aggregate::Count(execution::CountAggregate::new(), execution::Named::Expression(
-                execution::Expression::Variable("b".to_string()),
-                Some("b".to_string()),
-            )),
+                execution::Aggregate::Avg(
+                    execution::AvgAggregate::new(),
+                    execution::Named::Expression(
+                        execution::Expression::Variable("a".to_string()),
+                        Some("a".to_string()),
+                    ),
+                ),
+                execution::Aggregate::Count(
+                    execution::CountAggregate::new(),
+                    execution::Named::Expression(
+                        execution::Expression::Variable("b".to_string()),
+                        Some("b".to_string()),
+                    ),
+                ),
             ],
             Box::new(expected_filter),
         );

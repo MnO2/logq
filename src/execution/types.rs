@@ -1,5 +1,5 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{FilterStream, LogFileStream, MapStream, GroupByStream, RecordStream};
+use super::stream::{FilterStream, GroupByStream, LogFileStream, MapStream, RecordStream};
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
