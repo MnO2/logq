@@ -25,6 +25,8 @@ pub enum AppError {
     CreateStream,
     #[fail(display = "Stream Error")]
     Stream,
+    #[fail(display = "No Log Format Specified")]
+    NoLogFormatSpecified,
 }
 
 impl From<nom::Err<VerboseError<&str>>> for AppError {
@@ -85,10 +87,16 @@ fn main() {
     match app_m.subcommand() {
         ("query", Some(sub_m)) => {
             if let Some(query_str) = sub_m.value_of("query") {
-                let result = if let Some(filename) = sub_m.value_of("file_to_select") {
-                    let path = Path::new(filename);
-                    let data_source = common::types::DataSource::File(path.to_path_buf());
-                    run(query_str, data_source)
+                let result = if let (Some(format), Some(filename)) =
+                    (sub_m.value_of("format"), sub_m.value_of("file_to_select"))
+                {
+                    if format == "elb" {
+                        let path = Path::new(filename);
+                        let data_source = common::types::DataSource::ClassicLoadBalancerLogFile(path.to_path_buf());
+                        run(query_str, data_source)
+                    } else {
+                        Err(AppError::NoLogFormatSpecified)
+                    }
                 } else {
                     let data_source = common::types::DataSource::Stdin;
                     run(query_str, data_source)

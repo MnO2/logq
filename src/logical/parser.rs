@@ -1,7 +1,6 @@
 use super::types;
 use crate::common::types as common;
 use crate::syntax::ast;
-use std::convert::TryFrom;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
