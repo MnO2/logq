@@ -61,8 +61,8 @@ impl From<execution::types::StreamError> for AppError {
 
 fn run(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
-
-    if rest_of_str.is_empty() {
+    dbg!(&rest_of_str);
+    if !rest_of_str.is_empty() {
         return Err(AppError::Parse);
     }
     dbg!(&select_stmt);
