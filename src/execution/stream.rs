@@ -1,4 +1,4 @@
-use super::datasource::{RecordRead};
+use super::datasource::RecordRead;
 use super::types::{Formula, Named, StreamResult};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};

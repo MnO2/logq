@@ -130,6 +130,7 @@ impl ReaderBuilder {
         Ok(Reader::new(self, File::open(path)?))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
         Reader::new(self, rdr)
     }
@@ -146,13 +147,15 @@ impl<R: io::Read> Reader<R> {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
         }
     }
+
+    #[allow(dead_code)]
     fn close(&self) {}
 }
 
 impl<R: io::Read> RecordRead for Reader<R> {
     fn read_record(&mut self) -> ReaderResult<Option<Record>> {
         let mut buf = String::new();
-        self.rdr.read_line(&mut buf);
+        self.rdr.read_line(&mut buf)?;
 
         let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
         let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
