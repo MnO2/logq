@@ -6,6 +6,7 @@ pub(crate) struct SelectStatement {
     pub(crate) select_exprs: Vec<SelectExpression>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
     pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
+    pub(crate) limit_expr_opt: Option<LimitExpression>,
 }
 
 impl SelectStatement {
@@ -13,11 +14,13 @@ impl SelectStatement {
         select_exprs: Vec<SelectExpression>,
         where_expr_opt: Option<WhereExpression>,
         group_by_exprs_opt: Option<GroupByExpression>,
+        limit_expr_opt: Option<LimitExpression>,
     ) -> Self {
         SelectStatement {
             select_exprs,
             where_expr_opt,
             group_by_exprs_opt,
+            limit_expr_opt,
         }
     }
 }
@@ -117,6 +120,17 @@ pub(crate) struct GroupByExpression {
 impl GroupByExpression {
     pub(crate) fn new(exprs: Vec<ColumnName>) -> Self {
         GroupByExpression { exprs }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct LimitExpression {
+    pub(crate) limit: u32,
+}
+
+impl LimitExpression {
+    pub(crate) fn new(limit: u32) -> Self {
+        LimitExpression { limit }
     }
 }
 

@@ -240,13 +240,27 @@ fn group_by_expression<'a>(i: &'a str) -> IResult<&'a str, ast::GroupByExpressio
     )(i)
 }
 
+fn limit_expression<'a>(i: &'a str) -> IResult<&'a str, ast::LimitExpression, VerboseError<&'a str>> {
+    map(preceded(tuple((tag("limit"), space1)), digit1), |s: &str| {
+        let v = s.parse::<u32>().unwrap();
+        ast::LimitExpression::new(v)
+    })(i)
+}
+
 pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
     map(
         preceded(
             tag("select"),
-            tuple((select_expression_list, opt(where_expression), opt(group_by_expression))),
+            tuple((
+                select_expression_list,
+                opt(where_expression),
+                opt(group_by_expression),
+                opt(limit_expression),
+            )),
         ),
-        |(select_exprs, where_expr, group_by_expr)| ast::SelectStatement::new(select_exprs, where_expr, group_by_expr),
+        |(select_exprs, where_expr, group_by_expr, limit_expr)| {
+            ast::SelectStatement::new(select_exprs, where_expr, group_by_expr, limit_expr)
+        },
     )(i)
 }
 
@@ -383,7 +397,7 @@ mod test {
             Box::new(ast::ValueExpression::Column("a".to_string())),
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         )));
-        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
+        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None, None);
 
         assert_eq!(select_query("select a, b, c where a = 1"), Ok(("", ans)));
         let select_exprs = vec![
@@ -405,7 +419,7 @@ mod test {
         )));
 
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
-        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr));
+        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr), None);
 
         assert_eq!(select_query("select a, b, c where a = 1 group by b"), Ok(("", ans)));
     }
@@ -434,7 +448,7 @@ mod test {
             Box::new(ast::ValueExpression::Column("a".to_string())),
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         )));
-        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
+        let ans = ast::SelectStatement::new(select_exprs, Some(where_expr), None, None);
 
         assert_eq!(select_query("select avg(a), b, c where a = 1"), Ok(("", ans)));
     }

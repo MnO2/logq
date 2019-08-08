@@ -360,7 +360,7 @@ mod test {
         )));
         //let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
-        let before = ast::SelectStatement::new(select_exprs, Some(where_expr), None);
+        let before = ast::SelectStatement::new(select_exprs, Some(where_expr), None, None);
         let data_source = common::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
@@ -412,7 +412,7 @@ mod test {
         )));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
-        let before = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr));
+        let before = ast::SelectStatement::new(select_exprs, Some(where_expr), Some(group_by_expr), None);
         let data_source = common::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
