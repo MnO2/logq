@@ -4,7 +4,7 @@ use ordered_float::OrderedFloat;
 use nom::{
     branch::alt,
     bytes::complete::{escaped, tag},
-    character::complete::{alpha1, alphanumeric1 as alphanumeric, char, digit1, one_of, space0, space1},
+    character::complete::{alpha1, alphanumeric1 as alphanumeric, char, digit1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, opt},
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
@@ -14,7 +14,7 @@ use nom::{
 };
 
 fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
-    escaped(alphanumeric, '\\', one_of("\"n\\"))(i)
+    escaped(none_of("\""), '\\', one_of("\"n\\"))(i)
 }
 
 fn string_literal<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
@@ -269,6 +269,14 @@ mod test {
         assert_eq!(
             string_literal("\"def\""),
             Ok(("", ast::Value::StringLiteral("def".to_string())))
+        );
+        assert_eq!(
+            string_literal("\"10.0.2.143:80\""),
+            Ok(("", ast::Value::StringLiteral("10.0.2.143:80".to_string())))
+        );
+        assert_eq!(
+            string_literal("\"10.0\n5,3|\""),
+            Ok(("", ast::Value::StringLiteral("10.0\n5,3|".to_string())))
         );
     }
 
