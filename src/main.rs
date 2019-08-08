@@ -1,8 +1,7 @@
 #[macro_use]
 extern crate failure;
-#[macro_use]
-extern crate prettytable;
 extern crate nom;
+extern crate prettytable;
 
 mod common;
 mod execution;
@@ -11,9 +10,8 @@ mod syntax;
 
 use clap::load_yaml;
 use clap::App;
-use execution::datasource::ClassicLoadBalancerLogField;
 use nom::error::VerboseError;
-use prettytable::{Cell, Row, Table};
+use prettytable::{Row, Table};
 use std::path::Path;
 use std::result;
 

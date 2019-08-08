@@ -373,7 +373,7 @@ impl AvgAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
-        let newValue: OrderedFloat<f32> = match value {
+        let new_value: OrderedFloat<f32> = match value {
             Value::Int(i) => OrderedFloat::from(i as f32),
             Value::Float(f) => f,
             _ => {
@@ -384,13 +384,13 @@ impl AvgAggregate {
         if let (Some(&average), Some(&count)) = (self.averages.get(&key), self.counts.get(&key)) {
             let new_count = count + 1;
             let f32_average: f32 = average.into();
-            let f32_new_value: f32 = newValue.into();
+            let f32_new_value: f32 = new_value.into();
             let new_average: f32 = (f32_average * (count as f32) + f32_new_value) / (new_count as f32);
             self.averages.insert(key.clone(), OrderedFloat::from(new_average));
             self.counts.insert(key.clone(), new_count);
             Ok(())
         } else {
-            self.averages.insert(key.clone(), newValue);
+            self.averages.insert(key.clone(), new_value);
             self.counts.insert(key.clone(), 1);
 
             Ok(())
@@ -417,7 +417,7 @@ impl CountAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
-        let newValue: OrderedFloat<f32> = match value {
+        let new_value: OrderedFloat<f32> = match value {
             Value::Int(i) => OrderedFloat::from(i as f32),
             Value::Float(f) => f,
             _ => {
@@ -426,8 +426,8 @@ impl CountAggregate {
         };
 
         if let Some(&count) = self.counts.get(&key) {
-            let newCount = count + 1;
-            self.counts.insert(key.clone(), newCount);
+            let new_count = count + 1;
+            self.counts.insert(key.clone(), new_count);
             Ok(())
         } else {
             self.counts.insert(key.clone(), 1);

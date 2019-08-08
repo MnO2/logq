@@ -4,7 +4,7 @@ use ordered_float::OrderedFloat;
 use nom::{
     branch::alt,
     bytes::complete::{escaped, tag},
-    character::complete::{alpha1, alphanumeric1 as alphanumeric, char, digit1, none_of, one_of, space0, space1},
+    character::complete::{alpha1, char, digit1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, opt},
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
