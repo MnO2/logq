@@ -11,7 +11,7 @@ use std::result;
 use std::str::FromStr;
 
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
-pub enum ClassicLoadBalancerLogField {
+pub(crate) enum ClassicLoadBalancerLogField {
     Timestamp = 0,
     Elbname = 1,
     ClientAndPort = 2,

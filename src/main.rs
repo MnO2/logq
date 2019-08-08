@@ -1,5 +1,7 @@
 #[macro_use]
 extern crate failure;
+#[macro_use]
+extern crate prettytable;
 extern crate nom;
 
 mod common;
@@ -9,7 +11,9 @@ mod syntax;
 
 use clap::load_yaml;
 use clap::App;
+use execution::datasource::ClassicLoadBalancerLogField;
 use nom::error::VerboseError;
+use prettytable::{Cell, Row, Table};
 use std::path::Path;
 use std::result;
 
@@ -97,10 +101,11 @@ fn run(query_str: &str, data_source: common::types::DataSource) -> AppResult<()>
     dbg!(&physical_plan);
     let mut stream = physical_plan.get(variables)?;
 
+    let mut table = Table::new();
     while let Some(record) = stream.next()? {
-        print!("{:?}", record);
+        table.add_row(Row::new(record.to_row()));
     }
-
+    table.printstd();
     Ok(())
 }
 

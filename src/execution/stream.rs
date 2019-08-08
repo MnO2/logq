@@ -2,6 +2,7 @@ use super::datasource::RecordRead;
 use super::types::{Formula, Named, StreamResult};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};
+use prettytable::Cell;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
@@ -31,6 +32,18 @@ impl Record {
         }
 
         res
+    }
+
+    pub(crate) fn to_row(&self) -> Vec<Cell> {
+        self.data
+            .iter()
+            .map(|val| match val {
+                Value::String(s) => Cell::new(&*s),
+                Value::Int(i) => Cell::new(&*i.to_string()),
+                Value::Float(f) => Cell::new(&*f.to_string()),
+                Value::Boolean(b) => Cell::new(&*b.to_string()),
+            })
+            .collect()
     }
 }
 
