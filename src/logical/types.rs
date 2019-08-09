@@ -17,6 +17,7 @@ pub(crate) enum Node {
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
+    Limit(u32, Box<Node>),
 }
 
 impl Node {
@@ -70,6 +71,13 @@ impl Node {
 
                 let node = execution::Node::GroupBy(fields.clone(), physical_aggregates, child);
 
+                Ok((Box::new(node), return_variables))
+            }
+            Node::Limit(row_count, source) => {
+                let mut variables = common::empty_variables();
+                let (child, child_variables) = source.physical(physical_plan_creator)?;
+                let return_variables = common::merge(variables, child_variables);
+                let node = execution::Node::Limit(*row_count, child);
                 Ok((Box::new(node), return_variables))
             }
         }

@@ -125,6 +125,41 @@ impl RecordStream for MapStream {
     }
 }
 
+pub(crate) struct LimitStream {
+    curr: u32,
+    row_count: u32,
+    variables: Variables,
+    source: Box<dyn RecordStream>,
+}
+
+impl LimitStream {
+    pub(crate) fn new(row_count: u32, variables: Variables, source: Box<dyn RecordStream>) -> Self {
+        LimitStream {
+            curr: 0,
+            row_count,
+            variables,
+            source,
+        }
+    }
+}
+
+impl RecordStream for LimitStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        while let Some(record) = self.source.next()? {
+            if self.curr < self.row_count {
+                self.curr += 1;
+                return Ok(Some(record));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn close(&self) {
+        self.source.close();
+    }
+}
+
 pub(crate) struct FilterStream {
     formula: Formula,
     variables: Variables,

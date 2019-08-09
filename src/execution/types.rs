@@ -1,5 +1,5 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{FilterStream, GroupByStream, LogFileStream, MapStream, RecordStream};
+use super::stream::{FilterStream, GroupByStream, LimitStream, LogFileStream, MapStream, RecordStream};
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
@@ -293,6 +293,7 @@ pub(crate) enum Node {
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
+    Limit(u32, Box<Node>),
 }
 
 impl Node {
@@ -326,6 +327,11 @@ impl Node {
             Node::GroupBy(fields, named_aggregates, source) => {
                 let record_stream = source.get(variables.clone())?;
                 let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream);
+                Ok(Box::new(stream))
+            }
+            Node::Limit(row_count, source) => {
+                let record_stream = source.get(variables.clone())?;
+                let stream = LimitStream::new(*row_count, variables, record_stream);
                 Ok(Box::new(stream))
             }
         }

@@ -128,12 +128,12 @@ impl GroupByExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct LimitExpression {
-    pub(crate) limit: u32,
+    pub(crate) row_count: u32,
 }
 
 impl LimitExpression {
-    pub(crate) fn new(limit: u32) -> Self {
-        LimitExpression { limit }
+    pub(crate) fn new(row_count: u32) -> Self {
+        LimitExpression { row_count }
     }
 }
 

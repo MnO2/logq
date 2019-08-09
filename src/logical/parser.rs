@@ -234,6 +234,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
     }
 
+    if let Some(limit_expr) = query.limit_expr_opt {
+        root = types::Node::Limit(limit_expr.row_count, Box::new(root));
+    }
+
     Ok(root)
 }
 
