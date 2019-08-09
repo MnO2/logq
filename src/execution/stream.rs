@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Value, VariableName, Variables};
 use prettytable::Cell;
@@ -162,7 +162,7 @@ impl RecordStream for FilterStream {
 pub(crate) struct GroupByStream {
     fields: Vec<VariableName>,
     variables: Variables,
-    aggregates: Vec<Aggregate>,
+    aggregates: Vec<NamedAggregate>,
     source: Box<dyn RecordStream>,
 }
 
@@ -170,7 +170,7 @@ impl GroupByStream {
     pub(crate) fn new(
         fields: Vec<VariableName>,
         variables: Variables,
-        aggregates: Vec<Aggregate>,
+        aggregates: Vec<NamedAggregate>,
         source: Box<dyn RecordStream>,
     ) -> Self {
         GroupByStream {
@@ -188,8 +188,8 @@ impl RecordStream for GroupByStream {
             let variables = common::types::merge(self.variables.clone(), record.to_variables());
             let key = record.get(&self.fields);
 
-            for agg in self.aggregates.iter() {
-                match agg {
+            for named_agg in self.aggregates.iter() {
+                match &named_agg.aggregate {
                     Aggregate::Avg(inner, named) => {
                         let val = match named {
                             Named::Expression(expr, named_opt) => expr.expression_value(variables.clone())?,

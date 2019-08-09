@@ -207,7 +207,13 @@ fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, 
         space0,
         alt((
             map(char('*'), |_| ast::SelectExpression::Star),
-            map(pair(expression, opt(preceded(tuple((space1, tag("as"), space1)), identifier))), |(e, name_opt)| ast::SelectExpression::Expression(Box::new(e), name_opt.map(|s| s.to_string()))),
+            map(
+                pair(
+                    expression,
+                    opt(preceded(tuple((space1, tag("as"), space1)), identifier)),
+                ),
+                |(e, name_opt)| ast::SelectExpression::Expression(Box::new(e), name_opt.map(|s| s.to_string())),
+            ),
         )),
     )(i)
 }
@@ -357,28 +363,46 @@ mod test {
         assert_eq!(select_expression_list("*, *, *"), Ok(("", ans)));
 
         let ans = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Integral(1),
-            )))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Integral(2),
-            )))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Integral(3),
-            )))), None),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                    ast::Value::Integral(1),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                    ast::Value::Integral(2),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                    ast::Value::Integral(3),
+                )))),
+                None,
+            ),
         ];
         assert_eq!(select_expression_list("1, 2, 3"), Ok(("", ans)));
 
         let ans = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("a".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("b".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("c".to_string()),
-            ))), None),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "b".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "c".to_string(),
+                )))),
+                None,
+            ),
         ];
         assert_eq!(select_expression_list("a, b, c"), Ok(("", ans)));
     }
@@ -386,15 +410,24 @@ mod test {
     #[test]
     fn test_select_statement() {
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("a".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("b".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("c".to_string()),
-            ))), None),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "b".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "c".to_string(),
+                )))),
+                None,
+            ),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
@@ -406,15 +439,24 @@ mod test {
 
         assert_eq!(select_query("select a, b, c from elb where a = 1"), Ok(("", ans)));
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("a".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("b".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("c".to_string()),
-            ))), None),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "b".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "c".to_string(),
+                )))),
+                None,
+            ),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
@@ -435,20 +477,30 @@ mod test {
     #[test]
     fn test_select_statement_with_func_call() {
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::FuncCall(
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
                     "avg".to_string(),
-                    vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
-                        Box::new(ast::ValueExpression::Column("a".to_string())),
-                    )), None)],
-                ),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("b".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("c".to_string()),
-            ))), None),
+                    vec![ast::SelectExpression::Expression(
+                        Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                            "a".to_string(),
+                        )))),
+                        None,
+                    )],
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "b".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "c".to_string(),
+                )))),
+                None,
+            ),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
@@ -464,15 +516,24 @@ mod test {
     #[test]
     fn test_select_statement_with_limit() {
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("a".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("b".to_string()),
-            ))), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
-                ast::ValueExpression::Column("c".to_string()),
-            ))), None),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "b".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "c".to_string(),
+                )))),
+                None,
+            ),
         ];
 
         let limit_expr = ast::LimitExpression::new(1);

@@ -16,7 +16,7 @@ pub(crate) enum Node {
     DataSource(DataSource),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
+    GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
 }
 
 impl Node {
@@ -56,12 +56,12 @@ impl Node {
 
                 Ok((Box::new(node), return_variables))
             }
-            Node::GroupBy(fields, aggergates, source) => {
+            Node::GroupBy(fields, named_aggergates, source) => {
                 let mut variables = common::empty_variables();
 
                 let mut physical_aggregates = Vec::new();
-                for aggregate in aggergates.iter() {
-                    let (physical_aggregate, aggregate_variables) = aggregate.physical(physical_plan_creator)?;
+                for named_aggregate in named_aggergates.iter() {
+                    let (physical_aggregate, aggregate_variables) = named_aggregate.physical(physical_plan_creator)?;
                     variables = common::merge(variables, aggregate_variables);
                     physical_aggregates.push(physical_aggregate);
                 }
@@ -231,6 +231,29 @@ impl PhysicalPlanCreator {
         let constant_name = format!("const_{:09}", self.counter);
         self.counter += 1;
         constant_name
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedAggregate {
+    pub(crate) aggregate: Aggregate,
+    pub(crate) name_opt: Option<String>,
+}
+
+impl NamedAggregate {
+    pub(crate) fn new(aggregate: Aggregate, name_opt: Option<String>) -> Self {
+        NamedAggregate { aggregate, name_opt }
+    }
+
+    pub(crate) fn physical(
+        &self,
+        physical_plan_creator: &mut PhysicalPlanCreator,
+    ) -> PhysicalResult<(execution::NamedAggregate, common::Variables)> {
+        let (physical_aggregate, expr_variables) = self.aggregate.physical(physical_plan_creator)?;
+        Ok((
+            execution::NamedAggregate::new(physical_aggregate, self.name_opt.clone()),
+            expr_variables,
+        ))
     }
 }
 
@@ -421,19 +444,25 @@ mod test {
             )),
         );
 
-        let aggregates = vec![
-            Aggregate::Avg(Named::Expression(
-                Expression::Variable("a".to_string()),
-                Some("a".to_string()),
-            )),
-            Aggregate::Count(Named::Expression(
-                Expression::Variable("b".to_string()),
-                Some("b".to_string()),
-            )),
+        let named_aggregates = vec![
+            NamedAggregate::new(
+                Aggregate::Avg(Named::Expression(
+                    Expression::Variable("a".to_string()),
+                    Some("a".to_string()),
+                )),
+                None,
+            ),
+            NamedAggregate::new(
+                Aggregate::Count(Named::Expression(
+                    Expression::Variable("b".to_string()),
+                    Some("b".to_string()),
+                )),
+                None,
+            ),
         ];
 
         let fields = vec!["b".to_string()];
-        let group_by = Node::GroupBy(fields, aggregates, Box::new(filter));
+        let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
         let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
         let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
@@ -456,19 +485,25 @@ mod test {
         let expected_group_by = execution::Node::GroupBy(
             vec!["b".to_string()],
             vec![
-                execution::Aggregate::Avg(
-                    execution::AvgAggregate::new(),
-                    execution::Named::Expression(
-                        execution::Expression::Variable("a".to_string()),
-                        Some("a".to_string()),
+                execution::NamedAggregate::new(
+                    execution::Aggregate::Avg(
+                        execution::AvgAggregate::new(),
+                        execution::Named::Expression(
+                            execution::Expression::Variable("a".to_string()),
+                            Some("a".to_string()),
+                        ),
                     ),
+                    None,
                 ),
-                execution::Aggregate::Count(
-                    execution::CountAggregate::new(),
-                    execution::Named::Expression(
-                        execution::Expression::Variable("b".to_string()),
-                        Some("b".to_string()),
+                execution::NamedAggregate::new(
+                    execution::Aggregate::Count(
+                        execution::CountAggregate::new(),
+                        execution::Named::Expression(
+                            execution::Expression::Variable("b".to_string()),
+                            Some("b".to_string()),
+                        ),
                     ),
+                    None,
                 ),
             ],
             Box::new(expected_filter),

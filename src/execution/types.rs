@@ -282,7 +282,7 @@ pub(crate) enum Node {
     DataSource(DataSource),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<VariableName>, Vec<Aggregate>, Box<Node>),
+    GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
 }
 
 impl Node {
@@ -313,9 +313,9 @@ impl Node {
                     unimplemented!();
                 }
             },
-            Node::GroupBy(fields, aggregates, source) => {
+            Node::GroupBy(fields, named_aggregates, source) => {
                 let record_stream = source.get(variables.clone())?;
-                let stream = GroupByStream::new(fields.clone(), variables, aggregates.clone(), record_stream);
+                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream);
                 Ok(Box::new(stream))
             }
         }
@@ -330,6 +330,18 @@ pub enum AggregateError {
     KeyNotFound,
     #[fail(display = "Invalid Type")]
     InvalidType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedAggregate {
+    pub(crate) aggregate: Aggregate,
+    pub(crate) name_opt: Option<String>,
+}
+
+impl NamedAggregate {
+    pub(crate) fn new(aggregate: Aggregate, name_opt: Option<String>) -> Self {
+        NamedAggregate { aggregate, name_opt }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
