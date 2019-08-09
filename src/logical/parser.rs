@@ -95,7 +95,7 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
         }
         ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
         ast::ValueExpression::Operator(_, _, _) => parse_arithemetic(value_expr),
-        ast::ValueExpression::FuncCall(func_name, select_exprs) => {
+        ast::ValueExpression::FuncCall(func_name, select_exprs, within_group_opt) => {
             let mut args = Vec::new();
             for select_expr in select_exprs.iter() {
                 let arg = parse_expression(select_expr)?;
@@ -180,7 +180,7 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
     match select_expr {
         ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
-                ast::ValueExpression::FuncCall(func_name, args) => {
+                ast::ValueExpression::FuncCall(func_name, args, within_group_opt) => {
                     let named = *parse_expression(&args[0])?;
                     let aggregate = from_str(&**func_name, named)?;
                     let named_aggregate = types::NamedAggregate::new(aggregate, name_opt.clone());
@@ -322,6 +322,7 @@ mod test {
                     )))),
                     None,
                 )],
+                None,
             )))),
             None,
         );
@@ -411,6 +412,7 @@ mod test {
                         )))),
                         None,
                     )],
+                    None,
                 )))),
                 None,
             ),
@@ -423,6 +425,7 @@ mod test {
                         )))),
                         None,
                     )],
+                    None,
                 )))),
                 None,
             ),

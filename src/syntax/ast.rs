@@ -1,7 +1,7 @@
 use ordered_float::OrderedFloat;
 use std::fmt;
-use std::str::FromStr;
 use std::result;
+use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
@@ -84,7 +84,7 @@ pub(crate) enum ValueExpression {
     Column(ColumnName),
     Value(Value),
     Operator(ValueOperator, Box<ValueExpression>, Box<ValueExpression>),
-    FuncCall(FuncName, Vec<SelectExpression>),
+    FuncCall(FuncName, Vec<SelectExpression>, Option<WithinGroupClause>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -145,7 +145,7 @@ impl LimitExpression {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Ordering {
     Asc,
-    Desc
+    Desc,
 }
 
 impl FromStr for Ordering {
@@ -168,9 +168,9 @@ pub(crate) struct OrderingTerm {
 
 impl OrderingTerm {
     pub(crate) fn new(column_name: &str, ordering: &str) -> Self {
-        OrderingTerm { 
+        OrderingTerm {
             column_name: column_name.to_string(),
-            ordering: Ordering::from_str(ordering).unwrap() 
+            ordering: Ordering::from_str(ordering).unwrap(),
         }
     }
 }
@@ -186,9 +186,21 @@ impl OrderByExpression {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct FuncCallExpression {
     pub(crate) func_name: String,
     pub(crate) arguments: Vec<ValueExpression>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct WithinGroupClause {
+    pub(crate) ordering_term: OrderingTerm,
+}
+
+impl WithinGroupClause {
+    pub(crate) fn new(order_by_expr: OrderByExpression) -> Self {
+        WithinGroupClause {
+            ordering_term: order_by_expr.ordering_terms[0].clone(),
+        }
+    }
 }

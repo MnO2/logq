@@ -76,18 +76,39 @@ fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError
     delimited(space0, delimited(tag("("), value_expression, tag(")")), space0)(i)
 }
 
+fn order_by_clause_for_within_group<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, VerboseError<&'a str>> {
+    map(
+        preceded(tuple((tag("order"), space1, tag("by"), space1)), ordering_term),
+        |item| ast::OrderByExpression::new(vec![item]),
+    )(i)
+}
+
+fn within_group_clause<'a>(i: &'a str) -> IResult<&'a str, ast::WithinGroupClause, VerboseError<&'a str>> {
+    map(
+        preceded(
+            tuple((tag("within"), space1, tag("group"), space1)),
+            delimited(tag("("), order_by_clause_for_within_group, tag(")")),
+        ),
+        ast::WithinGroupClause::new,
+    )(i)
+}
+
 fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
     map(
         delimited(
             space0,
-            tuple((alpha1, delimited(tag("("), opt(select_expression_list), tag(")")))),
+            tuple((
+                identifier,
+                delimited(tag("("), opt(select_expression_list), tag(")")),
+                opt(within_group_clause),
+            )),
             space0,
         ),
-        |(func_name, select_expr_list_opt)| {
+        |(func_name, select_expr_list_opt, within_group_opt)| {
             if let Some(select_expr_list) = select_expr_list_opt {
-                ast::ValueExpression::FuncCall(func_name.to_string(), select_expr_list)
+                ast::ValueExpression::FuncCall(func_name.to_string(), select_expr_list, within_group_opt)
             } else {
-                ast::ValueExpression::FuncCall(func_name.to_string(), vec![])
+                ast::ValueExpression::FuncCall(func_name.to_string(), vec![], within_group_opt)
             }
         },
     )(i)
@@ -511,6 +532,7 @@ mod test {
                         )))),
                         None,
                     )],
+                    None,
                 )))),
                 None,
             ),
