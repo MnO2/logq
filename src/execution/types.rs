@@ -58,6 +58,10 @@ pub enum StreamError {
     Expression(#[cause] ExpressionError),
     #[fail(display = "Reader Error")]
     Reader,
+    #[fail(display = "Aggregate Error")]
+    Aggregate,
+    #[fail(display = "There should be at least one field in group by clause")]
+    GroupByZeroField,
 }
 
 impl From<CreateStreamError> for StreamError {
@@ -80,6 +84,12 @@ impl From<ExpressionError> for StreamError {
 
 impl From<ReaderError> for StreamError {
     fn from(_: ReaderError) -> StreamError {
+        StreamError::Reader
+    }
+}
+
+impl From<AggregateError> for StreamError {
+    fn from(_: AggregateError) -> StreamError {
         StreamError::Reader
     }
 }

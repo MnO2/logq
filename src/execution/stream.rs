@@ -1,8 +1,9 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamError, StreamResult};
 use crate::common;
-use crate::common::types::{Value, VariableName, Variables};
+use crate::common::types::{Tuple, Value, VariableName, Variables};
 use prettytable::Cell;
+use std::collections::hash_set;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
@@ -164,9 +165,10 @@ pub(crate) struct GroupByStream {
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
     source: Box<dyn RecordStream>,
+    group_iterator: Option<hash_set::IntoIter<Tuple>>,
 }
 
-impl GroupByStream {
+impl<'a> GroupByStream {
     pub(crate) fn new(
         fields: Vec<VariableName>,
         variables: Variables,
@@ -178,35 +180,57 @@ impl GroupByStream {
             variables,
             aggregates,
             source,
+            group_iterator: None,
         }
     }
 }
 
 impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        while let Some(record) = self.source.next()? {
-            let variables = common::types::merge(self.variables.clone(), record.to_variables());
-            let key = record.get(&self.fields);
+        if let Some(ref mut iter) = self.group_iterator {
+            if let Some(key) = iter.next() {
+                let mut values: Vec<Value> = Vec::new();
+                for named_agg in self.aggregates.iter() {
+                    let v = named_agg.aggregate.get_aggregated(&key)?;
+                    values.push(v);
+                }
 
-            for named_agg in self.aggregates.iter() {
-                match &named_agg.aggregate {
-                    Aggregate::Avg(inner, named) => {
-                        let val = match named {
-                            Named::Expression(expr, named_opt) => expr.expression_value(variables.clone())?,
-                            Named::Star => {
-                                unimplemented!();
-                            }
-                        };
+                let record = Record::new(self.fields.clone(), values);
+                Ok(Some(record))
+            } else {
+                Ok(None)
+            }
+        } else {
+            let mut groups: hash_set::HashSet<Tuple> = hash_set::HashSet::new();
+            while let Some(record) = self.source.next()? {
+                let variables = common::types::merge(self.variables.clone(), record.to_variables());
+                if self.fields.len() == 0 {
+                    return Err(StreamError::GroupByZeroField);
+                }
 
-                        unimplemented!();
-                        //inner.add_record(key.clone(), val);
+                let key = record.get(&self.fields);
+
+                groups.insert(key.clone());
+                for named_agg in self.aggregates.iter_mut() {
+                    match &mut named_agg.aggregate {
+                        Aggregate::Avg(ref mut inner, named) => {
+                            let val = match named {
+                                Named::Expression(expr, name_opt) => expr.expression_value(variables.clone())?,
+                                Named::Star => {
+                                    unimplemented!();
+                                }
+                            };
+
+                            inner.add_record(key.clone(), val)?;
+                        }
+                        _ => unimplemented!(),
                     }
-                    _ => unimplemented!(),
                 }
             }
-        }
 
-        Ok(None)
+            self.group_iterator = Some(groups.into_iter());
+            Ok(None)
+        }
     }
 
     fn close(&self) {
