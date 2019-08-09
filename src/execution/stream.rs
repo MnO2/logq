@@ -322,6 +322,41 @@ mod tests {
     }
 
     #[test]
+    fn test_limit_stream() {
+        let mut variables: Variables = Variables::default();
+        variables.insert("const".to_string(), Value::String("example.com".to_string()));
+
+        let mut records = VecDeque::new();
+        records.push_back(Record::new(
+            vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+        ));
+        records.push_back(Record::new(
+            vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example.com".to_string()), Value::Int(8001)],
+        ));
+        records.push_back(Record::new(
+            vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example01.com".to_string()), Value::Int(8002)],
+        ));
+        let stream = Box::new(InMemoryStream::new(records));
+
+        let mut limit_stream = LimitStream::new(1, variables, stream);
+
+        let mut result = Vec::new();
+        while let Some(n) = limit_stream.next().unwrap() {
+            result.push(n);
+        }
+
+        let expected = vec![Record::new(
+            vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+        )];
+
+        assert_eq!(expected, result);
+    }
+
+    #[test]
     fn test_filter_stream() {
         let left = Box::new(types::Expression::Variable("host".to_string()));
         let right = Box::new(types::Expression::Variable("const".to_string()));
