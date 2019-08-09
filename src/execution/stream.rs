@@ -55,6 +55,7 @@ impl Record {
                 Value::Int(i) => Cell::new(&*i.to_string()),
                 Value::Float(f) => Cell::new(&*f.to_string()),
                 Value::Boolean(b) => Cell::new(&*b.to_string()),
+                Value::Null => Cell::new("<null>"),
             })
             .collect()
     }

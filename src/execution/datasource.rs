@@ -169,7 +169,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
 
             //Adjust the width to be the same
             while values.len() < field_names.len() {
-                values.push(Value::String("".to_string()));
+                values.push(Value::Null);
             }
 
             let record = Record::new(field_names, values);
