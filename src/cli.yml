@@ -6,15 +6,12 @@ subcommands:
     - query:
         about: select the data by query string
         args:
-          - format:
-              help: format of the log file
-              index: 1
           - query:
               help: query string
-              index: 2
+              index: 1
           - file_to_select:
               help: file to select against
-              index: 3
+              index: 2
     - shema:
         about: show the schema for log file format
         args:

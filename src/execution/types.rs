@@ -301,7 +301,7 @@ impl Node {
                 Ok(Box::new(stream))
             }
             Node::DataSource(data_source) => match data_source {
-                DataSource::ClassicLoadBalancerLogFile(path) => {
+                DataSource::File(path) => {
                     let reader = ReaderBuilder::new().with_path(path)?;
                     let stream = LogFileStream {
                         reader: Box::new(reader),
