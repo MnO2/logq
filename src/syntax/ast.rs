@@ -34,7 +34,7 @@ impl fmt::Display for SelectStatement {
             .iter()
             .map(|field| match field {
                 SelectExpression::Star => "<star>".to_string(),
-                SelectExpression::Expression(e) => format!("{:?}", e),
+                SelectExpression::Expression(e, name_opt) => format!("{:?} as {:?}", e, name_opt),
             })
             .collect();
         write!(f, "{:?}", select_exprs_str)
@@ -44,7 +44,7 @@ impl fmt::Display for SelectStatement {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum SelectExpression {
     Star,
-    Expression(Box<Expression>),
+    Expression(Box<Expression>, Option<String>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

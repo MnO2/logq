@@ -131,11 +131,11 @@ fn parse_condition(condition: &ast::Condition) -> ParseResult<Box<types::Formula
 fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Named>> {
     match select_expr {
         ast::SelectExpression::Star => Ok(Box::new(types::Named::Star)),
-        ast::SelectExpression::Expression(expr) => match &**expr {
+        ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
             ast::Expression::Condition(c) => {
                 let formula = parse_condition(c)?;
                 let logic_expression = types::Expression::Logic(formula);
-                let expr = types::Named::Expression(logic_expression, None);
+                let expr = types::Named::Expression(logic_expression, name_opt.clone());
                 Ok(Box::new(expr))
             }
             ast::Expression::And(_, _) => {
@@ -178,7 +178,7 @@ fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
 
 fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Aggregate> {
     match select_expr {
-        ast::SelectExpression::Expression(expr) => match &**expr {
+        ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
                 ast::ValueExpression::FuncCall(func_name, args) => {
                     let named = *parse_expression(&args[0])?;
@@ -313,9 +313,9 @@ mod test {
                 "avg".to_string(),
                 vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
                     Box::new(ast::ValueExpression::Column("a".to_string())),
-                )))],
+                )), None)],
             ),
-        ))));
+        ))), None);
 
         let named = types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string()));
         let expected = types::Aggregate::Avg(named);
@@ -347,10 +347,10 @@ mod test {
         let select_exprs = vec![
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
                 ast::ValueExpression::Column("a".to_string()),
-            )))),
+            ))), None),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
                 ast::ValueExpression::Column("b".to_string()),
-            )))),
+            ))), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
@@ -392,17 +392,17 @@ mod test {
                     "avg".to_string(),
                     vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
                         Box::new(ast::ValueExpression::Column("a".to_string())),
-                    )))],
+                    )), None)],
                 ),
-            )))),
+            ))), None),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Value(Box::new(
                 ast::ValueExpression::FuncCall(
                     "count".to_string(),
                     vec![ast::SelectExpression::Expression(Box::new(ast::Expression::Value(
                         Box::new(ast::ValueExpression::Column("b".to_string())),
-                    )))],
+                    )), None)],
                 ),
-            )))),
+            ))), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
