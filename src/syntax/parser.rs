@@ -86,7 +86,7 @@ fn order_by_clause_for_within_group<'a>(i: &'a str) -> IResult<&'a str, ast::Ord
 fn within_group_clause<'a>(i: &'a str) -> IResult<&'a str, ast::WithinGroupClause, VerboseError<&'a str>> {
     map(
         preceded(
-            tuple((tag("within"), space1, tag("group"), space1)),
+            tuple((space1, tag("within"), space1, tag("group"), space1)),
             delimited(tag("("), order_by_clause_for_within_group, tag(")")),
         ),
         ast::WithinGroupClause::new,
@@ -616,5 +616,40 @@ mod test {
         let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, Some(order_by_clause), None);
 
         assert_eq!(select_query("select a, b, c from elb order by a asc"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_select_statement_with_within_group() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
+                    "percentile_disc".to_string(),
+                    vec![ast::SelectExpression::Expression(
+                        Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                            ast::Value::Boolean(true),
+                        )))),
+                        None,
+                    )],
+                    Some(ast::WithinGroupClause::new(ast::OrderByExpression::new(vec![
+                        ast::OrderingTerm::new("b", "asc"),
+                    ]))),
+                )))),
+                None,
+            ),
+        ];
+
+        let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string()]);
+        let ans = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None);
+
+        assert_eq!(
+            select_query("select a, percentile_disc(true) within group (order by b asc) from elb group by a"),
+            Ok(("", ans))
+        );
     }
 }
