@@ -1,5 +1,7 @@
 use ordered_float::OrderedFloat;
 use std::fmt;
+use std::str::FromStr;
+use std::result;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
@@ -7,6 +9,7 @@ pub(crate) struct SelectStatement {
     pub(crate) table_name: String,
     pub(crate) where_expr_opt: Option<WhereExpression>,
     pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
+    pub(crate) order_by_expr_opt: Option<OrderByExpression>,
     pub(crate) limit_expr_opt: Option<LimitExpression>,
 }
 
@@ -16,6 +19,7 @@ impl SelectStatement {
         table_name: &str,
         where_expr_opt: Option<WhereExpression>,
         group_by_exprs_opt: Option<GroupByExpression>,
+        order_by_expr_opt: Option<OrderByExpression>,
         limit_expr_opt: Option<LimitExpression>,
     ) -> Self {
         SelectStatement {
@@ -23,6 +27,7 @@ impl SelectStatement {
             table_name: table_name.to_string(),
             where_expr_opt,
             group_by_exprs_opt,
+            order_by_expr_opt,
             limit_expr_opt,
         }
     }
@@ -136,6 +141,51 @@ impl LimitExpression {
         LimitExpression { row_count }
     }
 }
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Ordering {
+    Asc,
+    Desc
+}
+
+impl FromStr for Ordering {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "asc" => Ok(Ordering::Asc),
+            "desc" => Ok(Ordering::Desc),
+            _ => Err("unknown ordering".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct OrderingTerm {
+    pub(crate) column_name: String,
+    pub(crate) ordering: Ordering,
+}
+
+impl OrderingTerm {
+    pub(crate) fn new(column_name: &str, ordering: &str) -> Self {
+        OrderingTerm { 
+            column_name: column_name.to_string(),
+            ordering: Ordering::from_str(ordering).unwrap() 
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct OrderByExpression {
+    pub(crate) ordering_terms: Vec<OrderingTerm>,
+}
+
+impl OrderByExpression {
+    pub(crate) fn new(ordering_terms: Vec<OrderingTerm>) -> Self {
+        OrderByExpression { ordering_terms }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub(crate) struct FuncCallExpression {

@@ -253,6 +253,23 @@ fn limit_expression<'a>(i: &'a str) -> IResult<&'a str, ast::LimitExpression, Ve
     })(i)
 }
 
+fn ordering_term<'a>(i: &'a str) -> IResult<&'a str, ast::OrderingTerm, VerboseError<&'a str>> {
+    map(
+        pair(column_name, preceded(space1, alt((tag("asc"), tag("desc"))))),
+        |(column_name, ordering)| ast::OrderingTerm::new(column_name, ordering),
+    )(i)
+}
+
+fn order_by_clause<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, VerboseError<&'a str>> {
+    map(
+        preceded(
+            tuple((tag("order"), space1, tag("by"), space1)),
+            terminated(separated_list(preceded(space0, char(',')), ordering_term), space0),
+        ),
+        ast::OrderByExpression::new,
+    )(i)
+}
+
 fn from_clause<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
     terminated(preceded(tuple((tag("from"), space1)), identifier), space0)(i)
 }
@@ -266,11 +283,19 @@ pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatem
                 from_clause,
                 opt(where_expression),
                 opt(group_by_expression),
+                opt(order_by_clause),
                 opt(limit_expression),
             )),
         ),
-        |(select_exprs, table_name, where_expr, group_by_expr, limit_expr)| {
-            ast::SelectStatement::new(select_exprs, table_name, where_expr, group_by_expr, limit_expr)
+        |(select_exprs, table_name, where_expr, group_by_expr, order_by_expr, limit_expr)| {
+            ast::SelectStatement::new(
+                select_exprs,
+                table_name,
+                where_expr,
+                group_by_expr,
+                order_by_expr,
+                limit_expr,
+            )
         },
     )(i)
 }
@@ -435,7 +460,7 @@ mod test {
             Box::new(ast::ValueExpression::Column("a".to_string())),
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         )));
-        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None);
+        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
 
         assert_eq!(select_query("select a, b, c from elb where a = 1"), Ok(("", ans)));
         let select_exprs = vec![
@@ -466,7 +491,7 @@ mod test {
         )));
 
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
-        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None);
+        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None, None);
 
         assert_eq!(
             select_query("select a, b, c from elb where a = 1 group by b"),
@@ -508,7 +533,7 @@ mod test {
             Box::new(ast::ValueExpression::Column("a".to_string())),
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
         )));
-        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None);
+        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
 
         assert_eq!(select_query("select avg(a), b, c from elb where a = 1"), Ok(("", ans)));
     }
@@ -537,8 +562,37 @@ mod test {
         ];
 
         let limit_expr = ast::LimitExpression::new(1);
-        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, Some(limit_expr));
+        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, None, Some(limit_expr));
 
         assert_eq!(select_query("select a, b, c from elb limit 1"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_select_statement_with_order() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "b".to_string(),
+                )))),
+                None,
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "c".to_string(),
+                )))),
+                None,
+            ),
+        ];
+
+        let order_by_clause = ast::OrderByExpression::new(vec![ast::OrderingTerm::new("a", "asc")]);
+        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, Some(order_by_clause), None);
+
+        assert_eq!(select_query("select a, b, c from elb order by a asc"), Ok(("", ans)));
     }
 }
