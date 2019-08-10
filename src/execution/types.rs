@@ -447,14 +447,23 @@ impl CountAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
-        let new_value: OrderedFloat<f32> = match value {
-            Value::Int(i) => OrderedFloat::from(i as f32),
-            Value::Float(f) => f,
-            _ => {
-                return Err(AggregateError::InvalidType);
-            }
+        if let Value::Null = value {
+            //Null value doesn't contribute to the total count
+            return Ok(());
         };
 
+        if let Some(&count) = self.counts.get(&key) {
+            let new_count = count + 1;
+            self.counts.insert(key.clone(), new_count);
+            Ok(())
+        } else {
+            self.counts.insert(key.clone(), 1);
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn add_row(&mut self, key: Tuple) -> AggregateResult<()> {
         if let Some(&count) = self.counts.get(&key) {
             let new_count = count + 1;
             self.counts.insert(key.clone(), new_count);
@@ -480,13 +489,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_avg_iterator_with_one_element() {
+    fn test_avg_aggregate_with_one_element() {
         let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
         let tuple = vec![Value::String("key".to_string())];
         let value = Value::Float(OrderedFloat::from(5.0));
 
-        iter.add_record(tuple.clone(), value.clone());
+        let _ = iter.add_record(tuple.clone(), value.clone());
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(value), aggregate);
+    }
+
+    #[test]
+    fn test_count_aggregate() {
+        let mut iter = Aggregate::Count(CountAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+        for i in 0..13 {
+            let value = Value::Int(i);
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Int(13)), aggregate);
     }
 }

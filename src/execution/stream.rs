@@ -258,6 +258,17 @@ impl RecordStream for GroupByStream {
 
                             inner.add_record(key.clone(), val)?;
                         }
+                        Aggregate::Count(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, name_opt) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    inner.add_row(key.clone())?;
+                                }
+                            };
+                        }
                         _ => unimplemented!(),
                     }
                 }
