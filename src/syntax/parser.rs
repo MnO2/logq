@@ -5,7 +5,7 @@ use nom::{
     branch::alt,
     bytes::complete::{escaped, tag},
     character::complete::{char, digit1, none_of, one_of, space0, space1},
-    combinator::{cut, map, map_res, opt},
+    combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
     number::complete,
@@ -59,17 +59,18 @@ fn float<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> 
 
 fn integral<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
     alt((
-        map_res(digit1, |digit_str: &str| {
+        map_res(terminated(digit1, not(char('.'))), |digit_str: &str| {
             digit_str.parse::<i32>().map(ast::Value::Integral)
         }),
-        map(preceded(tag("-"), digit1), |digit_str: &str| {
-            ast::Value::Integral(-digit_str.parse::<i32>().unwrap())
-        }),
+        map(
+            terminated(preceded(tag("-"), digit1), not(char('.'))),
+            |digit_str: &str| ast::Value::Integral(-digit_str.parse::<i32>().unwrap()),
+        ),
     ))(i)
 }
 
 fn value<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
-    alt((integral, boolean, float, string_literal))(i)
+    alt((integral, float, boolean, string_literal))(i)
 }
 
 fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
@@ -95,15 +96,11 @@ fn within_group_clause<'a>(i: &'a str) -> IResult<&'a str, ast::WithinGroupClaus
 
 fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
     map(
-        delimited(
-            space0,
-            tuple((
-                identifier,
-                delimited(tag("("), opt(select_expression_list), tag(")")),
-                opt(within_group_clause),
-            )),
-            space0,
-        ),
+        tuple((
+            identifier,
+            delimited(tag("("), opt(select_expression_list), tag(")")),
+            opt(within_group_clause),
+        )),
         |(func_name, select_expr_list_opt, within_group_opt)| {
             if let Some(select_expr_list) = select_expr_list_opt {
                 ast::ValueExpression::FuncCall(func_name.to_string(), select_expr_list, within_group_opt)
@@ -115,16 +112,16 @@ fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseEr
 }
 
 fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
-    alt((
-        func_call,
-        delimited(space0, map(value, ast::ValueExpression::Value), space0),
-        delimited(
-            space0,
+    delimited(
+        space0,
+        alt((
+            parens,
+            func_call,
+            map(value, ast::ValueExpression::Value),
             map(column_name, |n| ast::ValueExpression::Column(n.to_string())),
-            space0,
-        ),
-        parens,
-    ))(i)
+        )),
+        space0,
+    )(i)
 }
 
 fn term<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError<&'a str>> {
@@ -358,6 +355,16 @@ mod test {
     }
 
     #[test]
+    fn test_float() {
+        assert_eq!(float("123.0"), Ok(("", ast::Value::Float(OrderedFloat::from(123.0)))));
+        assert_eq!(
+            float("-123.123"),
+            Ok(("", ast::Value::Float(OrderedFloat::from(-123.123))))
+        );
+        assert_eq!(float("0.9"), Ok(("", ast::Value::Float(OrderedFloat::from(0.9)))));
+    }
+
+    #[test]
     fn test_where_value_expression() {
         let ans = ast::ValueExpression::Operator(
             ast::ValueOperator::Plus,
@@ -521,24 +528,67 @@ mod test {
     }
 
     #[test]
+    fn test_func_call() {
+        let ans = ast::ValueExpression::FuncCall(
+            "foo".to_string(),
+            vec![
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                        "a".to_string(),
+                    )))),
+                    None,
+                ),
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                        ast::Value::Integral(1),
+                    )))),
+                    None,
+                ),
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                        "c".to_string(),
+                    )))),
+                    None,
+                ),
+            ],
+            None,
+        );
+
+        assert_eq!(func_call("foo(a, 1, c)"), Ok(("", ans)));
+
+        let ans = ast::ValueExpression::FuncCall(
+            "percentile_disc".to_string(),
+            vec![ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                    ast::Value::Float(OrderedFloat::from(1.0)),
+                )))),
+                None,
+            )],
+            None,
+        );
+
+        assert_eq!(func_call("percentile_disc(1.0)"), Ok(("", ans)));
+    }
+
+    #[test]
     fn test_select_statement_with_func_call() {
         let select_exprs = vec![
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                None,
+            ),
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
                     "avg".to_string(),
                     vec![ast::SelectExpression::Expression(
                         Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                            "a".to_string(),
+                            "b".to_string(),
                         )))),
                         None,
                     )],
                     None,
-                )))),
-                None,
-            ),
-            ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                    "b".to_string(),
                 )))),
                 None,
             ),
@@ -557,7 +607,10 @@ mod test {
         )));
         let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
 
-        assert_eq!(select_query("select avg(a), b, c from elb where a = 1"), Ok(("", ans)));
+        assert_eq!(
+            select_query("select a, avg(b)   , c from elb where a = 1"),
+            Ok(("", ans))
+        );
     }
 
     #[test]
@@ -632,7 +685,7 @@ mod test {
                     "percentile_disc".to_string(),
                     vec![ast::SelectExpression::Expression(
                         Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                            ast::Value::Boolean(true),
+                            ast::Value::Float(OrderedFloat::from(0.9)),
                         )))),
                         None,
                     )],
@@ -648,7 +701,7 @@ mod test {
         let ans = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None);
 
         assert_eq!(
-            select_query("select a, percentile_disc(true) within group (order by b asc) from elb group by a"),
+            select_query("select a, percentile_disc(0.9) within group (order by b asc) from elb group by a"),
             Ok(("", ans))
         );
     }

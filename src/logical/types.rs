@@ -18,6 +18,7 @@ pub(crate) enum Node {
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
+    OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>)
 }
 
 impl Node {
@@ -78,6 +79,20 @@ impl Node {
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
                 let return_variables = common::merge(variables, child_variables);
                 let node = execution::Node::Limit(*row_count, child);
+                Ok((Box::new(node), return_variables))
+            },
+            Node::OrderBy(column_names, orderings, source) => {
+                let variables = common::empty_variables();
+                let (child, child_variables) = source.physical(physical_plan_creator)?;
+                let return_variables = common::merge(variables, child_variables);
+
+                let mut physical_orderings = Vec::new();
+                for ordering in orderings.iter() {
+                    let physical_ordering = ordering.physical()?;
+                    physical_orderings.push(physical_ordering);
+                }
+
+                let node = execution::Node::OrderBy(column_names.clone(), physical_orderings, child);
                 Ok((Box::new(node), return_variables))
             }
         }
@@ -354,6 +369,21 @@ impl Relation {
             Relation::LessThan => Ok(execution::Relation::LessThan),
             Relation::GreaterEqual => Ok(execution::Relation::GreaterEqual),
             Relation::LessEqual => Ok(execution::Relation::LessEqual),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Ordering {
+    Asc,
+    Desc,
+}
+
+impl Ordering {
+    pub(crate) fn physical(&self) -> PhysicalResult<execution::Ordering> {
+        match self {
+            Ordering::Asc => Ok(execution::Ordering::Asc),
+            Ordering::Desc => Ok(execution::Ordering::Desc),
         }
     }
 }

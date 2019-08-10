@@ -1,10 +1,11 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamError, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, Ordering, StreamError, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use prettytable::Cell;
 use std::collections::hash_set;
-
+use std::collections::VecDeque;
+    
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
     field_names: Vec<VariableName>,
@@ -195,6 +196,28 @@ impl RecordStream for FilterStream {
     }
 }
 
+pub(crate) struct InMemoryStream {
+    pub(crate) data: VecDeque<Record>,
+}
+
+impl InMemoryStream {
+    pub(crate) fn new(data: VecDeque<Record>) -> InMemoryStream {
+        InMemoryStream { data }
+    }
+}
+
+impl RecordStream for InMemoryStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        if let Some(record) = self.data.pop_front() {
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn close(&self) {}
+}
+
 pub(crate) struct GroupByStream {
     keys: Vec<VariableName>,
     variables: Variables,
@@ -314,30 +337,6 @@ mod tests {
     use crate::execution::stream::{Record, RecordStream};
     use crate::execution::types;
     use crate::execution::types::Expression;
-    use std::collections::VecDeque;
-
-    #[derive(Debug)]
-    pub(crate) struct InMemoryStream {
-        pub(crate) data: VecDeque<Record>,
-    }
-
-    impl InMemoryStream {
-        pub(crate) fn new(data: VecDeque<Record>) -> InMemoryStream {
-            InMemoryStream { data }
-        }
-    }
-
-    impl RecordStream for InMemoryStream {
-        fn next(&mut self) -> StreamResult<Option<Record>> {
-            if let Some(record) = self.data.pop_front() {
-                Ok(Some(record))
-            } else {
-                Ok(None)
-            }
-        }
-
-        fn close(&self) {}
-    }
 
     #[test]
     fn test_limit_stream() {

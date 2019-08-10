@@ -1,8 +1,9 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{FilterStream, GroupByStream, LimitStream, LogFileStream, MapStream, RecordStream};
+use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
+use std::collections::VecDeque;
 use std::io;
 use std::result;
 
@@ -32,6 +33,8 @@ pub enum CreateStreamError {
     Io,
     #[fail(display = "Reader Error")]
     Reader,
+    #[fail(display = "Stream Error")]
+    Stream,
 }
 
 impl From<io::Error> for CreateStreamError {
@@ -43,6 +46,12 @@ impl From<io::Error> for CreateStreamError {
 impl From<ReaderError> for CreateStreamError {
     fn from(_: ReaderError) -> CreateStreamError {
         CreateStreamError::Reader
+    }
+}
+
+impl From<StreamError> for CreateStreamError {
+    fn from(_: StreamError) -> CreateStreamError {
+        CreateStreamError::Stream
     }
 }
 
@@ -114,6 +123,12 @@ impl From<EvaluateError> for ExpressionError {
     fn from(_: EvaluateError) -> ExpressionError {
         ExpressionError::KeyNotFound
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Ordering {
+    Asc,
+    Desc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,6 +309,7 @@ pub(crate) enum Node {
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
+    OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>),
 }
 
 impl Node {
@@ -337,6 +353,52 @@ impl Node {
             Node::Limit(row_count, source) => {
                 let record_stream = source.get(variables.clone())?;
                 let stream = LimitStream::new(*row_count, variables, record_stream);
+                Ok(Box::new(stream))
+            }
+            Node::OrderBy(column_names, orderings, source) => {
+                let mut record_stream = source.get(variables.clone())?;
+                let mut records = Vec::new();
+
+                while let Some(record) = record_stream.next()? {
+                    records.push(record);
+                }
+
+                records.sort_by(|a, b| {
+                    let a_variables = a.to_variables();
+                    let b_varialbes = b.to_variables();
+
+                    for idx in 0..column_names.len() {
+                        let column_name = &column_names[idx];
+                        let curr_ordering = &orderings[idx];
+
+                        let a_value = a_variables.get(column_name).unwrap();
+                        let b_value = b_varialbes.get(column_name).unwrap();
+
+                        match (a_value, b_value) {
+                            (Value::Int(i1), Value::Int(i2)) => match curr_ordering {
+                                Ordering::Asc => {
+                                    return i1.cmp(i2);
+                                }
+                                Ordering::Desc => {
+                                    return i2.cmp(i1);
+                                }
+                            },
+                            (Value::String(s1), Value::String(s2)) => match curr_ordering {
+                                Ordering::Asc => {
+                                    return s1.cmp(s2);
+                                }
+                                Ordering::Desc => {
+                                    return s2.cmp(s1);
+                                }
+                            },
+                            _ => unimplemented!(),
+                        }
+                    }
+
+                    std::cmp::Ordering::Equal
+                });
+
+                let stream = InMemoryStream::new(VecDeque::from(records));
                 Ok(Box::new(stream))
             }
         }
