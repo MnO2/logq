@@ -74,7 +74,7 @@ impl Node {
                 Ok((Box::new(node), return_variables))
             }
             Node::Limit(row_count, source) => {
-                let mut variables = common::empty_variables();
+                let variables = common::empty_variables();
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
                 let return_variables = common::merge(variables, child_variables);
                 let node = execution::Node::Limit(*row_count, child);

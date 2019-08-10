@@ -500,6 +500,20 @@ mod tests {
     }
 
     #[test]
+    fn test_avg_aggregate_with_many_elements() {
+        let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+
+        for i in 1..=10 {
+            let value = Value::Float(OrderedFloat::from(i as f32));
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Float(OrderedFloat::from(5.5))), aggregate);
+    }
+
+    #[test]
     fn test_count_aggregate() {
         let mut iter = Aggregate::Count(CountAggregate::new(), Named::Star);
         let tuple = vec![Value::String("key".to_string())];
