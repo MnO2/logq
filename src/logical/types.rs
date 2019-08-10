@@ -314,6 +314,22 @@ impl Aggregate {
                 let aggregate = execution::Aggregate::Count(count_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
+            Aggregate::First(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let first_aggregate = execution::FirstAggregate::new();
+                let aggregate = execution::Aggregate::First(first_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
             _ => unimplemented!(),
         }
     }

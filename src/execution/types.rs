@@ -364,7 +364,7 @@ impl NamedAggregate {
 pub(crate) enum Aggregate {
     Avg(AvgAggregate, Named),
     Count(CountAggregate, Named),
-    First,
+    First(FirstAggregate, Named),
     Last,
     Max,
     Min,
@@ -376,6 +376,7 @@ impl Aggregate {
         match self {
             Aggregate::Avg(agg, _) => agg.add_record(key, value),
             Aggregate::Count(agg, _) => agg.add_record(key, value),
+            Aggregate::First(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
@@ -383,6 +384,7 @@ impl Aggregate {
         match self {
             Aggregate::Avg(agg, _) => agg.get_aggregated(key),
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
+            Aggregate::First(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
     }
@@ -484,6 +486,35 @@ impl CountAggregate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FirstAggregate {
+    pub(crate) firsts: HashMap<Tuple, Value>,
+}
+
+impl FirstAggregate {
+    pub(crate) fn new() -> Self {
+        FirstAggregate { firsts: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        if let Some(_) = self.firsts.get(&key) {
+            //do nothing
+            Ok(())
+        } else {
+            self.firsts.insert(key.clone(), value);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+        if let Some(first) = self.firsts.get(key) {
+            Ok(first.clone())
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +555,18 @@ mod tests {
 
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(Value::Int(13)), aggregate);
+    }
+
+    #[test]
+    fn test_first_aggregate() {
+        let mut iter = Aggregate::First(FirstAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+        for i in 0..13 {
+            let value = Value::Int(i);
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Int(0)), aggregate);
     }
 }
