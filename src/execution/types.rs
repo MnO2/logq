@@ -368,7 +368,7 @@ pub(crate) enum Aggregate {
     Last(LastAggregate, Named),
     Max,
     Min,
-    Sum,
+    Sum(SumAggregate, Named),
 }
 
 impl Aggregate {
@@ -378,6 +378,7 @@ impl Aggregate {
             Aggregate::Count(agg, _) => agg.add_record(key, value),
             Aggregate::First(agg, _) => agg.add_record(key, value),
             Aggregate::Last(agg, _) => agg.add_record(key, value),
+            Aggregate::Sum(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
@@ -387,6 +388,7 @@ impl Aggregate {
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
             Aggregate::First(agg, _) => agg.get_aggregated(key),
             Aggregate::Last(agg, _) => agg.get_aggregated(key),
+            Aggregate::Sum(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
     }
@@ -433,6 +435,47 @@ impl AvgAggregate {
 
     pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
         if let Some(&average) = self.averages.get(key) {
+            Ok(Value::Float(average))
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SumAggregate {
+    pub(crate) sums: HashMap<Tuple, OrderedFloat<f32>>,
+}
+
+impl SumAggregate {
+    pub(crate) fn new() -> Self {
+        SumAggregate { sums: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        let new_value: OrderedFloat<f32> = match value {
+            Value::Int(i) => OrderedFloat::from(i as f32),
+            Value::Float(f) => f,
+            _ => {
+                return Err(AggregateError::InvalidType);
+            }
+        };
+
+        if let Some(&average) = self.sums.get(&key) {
+            let f32_average: f32 = average.into();
+            let f32_new_value: f32 = new_value.into();
+            let new_average: f32 = f32_average + f32_new_value;
+            self.sums.insert(key.clone(), OrderedFloat::from(new_average));
+            Ok(())
+        } else {
+            self.sums.insert(key.clone(), new_value);
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+        if let Some(&average) = self.sums.get(key) {
             Ok(Value::Float(average))
         } else {
             Err(AggregateError::KeyNotFound)
@@ -613,4 +656,19 @@ mod tests {
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(Value::Int(12)), aggregate);
     }
+
+    #[test]
+    fn test_sum_aggregate_with_many_elements() {
+        let mut iter = Aggregate::Sum(SumAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+
+        for i in 1..=10 {
+            let value = Value::Float(OrderedFloat::from(i as f32));
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Float(OrderedFloat::from(55.0))), aggregate);
+    }
+
 }
