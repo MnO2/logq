@@ -196,7 +196,6 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
 
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     let mut root = types::Node::DataSource(data_source);
-
     let mut named_aggregates = Vec::new();
     if !query.select_exprs.is_empty() {
         let mut named_list: Vec<types::Named> = Vec::new();
@@ -244,9 +243,14 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         root = types::Node::Filter(filter_formula, Box::new(root));
     }
 
-    if let Some(group_by) = query.group_by_exprs_opt {
-        let fields = group_by.exprs.clone();
-        root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+    if !named_aggregates.is_empty() {
+        if let Some(group_by) = query.group_by_exprs_opt {
+            let fields = group_by.exprs.clone();
+            root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+        } else {
+            let fields = Vec::new();
+            root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+        }
     }
 
     if let Some(limit_expr) = query.limit_expr_opt {

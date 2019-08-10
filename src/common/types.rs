@@ -12,7 +12,6 @@ pub(crate) enum Value {
 }
 
 pub(crate) type Tuple = Vec<Value>;
-pub(crate) type TupleRef<'a> = &'a [Value];
 pub(crate) type VariableName = String;
 pub(crate) type Variables = HashMap<VariableName, Value>;
 

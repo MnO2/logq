@@ -200,7 +200,7 @@ pub(crate) struct GroupByStream {
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
     source: Box<dyn RecordStream>,
-    group_iterator: Option<hash_set::IntoIter<Tuple>>,
+    group_iterator: Option<hash_set::IntoIter<Option<Tuple>>>,
 }
 
 impl<'a> GroupByStream {
@@ -223,14 +223,14 @@ impl<'a> GroupByStream {
 impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if self.group_iterator.is_none() {
-            let mut groups: hash_set::HashSet<Tuple> = hash_set::HashSet::new();
+            let mut groups: hash_set::HashSet<Option<Tuple>> = hash_set::HashSet::new();
             while let Some(record) = self.source.next()? {
                 let variables = common::types::merge(self.variables.clone(), record.to_variables());
-                if self.keys.len() == 0 {
-                    return Err(StreamError::GroupByZeroField);
-                }
-
-                let key = record.get(&self.keys);
+                let key = if self.keys.len() == 0 {
+                    None
+                } else {
+                    Some(record.get(&self.keys))
+                };
 
                 groups.insert(key.clone());
                 for named_agg in self.aggregates.iter_mut() {

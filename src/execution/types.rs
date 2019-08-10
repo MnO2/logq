@@ -1,6 +1,6 @@
 use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{FilterStream, GroupByStream, LimitStream, LogFileStream, MapStream, RecordStream};
-use crate::common::types::{DataSource, Tuple, TupleRef, Value, VariableName, Variables};
+use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::io;
@@ -372,7 +372,7 @@ pub(crate) enum Aggregate {
 }
 
 impl Aggregate {
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         match self {
             Aggregate::Avg(agg, _) => agg.add_record(key, value),
             Aggregate::Count(agg, _) => agg.add_record(key, value),
@@ -384,7 +384,7 @@ impl Aggregate {
             _ => unimplemented!(),
         }
     }
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         match self {
             Aggregate::Avg(agg, _) => agg.get_aggregated(key),
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
@@ -400,8 +400,8 @@ impl Aggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AvgAggregate {
-    pub(crate) averages: HashMap<Tuple, OrderedFloat<f32>>,
-    pub(crate) counts: HashMap<Tuple, i64>,
+    pub(crate) averages: HashMap<Option<Tuple>, OrderedFloat<f32>>,
+    pub(crate) counts: HashMap<Option<Tuple>, i64>,
 }
 
 impl AvgAggregate {
@@ -412,7 +412,7 @@ impl AvgAggregate {
         }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         let new_value: OrderedFloat<f32> = match value {
             Value::Int(i) => OrderedFloat::from(i as f32),
             Value::Float(f) => f,
@@ -437,7 +437,7 @@ impl AvgAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&average) = self.averages.get(key) {
             Ok(Value::Float(average))
         } else {
@@ -448,7 +448,7 @@ impl AvgAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SumAggregate {
-    pub(crate) sums: HashMap<Tuple, OrderedFloat<f32>>,
+    pub(crate) sums: HashMap<Option<Tuple>, OrderedFloat<f32>>,
 }
 
 impl SumAggregate {
@@ -456,7 +456,7 @@ impl SumAggregate {
         SumAggregate { sums: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         let new_value: OrderedFloat<f32> = match value {
             Value::Int(i) => OrderedFloat::from(i as f32),
             Value::Float(f) => f,
@@ -478,7 +478,7 @@ impl SumAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&average) = self.sums.get(key) {
             Ok(Value::Float(average))
         } else {
@@ -489,7 +489,7 @@ impl SumAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CountAggregate {
-    pub(crate) counts: HashMap<Tuple, i64>,
+    pub(crate) counts: HashMap<Option<Tuple>, i64>,
 }
 
 impl CountAggregate {
@@ -497,7 +497,7 @@ impl CountAggregate {
         CountAggregate { counts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         if let Value::Null = value {
             //Null value doesn't contribute to the total count
             return Ok(());
@@ -514,7 +514,7 @@ impl CountAggregate {
         }
     }
 
-    pub(crate) fn add_row(&mut self, key: Tuple) -> AggregateResult<()> {
+    pub(crate) fn add_row(&mut self, key: Option<Tuple>) -> AggregateResult<()> {
         if let Some(&count) = self.counts.get(&key) {
             let new_count = count + 1;
             self.counts.insert(key.clone(), new_count);
@@ -526,7 +526,7 @@ impl CountAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&counts) = self.counts.get(key) {
             Ok(Value::Int(counts as i32))
         } else {
@@ -537,7 +537,7 @@ impl CountAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MaxAggregate {
-    pub(crate) maxs: HashMap<Tuple, Value>,
+    pub(crate) maxs: HashMap<Option<Tuple>, Value>,
 }
 
 impl MaxAggregate {
@@ -545,7 +545,7 @@ impl MaxAggregate {
         MaxAggregate { maxs: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         if let Some(candidate) = self.maxs.get(&key) {
             let less_than = match (candidate, &value) {
                 (Value::Int(i1), Value::Int(i2)) => *i1 < *i2,
@@ -566,7 +566,7 @@ impl MaxAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(first) = self.maxs.get(key) {
             Ok(first.clone())
         } else {
@@ -577,7 +577,7 @@ impl MaxAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MinAggregate {
-    pub(crate) mins: HashMap<Tuple, Value>,
+    pub(crate) mins: HashMap<Option<Tuple>, Value>,
 }
 
 impl MinAggregate {
@@ -585,7 +585,7 @@ impl MinAggregate {
         MinAggregate { mins: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         if let Some(candidate) = self.mins.get(&key) {
             let greater_than = match (candidate, &value) {
                 (Value::Int(i1), Value::Int(i2)) => *i1 > *i2,
@@ -606,7 +606,7 @@ impl MinAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(first) = self.mins.get(key) {
             Ok(first.clone())
         } else {
@@ -617,7 +617,7 @@ impl MinAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FirstAggregate {
-    pub(crate) firsts: HashMap<Tuple, Value>,
+    pub(crate) firsts: HashMap<Option<Tuple>, Value>,
 }
 
 impl FirstAggregate {
@@ -625,7 +625,7 @@ impl FirstAggregate {
         FirstAggregate { firsts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         if let Some(_) = self.firsts.get(&key) {
             //do nothing
             Ok(())
@@ -635,7 +635,7 @@ impl FirstAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(first) = self.firsts.get(key) {
             Ok(first.clone())
         } else {
@@ -646,7 +646,7 @@ impl FirstAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LastAggregate {
-    pub(crate) lasts: HashMap<Tuple, Value>,
+    pub(crate) lasts: HashMap<Option<Tuple>, Value>,
 }
 
 impl LastAggregate {
@@ -654,7 +654,7 @@ impl LastAggregate {
         LastAggregate { lasts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         if let Some(last) = self.lasts.get(&key) {
             self.lasts.insert(key.clone(), value);
             Ok(())
@@ -664,7 +664,7 @@ impl LastAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(last) = self.lasts.get(key) {
             Ok(last.clone())
         } else {
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn test_avg_aggregate_with_one_element() {
         let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
         let value = Value::Float(OrderedFloat::from(5.0));
 
         let _ = iter.add_record(tuple.clone(), value.clone());
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn test_avg_aggregate_with_many_elements() {
         let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
 
         for i in 1..=10 {
             let value = Value::Float(OrderedFloat::from(i as f32));
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn test_count_aggregate() {
         let mut iter = Aggregate::Count(CountAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(tuple.clone(), value);
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn test_first_aggregate() {
         let mut iter = Aggregate::First(FirstAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(tuple.clone(), value);
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn test_last_aggregate() {
         let mut iter = Aggregate::Last(LastAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(tuple.clone(), value);
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_sum_aggregate_with_many_elements() {
         let mut iter = Aggregate::Sum(SumAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
 
         for i in 1..=10 {
             let value = Value::Float(OrderedFloat::from(i as f32));
@@ -758,7 +758,7 @@ mod tests {
     #[test]
     fn test_max_aggregate() {
         let mut iter = Aggregate::Max(MaxAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(tuple.clone(), value);
@@ -771,7 +771,7 @@ mod tests {
     #[test]
     fn test_min_aggregate() {
         let mut iter = Aggregate::Min(MinAggregate::new(), Named::Star);
-        let tuple = vec![Value::String("key".to_string())];
+        let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(tuple.clone(), value);
