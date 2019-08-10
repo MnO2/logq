@@ -367,7 +367,7 @@ pub(crate) enum Aggregate {
     First(FirstAggregate, Named),
     Last(LastAggregate, Named),
     Max(MaxAggregate, Named),
-    Min,
+    Min(MinAggregate, Named),
     Sum(SumAggregate, Named),
 }
 
@@ -380,6 +380,7 @@ impl Aggregate {
             Aggregate::Last(agg, _) => agg.add_record(key, value),
             Aggregate::Sum(agg, _) => agg.add_record(key, value),
             Aggregate::Max(agg, _) => agg.add_record(key, value),
+            Aggregate::Min(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
@@ -391,6 +392,7 @@ impl Aggregate {
             Aggregate::Last(agg, _) => agg.get_aggregated(key),
             Aggregate::Sum(agg, _) => agg.get_aggregated(key),
             Aggregate::Max(agg, _) => agg.get_aggregated(key),
+            Aggregate::Min(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
     }
@@ -574,6 +576,46 @@ impl MaxAggregate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MinAggregate {
+    pub(crate) mins: HashMap<Tuple, Value>,
+}
+
+impl MinAggregate {
+    pub(crate) fn new() -> Self {
+        MinAggregate { mins: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        if let Some(candidate) = self.mins.get(&key) {
+            let greater_than = match (candidate, &value) {
+                (Value::Int(i1), Value::Int(i2)) => *i1 > *i2,
+                (Value::Float(f1), Value::Float(f2)) => *f1 > *f2,
+                _ => {
+                    return Err(AggregateError::InvalidType);
+                }
+            };
+
+            if greater_than {
+                self.mins.insert(key.clone(), value);
+            }
+
+            Ok(())
+        } else {
+            self.mins.insert(key.clone(), value);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+        if let Some(first) = self.mins.get(key) {
+            Ok(first.clone())
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FirstAggregate {
     pub(crate) firsts: HashMap<Tuple, Value>,
 }
@@ -724,5 +766,18 @@ mod tests {
 
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(Value::Int(12)), aggregate);
+    }
+
+    #[test]
+    fn test_min_aggregate() {
+        let mut iter = Aggregate::Min(MinAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+        for i in 0..13 {
+            let value = Value::Int(i);
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Int(0)), aggregate);
     }
 }

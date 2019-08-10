@@ -225,6 +225,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                     types::Aggregate::Max(named) => {
                         named_list.push(named);
                     }
+                    types::Aggregate::Min(named) => {
+                        named_list.push(named);
+                    }
                     _ => unimplemented!(),
                 }
             } else {
