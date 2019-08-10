@@ -85,9 +85,8 @@ impl From<execution::types::StreamError> for AppError {
     }
 }
 
-fn run(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
+fn run(query_str: &str, data_source: common::types::DataSource, explain_mode: bool) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
-    dbg!(&rest_of_str);
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed);
     }
@@ -95,20 +94,24 @@ fn run(query_str: &str, data_source: common::types::DataSource) -> AppResult<()>
     if select_stmt.table_name != "elb" {
         return Err(AppError::InvalidLogFileFormat);
     }
-    dbg!(&select_stmt);
     let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
-    dbg!(&node);
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
-    dbg!(&physical_plan);
-    let mut stream = physical_plan.get(variables)?;
 
-    let mut table = Table::new();
-    while let Some(record) = stream.next()? {
-        table.add_row(Row::new(record.to_row()));
+    if explain_mode {
+        println!("Query Plan:");
+        println!("{:?}", physical_plan);
+        Ok(())
+    } else {
+        let mut stream = physical_plan.get(variables)?;
+
+        let mut table = Table::new();
+        while let Some(record) = stream.next()? {
+            table.add_row(Row::new(record.to_row()));
+        }
+        table.printstd();
+        Ok(())
     }
-    table.printstd();
-    Ok(())
 }
 
 fn main() {
@@ -121,11 +124,23 @@ fn main() {
                 let result = if let Some(filename) = sub_m.value_of("file_to_select") {
                     let path = Path::new(filename);
                     let data_source = common::types::DataSource::File(path.to_path_buf());
-                    run(query_str, data_source)
+                    run(query_str, data_source, false)
                 } else {
                     let data_source = common::types::DataSource::Stdin;
-                    run(query_str, data_source)
+                    run(query_str, data_source, false)
                 };
+
+                if let Err(e) = result {
+                    println!("{}", e);
+                }
+            } else {
+                sub_m.usage();
+            }
+        }
+        ("explain", Some(sub_m)) => {
+            if let Some(query_str) = sub_m.value_of("query") {
+                let data_source = common::types::DataSource::Stdin;
+                let result = run(query_str, data_source, true);
 
                 if let Err(e) = result {
                     println!("{}", e);

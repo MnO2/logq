@@ -12,6 +12,12 @@ subcommands:
           - file_to_select:
               help: file to select against
               index: 2
+    - explain:
+        about: dump the query plan graph
+        args:
+          - query:
+              help: query string
+              index: 1
     - shema:
         about: show the schema for log file format
         args:
