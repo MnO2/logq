@@ -121,13 +121,14 @@ fn main() {
     match app_m.subcommand() {
         ("query", Some(sub_m)) => {
             if let Some(query_str) = sub_m.value_of("query") {
+                let lower_case_query_str = query_str.to_ascii_lowercase();
                 let result = if let Some(filename) = sub_m.value_of("file_to_select") {
                     let path = Path::new(filename);
                     let data_source = common::types::DataSource::File(path.to_path_buf());
-                    run(query_str, data_source, false)
+                    run(&*lower_case_query_str, data_source, false)
                 } else {
                     let data_source = common::types::DataSource::Stdin;
-                    run(query_str, data_source, false)
+                    run(&*lower_case_query_str, data_source, false)
                 };
 
                 if let Err(e) = result {
@@ -139,8 +140,9 @@ fn main() {
         }
         ("explain", Some(sub_m)) => {
             if let Some(query_str) = sub_m.value_of("query") {
+                let lower_case_query_str = query_str.to_ascii_lowercase();
                 let data_source = common::types::DataSource::Stdin;
-                let result = run(query_str, data_source, true);
+                let result = run(&*lower_case_query_str, data_source, true);
 
                 if let Err(e) = result {
                     println!("{}", e);
