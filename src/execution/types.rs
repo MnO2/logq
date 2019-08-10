@@ -1,6 +1,6 @@
 use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{FilterStream, GroupByStream, LimitStream, LogFileStream, MapStream, RecordStream};
-use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
+use crate::common::types::{DataSource, Tuple, TupleRef, Value, VariableName, Variables};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::io;
@@ -382,7 +382,7 @@ impl Aggregate {
             _ => unimplemented!(),
         }
     }
-    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         match self {
             Aggregate::Avg(agg, _) => agg.get_aggregated(key),
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
@@ -433,7 +433,7 @@ impl AvgAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         if let Some(&average) = self.averages.get(key) {
             Ok(Value::Float(average))
         } else {
@@ -474,7 +474,7 @@ impl SumAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         if let Some(&average) = self.sums.get(key) {
             Ok(Value::Float(average))
         } else {
@@ -522,7 +522,7 @@ impl CountAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         if let Some(&counts) = self.counts.get(key) {
             Ok(Value::Int(counts as i32))
         } else {
@@ -551,7 +551,7 @@ impl FirstAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         if let Some(first) = self.firsts.get(key) {
             Ok(first.clone())
         } else {
@@ -580,7 +580,7 @@ impl LastAggregate {
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         if let Some(last) = self.lasts.get(key) {
             Ok(last.clone())
         } else {
