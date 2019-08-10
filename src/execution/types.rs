@@ -99,7 +99,7 @@ impl From<ReaderError> for StreamError {
 
 impl From<AggregateError> for StreamError {
     fn from(_: AggregateError) -> StreamError {
-        StreamError::Reader
+        StreamError::Aggregate
     }
 }
 
@@ -436,6 +436,7 @@ pub(crate) enum Aggregate {
     Max(MaxAggregate, Named),
     Min(MinAggregate, Named),
     Sum(SumAggregate, Named),
+    PercentileDisc(PercentileDiscAggregate, String),
 }
 
 impl Aggregate {
@@ -448,6 +449,7 @@ impl Aggregate {
             Aggregate::Sum(agg, _) => agg.add_record(key, value),
             Aggregate::Max(agg, _) => agg.add_record(key, value),
             Aggregate::Min(agg, _) => agg.add_record(key, value),
+            Aggregate::PercentileDisc(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
@@ -460,8 +462,54 @@ impl Aggregate {
             Aggregate::Sum(agg, _) => agg.get_aggregated(key),
             Aggregate::Max(agg, _) => agg.get_aggregated(key),
             Aggregate::Min(agg, _) => agg.get_aggregated(key),
+            Aggregate::PercentileDisc(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PercentileDiscAggregate {
+    pub(crate) partitions: HashMap<Option<Tuple>, Vec<Value>>,
+    pub(crate) percentile: OrderedFloat<f32>,
+    pub(crate) ordering: Ordering,
+}
+
+impl PercentileDiscAggregate {
+    pub(crate) fn new(percentile: OrderedFloat<f32>, ordering: Ordering) -> Self {
+        PercentileDiscAggregate {
+            partitions: HashMap::new(),
+            percentile,
+            ordering,
+        }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+        let v = self.partitions.entry(key).or_insert(Vec::new());
+        v.push(value);
+
+        Ok(())
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
+        //FIXME: expensive operation
+        let mut v = self.partitions.get(key).unwrap().clone();
+        v.sort_by(|a, b| match (a, b) {
+            (Value::Int(i1), Value::Int(i2)) => match self.ordering {
+                Ordering::Asc => i1.cmp(i2),
+                Ordering::Desc => i2.cmp(i1),
+            },
+            (Value::String(s1), Value::String(s2)) => match self.ordering {
+                Ordering::Asc => s1.cmp(s2),
+                Ordering::Desc => s2.cmp(s1),
+            },
+            _ => unimplemented!(),
+        });
+
+        let f32_percentile: f32 = self.percentile.into();
+        let idx: usize = ((v.len() as f32) * f32_percentile) as usize;
+        let ans = v[idx].clone();
+        Ok(ans)
     }
 }
 

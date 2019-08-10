@@ -5,7 +5,6 @@ use crate::common::types::{Tuple, Value, VariableName, Variables};
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
-    
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
     field_names: Vec<VariableName>,
@@ -278,6 +277,65 @@ impl RecordStream for GroupByStream {
                                     inner.add_row(key.clone())?;
                                 }
                             };
+                        }
+                        Aggregate::First(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, name_opt) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    unimplemented!();
+                                }
+                            };
+                        }
+                        Aggregate::Last(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, name_opt) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    unimplemented!();
+                                }
+                            };
+                        }
+                        Aggregate::Max(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, name_opt) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    unimplemented!();
+                                }
+                            };
+                        }
+                        Aggregate::Min(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, name_opt) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    unimplemented!();
+                                }
+                            };
+                        }
+                        Aggregate::Sum(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, name_opt) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    unimplemented!();
+                                }
+                            };
+                        }
+                        Aggregate::PercentileDisc(ref mut inner, column_name) => {
+                            let val = variables.get(column_name).unwrap();
+                            inner.add_record(key.clone(), val.clone())?;
                         }
                         _ => unimplemented!(),
                     }

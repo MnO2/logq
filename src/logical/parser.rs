@@ -1,6 +1,7 @@
 use super::types;
 use crate::common::types as common;
 use crate::syntax::ast;
+use ordered_float::OrderedFloat;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -176,13 +177,47 @@ fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
     }
 }
 
+fn parse_ordering(ordering: ast::Ordering) -> ParseResult<types::Ordering> {
+    match ordering {
+        ast::Ordering::Desc => Ok(types::Ordering::Desc),
+        ast::Ordering::Asc => Ok(types::Ordering::Asc),
+    }
+}
+
 fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::NamedAggregate> {
     match select_expr {
         ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
             ast::Expression::Value(value_expr) => match &**value_expr {
                 ast::ValueExpression::FuncCall(func_name, args, within_group_opt) => {
                     let named = *parse_expression(&args[0])?;
-                    let aggregate = from_str(&**func_name, named)?;
+
+                    let aggregate = if let Some(within_group_clause) = within_group_opt {
+                        match named {
+                            types::Named::Expression(expr, _) => match expr {
+                                types::Expression::Constant(val) => match val {
+                                    common::Value::Float(f) => {
+                                        let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
+                                        types::Aggregate::PercentileDisc(
+                                            f,
+                                            within_group_clause.ordering_term.column_name.clone(),
+                                            o,
+                                        )
+                                    }
+                                    _ => {
+                                        unimplemented!();
+                                    }
+                                },
+                                _ => {
+                                    unimplemented!();
+                                }
+                            },
+                            _ => {
+                                unimplemented!();
+                            }
+                        }
+                    } else {
+                        from_str(&**func_name, named)?
+                    };
                     let named_aggregate = types::NamedAggregate::new(aggregate, name_opt.clone());
                     Ok(named_aggregate)
                 }
@@ -227,6 +262,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                     types::Aggregate::Min(named) => {
                         named_list.push(named);
                     }
+                    types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(
+                        types::Expression::Variable(column_name.clone()),
+                        Some(column_name.clone()),
+                    )),
                     _ => unimplemented!(),
                 }
             } else {

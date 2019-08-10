@@ -1,6 +1,7 @@
 use crate::common::types as common;
 use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
+use ordered_float::OrderedFloat;
 use std::result;
 
 pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
@@ -18,7 +19,7 @@ pub(crate) enum Node {
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
-    OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>)
+    OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>),
 }
 
 impl Node {
@@ -80,7 +81,7 @@ impl Node {
                 let return_variables = common::merge(variables, child_variables);
                 let node = execution::Node::Limit(*row_count, child);
                 Ok((Box::new(node), return_variables))
-            },
+            }
             Node::OrderBy(column_names, orderings, source) => {
                 let variables = common::empty_variables();
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
@@ -289,6 +290,7 @@ pub(crate) enum Aggregate {
     Max(Named),
     Min(Named),
     Sum(Named),
+    PercentileDisc(OrderedFloat<f32>, VariableName, Ordering),
 }
 
 impl Aggregate {
@@ -343,6 +345,14 @@ impl Aggregate {
 
                 let first_aggregate = execution::FirstAggregate::new();
                 let aggregate = execution::Aggregate::First(first_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
+            Aggregate::PercentileDisc(percentile, column_name, ordering) => {
+                let variables = common::empty_variables();
+                let physical_ordering = ordering.physical()?;
+                
+                let percentile_disc_aggregate = execution::PercentileDiscAggregate::new(percentile.clone(), physical_ordering);
+                let aggregate = execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.clone());
                 Ok((aggregate, variables))
             }
             _ => unimplemented!(),
