@@ -366,7 +366,7 @@ pub(crate) enum Aggregate {
     Count(CountAggregate, Named),
     First(FirstAggregate, Named),
     Last(LastAggregate, Named),
-    Max,
+    Max(MaxAggregate, Named),
     Min,
     Sum(SumAggregate, Named),
 }
@@ -379,6 +379,7 @@ impl Aggregate {
             Aggregate::First(agg, _) => agg.add_record(key, value),
             Aggregate::Last(agg, _) => agg.add_record(key, value),
             Aggregate::Sum(agg, _) => agg.add_record(key, value),
+            Aggregate::Max(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
@@ -389,6 +390,7 @@ impl Aggregate {
             Aggregate::First(agg, _) => agg.get_aggregated(key),
             Aggregate::Last(agg, _) => agg.get_aggregated(key),
             Aggregate::Sum(agg, _) => agg.get_aggregated(key),
+            Aggregate::Max(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
     }
@@ -525,6 +527,46 @@ impl CountAggregate {
     pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
         if let Some(&counts) = self.counts.get(key) {
             Ok(Value::Int(counts as i32))
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MaxAggregate {
+    pub(crate) maxs: HashMap<Tuple, Value>,
+}
+
+impl MaxAggregate {
+    pub(crate) fn new() -> Self {
+        MaxAggregate { maxs: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        if let Some(candidate) = self.maxs.get(&key) {
+            let less_than = match (candidate, &value) {
+                (Value::Int(i1), Value::Int(i2)) => *i1 < *i2,
+                (Value::Float(f1), Value::Float(f2)) => *f1 < *f2,
+                _ => {
+                    return Err(AggregateError::InvalidType);
+                }
+            };
+
+            if less_than {
+                self.maxs.insert(key.clone(), value);
+            }
+
+            Ok(())
+        } else {
+            self.maxs.insert(key.clone(), value);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: TupleRef) -> AggregateResult<Value> {
+        if let Some(first) = self.maxs.get(key) {
+            Ok(first.clone())
         } else {
             Err(AggregateError::KeyNotFound)
         }
@@ -671,4 +713,16 @@ mod tests {
         assert_eq!(Ok(Value::Float(OrderedFloat::from(55.0))), aggregate);
     }
 
+    #[test]
+    fn test_max_aggregate() {
+        let mut iter = Aggregate::Max(MaxAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+        for i in 0..13 {
+            let value = Value::Int(i);
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Int(12)), aggregate);
+    }
 }
