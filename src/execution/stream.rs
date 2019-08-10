@@ -196,7 +196,7 @@ impl RecordStream for FilterStream {
 }
 
 pub(crate) struct GroupByStream {
-    fields: Vec<VariableName>,
+    keys: Vec<VariableName>,
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
     source: Box<dyn RecordStream>,
@@ -205,13 +205,13 @@ pub(crate) struct GroupByStream {
 
 impl<'a> GroupByStream {
     pub(crate) fn new(
-        fields: Vec<VariableName>,
+        keys: Vec<VariableName>,
         variables: Variables,
         aggregates: Vec<NamedAggregate>,
         source: Box<dyn RecordStream>,
     ) -> Self {
         GroupByStream {
-            fields,
+            keys,
             variables,
             aggregates,
             source,
@@ -222,28 +222,15 @@ impl<'a> GroupByStream {
 
 impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        if let Some(ref mut iter) = self.group_iterator {
-            if let Some(key) = iter.next() {
-                let mut values: Vec<Value> = Vec::new();
-                for named_agg in self.aggregates.iter() {
-                    let v = named_agg.aggregate.get_aggregated(&key)?;
-                    values.push(v);
-                }
-
-                let record = Record::new(self.fields.clone(), values);
-                Ok(Some(record))
-            } else {
-                Ok(None)
-            }
-        } else {
+        if self.group_iterator.is_none() {
             let mut groups: hash_set::HashSet<Tuple> = hash_set::HashSet::new();
             while let Some(record) = self.source.next()? {
                 let variables = common::types::merge(self.variables.clone(), record.to_variables());
-                if self.fields.len() == 0 {
+                if self.keys.len() == 0 {
                     return Err(StreamError::GroupByZeroField);
                 }
 
-                let key = record.get(&self.fields);
+                let key = record.get(&self.keys);
 
                 groups.insert(key.clone());
                 for named_agg in self.aggregates.iter_mut() {
@@ -275,6 +262,26 @@ impl RecordStream for GroupByStream {
             }
 
             self.group_iterator = Some(groups.into_iter());
+        }
+
+        let iter = self.group_iterator.as_mut().unwrap();
+        if let Some(key) = iter.next() {
+            let mut values: Vec<Value> = Vec::new();
+            let mut fields: Vec<VariableName> = Vec::new();
+            for named_agg in self.aggregates.iter() {
+                if let Some(ref field_name) = named_agg.name_opt {
+                    fields.push(field_name.clone());
+                } else {
+                    //FIXME: there should be better choice than empty string
+                    fields.push("".to_string());
+                }
+                let v = named_agg.aggregate.get_aggregated(&key)?;
+                values.push(v);
+            }
+
+            let record = Record::new(self.keys.clone(), values);
+            Ok(Some(record))
+        } else {
             Ok(None)
         }
     }
