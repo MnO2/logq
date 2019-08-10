@@ -365,7 +365,7 @@ pub(crate) enum Aggregate {
     Avg(AvgAggregate, Named),
     Count(CountAggregate, Named),
     First(FirstAggregate, Named),
-    Last,
+    Last(LastAggregate, Named),
     Max,
     Min,
     Sum,
@@ -377,6 +377,7 @@ impl Aggregate {
             Aggregate::Avg(agg, _) => agg.add_record(key, value),
             Aggregate::Count(agg, _) => agg.add_record(key, value),
             Aggregate::First(agg, _) => agg.add_record(key, value),
+            Aggregate::Last(agg, _) => agg.add_record(key, value),
             _ => unimplemented!(),
         }
     }
@@ -385,6 +386,7 @@ impl Aggregate {
             Aggregate::Avg(agg, _) => agg.get_aggregated(key),
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
             Aggregate::First(agg, _) => agg.get_aggregated(key),
+            Aggregate::Last(agg, _) => agg.get_aggregated(key),
             _ => unimplemented!(),
         }
     }
@@ -515,6 +517,35 @@ impl FirstAggregate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LastAggregate {
+    pub(crate) lasts: HashMap<Tuple, Value>,
+}
+
+impl LastAggregate {
+    pub(crate) fn new() -> Self {
+        LastAggregate { lasts: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Tuple, value: Value) -> AggregateResult<()> {
+        if let Some(last) = self.lasts.get(&key) {
+            self.lasts.insert(key.clone(), value);
+            Ok(())
+        } else {
+            self.lasts.insert(key.clone(), value);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Tuple) -> AggregateResult<Value> {
+        if let Some(last) = self.lasts.get(key) {
+            Ok(last.clone())
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +599,18 @@ mod tests {
 
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(Value::Int(0)), aggregate);
+    }
+
+    #[test]
+    fn test_last_aggregate() {
+        let mut iter = Aggregate::Last(LastAggregate::new(), Named::Star);
+        let tuple = vec![Value::String("key".to_string())];
+        for i in 0..13 {
+            let value = Value::Int(i);
+            let _ = iter.add_record(tuple.clone(), value);
+        }
+
+        let aggregate = iter.get_aggregated(&tuple);
+        assert_eq!(Ok(Value::Int(12)), aggregate);
     }
 }

@@ -216,6 +216,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                     types::Aggregate::First(named) => {
                         named_list.push(named);
                     }
+                    types::Aggregate::Last(named) => {
+                        named_list.push(named);
+                    }
                     _ => unimplemented!(),
                 }
             } else {
