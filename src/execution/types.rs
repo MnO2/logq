@@ -321,7 +321,12 @@ impl Node {
                     Ok(Box::new(stream))
                 }
                 DataSource::Stdin => {
-                    unimplemented!();
+                    let reader = ReaderBuilder::new().with_reader(io::stdin());
+                    let stream = LogFileStream {
+                        reader: Box::new(reader),
+                    };
+
+                    Ok(Box::new(stream))
                 }
             },
             Node::GroupBy(fields, named_aggregates, source) => {
