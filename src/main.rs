@@ -26,20 +26,20 @@ pub(crate) type AppResult<T> = result::Result<T, AppError>;
 pub enum AppError {
     #[fail(display = "Syntax Error: {}", _0)]
     Syntax(String),
-    #[fail(display = "Input is Not All Consumed")]
-    InputNotAllConsumed,
+    #[fail(display = "Input is fully consumed, the leftover are \"{}\"", _0)]
+    InputNotAllConsumed(String),
     #[fail(display = "{}", _0)]
     Parse(#[cause] logical::parser::ParseError),
-    #[fail(display = "Physical Plan Error")]
-    PhysicalPlan,
-    #[fail(display = "Create Stream Error")]
-    CreateStream,
-    #[fail(display = "Stream Error")]
-    Stream,
+    #[fail(display = "{}", _0)]
+    PhysicalPlan(#[cause] logical::types::PhysicalPlanError),
+    #[fail(display = "{}", _0)]
+    CreateStream(#[cause] execution::types::CreateStreamError),
+    #[fail(display = "{}", _0)]
+    Stream(#[cause] execution::types::StreamError),
     #[fail(display = "Invalid Log File Format")]
     InvalidLogFileFormat,
-    #[fail(display = "Write to CSV Error")]
-    WriteCsv,
+    #[fail(display = "{}", _0)]
+    WriteCsv(#[cause] csv::Error),
 }
 
 impl From<nom::Err<VerboseError<&str>>> for AppError {
@@ -75,26 +75,26 @@ impl From<logical::parser::ParseError> for AppError {
 }
 
 impl From<logical::types::PhysicalPlanError> for AppError {
-    fn from(_: logical::types::PhysicalPlanError) -> AppError {
-        AppError::PhysicalPlan
+    fn from(err: logical::types::PhysicalPlanError) -> AppError {
+        AppError::PhysicalPlan(err)
     }
 }
 
 impl From<execution::types::CreateStreamError> for AppError {
-    fn from(_: execution::types::CreateStreamError) -> AppError {
-        AppError::CreateStream
+    fn from(err: execution::types::CreateStreamError) -> AppError {
+        AppError::CreateStream(err)
     }
 }
 
 impl From<execution::types::StreamError> for AppError {
-    fn from(_: execution::types::StreamError) -> AppError {
-        AppError::Stream
+    fn from(err: execution::types::StreamError) -> AppError {
+        AppError::Stream(err)
     }
 }
 
 impl From<csv::Error> for AppError {
-    fn from(_: csv::Error) -> AppError {
-        AppError::WriteCsv
+    fn from(err: csv::Error) -> AppError {
+        AppError::WriteCsv(err)
     }
 }
 
@@ -125,7 +125,7 @@ fn run(
 ) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
     if !rest_of_str.is_empty() {
-        return Err(AppError::InputNotAllConsumed);
+        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
 
     if select_stmt.table_name != "elb" {
