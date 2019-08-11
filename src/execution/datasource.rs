@@ -20,7 +20,7 @@ pub(crate) enum DataType {
     Integral,
     Float,
     Host,
-    Url,
+    HttpRequest,
 }
 
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
@@ -125,7 +125,7 @@ impl ClassicLoadBalancerLogField {
             DataType::String,
             DataType::Integral,
             DataType::Integral,
-            DataType::String,
+            DataType::HttpRequest,
             DataType::String,
             DataType::String,
             DataType::String,
@@ -153,6 +153,8 @@ pub(crate) enum ReaderError {
     ParseUrl(#[cause] url::ParseError),
     #[fail(display = "{}", _0)]
     ParseHost(#[cause] common::types::ParseHostError),
+    #[fail(display = "{}", _0)]
+    ParseHttpRequest(#[cause] common::types::ParseHttpRequestError),
 }
 
 impl From<io::Error> for ReaderError {
@@ -182,6 +184,12 @@ impl From<std::num::ParseFloatError> for ReaderError {
 impl From<common::types::ParseHostError> for ReaderError {
     fn from(err: common::types::ParseHostError) -> ReaderError {
         ReaderError::ParseHost(err)
+    }
+}
+
+impl From<common::types::ParseHttpRequestError> for ReaderError {
+    fn from(err: common::types::ParseHttpRequestError) -> ReaderError {
+        ReaderError::ParseHttpRequest(err)
     }
 }
 
@@ -277,9 +285,10 @@ impl<R: io::Read> RecordRead for Reader<R> {
                         let host = common::types::parse_host(s)?;
                         values.push(Value::Host(host));
                     }
-                    DataType::Url => {
-                        let url = url::Url::parse(s)?;
-                        values.push(Value::Url(url));
+                    DataType::HttpRequest => {
+                        let s = s.trim_matches('"');
+                        let request = common::types::parse_http_request(s)?;
+                        values.push(Value::HttpRequest(request));
                     }
                 }
             }
@@ -323,7 +332,7 @@ mod tests {
             Value::String("200".to_string()),
             Value::Int(0),
             Value::Int(42355),
-            Value::String("\"GET https://example.com:443/ HTTP/1.1\"".to_string()),
+            Value::HttpRequest(common::types::parse_http_request("GET https://example.com:443/ HTTP/1.1").unwrap()),
             Value::String("\"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36\"".to_string()),
             Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
             Value::String("TLSv1.2".to_string()),
@@ -350,7 +359,7 @@ mod tests {
             Value::String("200".to_string()),
             Value::Int(0),
             Value::Int(41690),
-            Value::String("\"GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1\"".to_string()),
+            Value::HttpRequest(common::types::parse_http_request("GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1").unwrap()),
             Value::String("\"Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]\"".to_string()),
             Value::String("-".to_string()),
             Value::String("-".to_string()),

@@ -16,7 +16,7 @@ pub(crate) enum Value {
     String(String),
     Null,
     DateTime(chrono::DateTime<chrono::offset::FixedOffset>),
-    Url(url::Url),
+    HttpRequest(common::types::HttpRequest),
     Host(common::types::Host),
 }
 
@@ -68,6 +68,103 @@ pub(crate) fn parse_host(s: &str) -> ParseHostResult<Host> {
         Ok(host)
     } else {
         Err(ParseHostError::ParseHost)
+    }
+}
+
+pub(crate) type ParseHttpRequestResult<T> = result::Result<T, ParseHttpRequestError>;
+
+#[derive(Fail, Debug)]
+pub(crate) enum ParseHttpRequestError {
+    #[fail(display = "Parse Http Method Error")]
+    ParseHttpMethod,
+    #[fail(display = "{}", _0)]
+    ParseUrl(#[cause] url::ParseError),
+    #[fail(display = "Parse Http Version Error")]
+    ParseHttpVersion,
+    #[fail(display = "Missing Field")]
+    MissingField,
+}
+
+impl From<url::ParseError> for ParseHttpRequestError {
+    fn from(err: url::ParseError) -> ParseHttpRequestError {
+        ParseHttpRequestError::ParseUrl(err)
+    }
+}
+
+pub(crate) type HttpMethod = String;
+pub(crate) type HttpVersion = String;
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct HttpRequest {
+    pub(crate) http_method: String,
+    pub(crate) url: url::Url,
+    pub(crate) http_version: String,
+}
+
+impl fmt::Display for HttpRequest {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str(&*self.http_method)?;
+        fmt.write_str(" ")?;
+        fmt.write_str(&*self.url.to_string())?;
+        fmt.write_str(" ")?;
+        fmt.write_str(&*self.http_version)?;
+        Ok(())
+    }
+}
+
+pub(crate) fn parse_http_method(s: &str) -> ParseHttpRequestResult<HttpMethod> {
+    if s == "GET" || s == "POST" || s == "DELETE" || s == "HEAD" {
+        Ok(s.to_string())
+    } else {
+        Err(ParseHttpRequestError::ParseHttpMethod)
+    }
+}
+
+pub(crate) fn parse_http_version(s: &str) -> ParseHttpRequestResult<HttpVersion> {
+    if s == "HTTP/1.1" || s == "HTTP/1.0" {
+        Ok(s.to_string())
+    } else {
+        Err(ParseHttpRequestError::ParseHttpVersion)
+    }
+}
+
+pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest> {
+    //FIXME: use different type for string hostname and Ipv4
+    let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
+    let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
+    let mut iter = split_the_line_regex.find_iter(&s);
+
+    let http_method_opt = if let Some(m) = iter.next() {
+        let method = parse_http_method(m.as_str())?;
+        Some(method)
+    } else {
+        None
+    };
+
+    let url_opt = if let Some(m) = iter.next() {
+        let url = url::Url::parse(m.as_str())?;
+        Some(url)
+    } else {
+        None
+    };
+
+    let http_version_opt = if let Some(m) = iter.next() {
+        let version = parse_http_version(m.as_str())?;
+        Some(version)
+    } else {
+        None
+    };
+
+    if let (Some(http_method), Some(url), Some(http_version)) = (http_method_opt, url_opt, http_version_opt) {
+        let request = HttpRequest {
+            http_method,
+            url,
+            http_version,
+        };
+
+        Ok(request)
+    } else {
+        Err(ParseHttpRequestError::MissingField)
     }
 }
 

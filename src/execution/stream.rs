@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, Ordering, StreamError, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use prettytable::Cell;
@@ -58,7 +58,7 @@ impl Record {
                 Value::Boolean(b) => Cell::new(&*b.to_string()),
                 Value::Null => Cell::new("<null>"),
                 Value::DateTime(dt) => Cell::new(&*dt.to_string()),
-                Value::Url(url) => Cell::new(&*url.to_string()),
+                Value::HttpRequest(request) => Cell::new(&*request.to_string()),
                 Value::Host(host) => Cell::new(&*host.to_string()),
             })
             .collect()
