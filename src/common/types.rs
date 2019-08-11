@@ -10,7 +10,7 @@ pub(crate) enum Value {
     Boolean(bool),
     String(String),
     Null,
-    DateTime(chrono::DateTime::<chrono::Utc>),
+    DateTime(chrono::DateTime::<chrono::offset::FixedOffset>),
 }
 
 pub(crate) type Tuple = Vec<Value>;

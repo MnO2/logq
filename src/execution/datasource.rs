@@ -1,5 +1,6 @@
 use super::stream::Record;
 use crate::common::types::Value;
+use ordered_float::OrderedFloat;
 use regex::Regex;
 
 use std::fmt;
@@ -9,6 +10,16 @@ use std::io::BufRead;
 use std::path::Path;
 use std::result;
 use std::str::FromStr;
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub(crate) enum DataType {
+    DateTime,
+    String,
+    Integral,
+    Float,
+    Host,
+    Url,
+}
 
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
 pub(crate) enum ClassicLoadBalancerLogField {
@@ -88,6 +99,28 @@ impl ClassicLoadBalancerLogField {
             "ssl_protocol".to_string(),
         ]
     }
+
+    pub(crate) fn datatype(idx: usize) -> DataType {
+        let v = vec![
+            DataType::DateTime,
+            DataType::String,
+            DataType::Host,
+            DataType::Host,
+            DataType::Float,
+            DataType::Float,
+            DataType::Float,
+            DataType::String,
+            DataType::String,
+            DataType::Integral,
+            DataType::Integral,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+        ];
+
+        v[idx].clone()
+    }
 }
 
 pub(crate) type ReaderResult<T> = result::Result<T, ReaderError>;
@@ -96,11 +129,35 @@ pub(crate) type ReaderResult<T> = result::Result<T, ReaderError>;
 pub(crate) enum ReaderError {
     #[fail(display = "{}", _0)]
     Io(#[cause] io::Error),
+    #[fail(display = "{}", _0)]
+    ParseDateTime(#[cause] chrono::format::ParseError),
+    #[fail(display = "{}", _0)]
+    ParseIntegral(#[cause] std::num::ParseIntError),
+    #[fail(display = "{}", _0)]
+    ParseFloat(#[cause] std::num::ParseFloatError),
 }
 
 impl From<io::Error> for ReaderError {
     fn from(err: io::Error) -> ReaderError {
         ReaderError::Io(err)
+    }
+}
+
+impl From<chrono::format::ParseError> for ReaderError {
+    fn from(err: chrono::format::ParseError) -> ReaderError {
+        ReaderError::ParseDateTime(err)
+    }
+}
+
+impl From<std::num::ParseIntError> for ReaderError {
+    fn from(err: std::num::ParseIntError) -> ReaderError {
+        ReaderError::ParseIntegral(err)
+    }
+}
+
+impl From<std::num::ParseFloatError> for ReaderError {
+    fn from(err: std::num::ParseFloatError) -> ReaderError {
+        ReaderError::ParseFloat(err)
     }
 }
 
@@ -162,10 +219,35 @@ impl<R: io::Read> RecordRead for Reader<R> {
             let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
             let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
             //FIXME: parse to the more specific
-            let mut values: Vec<Value> = split_the_line_regex
-                .find_iter(&buf)
-                .map(|x| Value::String(x.as_str().to_string()))
-                .collect();
+            let mut values: Vec<Value> = Vec::new();
+            for (i, m) in split_the_line_regex.find_iter(&buf).enumerate() {
+                let s = m.as_str();
+                let datatype = ClassicLoadBalancerLogField::datatype(i);
+
+                match datatype {
+                    DataType::DateTime => {
+                        let dt = chrono::DateTime::parse_from_rfc3339(s)?;
+                        values.push(Value::DateTime(dt));
+                    }
+                    DataType::String => {
+                        values.push(Value::String(s.to_string()));
+                    }
+                    DataType::Integral => {
+                        let i = s.parse::<i32>()?;
+                        values.push(Value::Int(i));
+                    }
+                    DataType::Float => {
+                        let f = s.parse::<f32>()?;
+                        values.push(Value::Float(OrderedFloat::from(f)));
+                    }
+                    DataType::Host => {
+                        unimplemented!();
+                    }
+                    DataType::Url => {
+                        unimplemented!();
+                    }
+                }
+            }
 
             //Adjust the width to be the same
             while values.len() < field_names.len() {
