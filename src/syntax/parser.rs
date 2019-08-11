@@ -557,6 +557,40 @@ mod test {
         assert_eq!(func_call("foo(a, 1, c)"), Ok(("", ans)));
 
         let ans = ast::ValueExpression::FuncCall(
+            "foo".to_string(),
+            vec![
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                        "a".to_string(),
+                    )))),
+                    None,
+                ),
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
+                        "bar".to_string(),
+                        vec![ast::SelectExpression::Expression(
+                            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
+                                ast::Value::Integral(1),
+                            )))),
+                            None,
+                        )],
+                        None,
+                    )))),
+                    None,
+                ),
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                        "c".to_string(),
+                    )))),
+                    None,
+                ),
+            ],
+            None,
+        );
+
+        assert_eq!(func_call("foo(a, bar(1), c)"), Ok(("", ans)));
+
+        let ans = ast::ValueExpression::FuncCall(
             "percentile_disc".to_string(),
             vec![ast::SelectExpression::Expression(
                 Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
