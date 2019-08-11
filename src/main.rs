@@ -3,6 +3,8 @@ extern crate failure;
 extern crate chrono;
 extern crate nom;
 extern crate prettytable;
+#[macro_use]
+extern crate lazy_static;
 
 mod common;
 mod execution;
@@ -13,7 +15,7 @@ use clap::load_yaml;
 use clap::App;
 use csv::Writer;
 use nom::error::VerboseError;
-use prettytable::{Row, Table};
+use prettytable::{Cell, Row, Table};
 use std::path::Path;
 use std::result;
 use std::str::FromStr;
@@ -211,7 +213,17 @@ fn main() {
                 sub_m.usage();
             }
         }
-        ("schema", Some(_)) => {}
+        ("schema", Some(_)) => {
+            let schema = execution::datasource::ClassicLoadBalancerLogField::schema();
+            let mut table = Table::new();
+            for (field, datatype) in schema.iter() {
+                table.add_row(Row::new(vec![
+                    Cell::new(&*field.to_string()),
+                    Cell::new(&*datatype.to_string()),
+                ]));
+            }
+            table.printstd();
+        }
         _ => {
             app_m.usage();
         }

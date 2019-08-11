@@ -23,6 +23,70 @@ pub(crate) enum DataType {
     HttpRequest,
 }
 
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            DataType::DateTime => "DateTime",
+            DataType::String => "String",
+            DataType::Integral => "Integral",
+            DataType::Float => "Float",
+            DataType::Host => "Host",
+            DataType::HttpRequest => "HttpRequest",
+            _ => unimplemented!(),
+        };
+
+        write!(f, "{}", name)
+    }
+}
+
+lazy_static! {
+    static ref DATATYPES: Vec<DataType> = {
+        vec![
+            DataType::DateTime,
+            DataType::String,
+            DataType::Host,
+            DataType::Host,
+            DataType::Float,
+            DataType::Float,
+            DataType::Float,
+            DataType::String,
+            DataType::String,
+            DataType::Integral,
+            DataType::Integral,
+            DataType::HttpRequest,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+        ]
+    };
+}
+
+lazy_static! {
+    static ref FIELD_NAMES: Vec<String> = {
+        vec![
+            "timestamp".to_string(),
+            "elbname".to_string(),
+            "client_and_port".to_string(),
+            "backend_and_port".to_string(),
+            "request_processing_time".to_string(),
+            "backend_processing_time".to_string(),
+            "response_processing_time".to_string(),
+            "elb_status_code".to_string(),
+            "backend_status_code".to_string(),
+            "received_bytes".to_string(),
+            "sent_bytes".to_string(),
+            "request".to_string(),
+            "user_agent".to_string(),
+            "ssl_cipher".to_string(),
+            "ssl_protocol".to_string(),
+            "target_group_arn".to_string(),
+            "trace_id".to_string(),
+        ]
+    };
+}
+
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
 pub(crate) enum ClassicLoadBalancerLogField {
     Timestamp = 0,
@@ -91,49 +155,21 @@ impl ClassicLoadBalancerLogField {
     }
 
     pub(crate) fn field_names() -> Vec<String> {
-        vec![
-            "timestamp".to_string(),
-            "elbname".to_string(),
-            "client_and_port".to_string(),
-            "backend_and_port".to_string(),
-            "request_processing_time".to_string(),
-            "backend_processing_time".to_string(),
-            "response_processing_time".to_string(),
-            "elb_status_code".to_string(),
-            "backend_status_code".to_string(),
-            "received_bytes".to_string(),
-            "sent_bytes".to_string(),
-            "request".to_string(),
-            "user_agent".to_string(),
-            "ssl_cipher".to_string(),
-            "ssl_protocol".to_string(),
-            "target_group_arn".to_string(),
-            "trace_id".to_string(),
-        ]
+        FIELD_NAMES.clone()
+    }
+
+    pub(crate) fn datatypes() -> Vec<DataType> {
+        DATATYPES.clone()
     }
 
     pub(crate) fn datatype(idx: usize) -> DataType {
-        let v = vec![
-            DataType::DateTime,
-            DataType::String,
-            DataType::Host,
-            DataType::Host,
-            DataType::Float,
-            DataType::Float,
-            DataType::Float,
-            DataType::String,
-            DataType::String,
-            DataType::Integral,
-            DataType::Integral,
-            DataType::HttpRequest,
-            DataType::String,
-            DataType::String,
-            DataType::String,
-            DataType::String,
-            DataType::String,
-        ];
+        DATATYPES[idx].clone()
+    }
 
-        v[idx].clone()
+    pub(crate) fn schema() -> Vec<(String, DataType)> {
+        let fields = Self::field_names();
+        let datatypes = Self::datatypes();
+        fields.into_iter().zip(datatypes.into_iter()).collect()
     }
 }
 

@@ -22,7 +22,7 @@ subcommands:
           - query:
               help: query string
               index: 1
-    - shema:
+    - schema:
         about: show the schema for log file format
         args:
           - type:
