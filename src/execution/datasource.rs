@@ -2,6 +2,8 @@ use super::stream::Record;
 use crate::common::types::Value;
 use ordered_float::OrderedFloat;
 use regex::Regex;
+use url;
+use crate::common;
 
 use std::fmt;
 use std::fs::File;
@@ -135,6 +137,10 @@ pub(crate) enum ReaderError {
     ParseIntegral(#[cause] std::num::ParseIntError),
     #[fail(display = "{}", _0)]
     ParseFloat(#[cause] std::num::ParseFloatError),
+    #[fail(display = "{}", _0)]
+    ParseUrl(#[cause] url::ParseError),
+    #[fail(display = "{}", _0)]
+    ParseHost(#[cause] common::types::ParseHostError),
 }
 
 impl From<io::Error> for ReaderError {
@@ -158,6 +164,18 @@ impl From<std::num::ParseIntError> for ReaderError {
 impl From<std::num::ParseFloatError> for ReaderError {
     fn from(err: std::num::ParseFloatError) -> ReaderError {
         ReaderError::ParseFloat(err)
+    }
+}
+
+impl From<common::types::ParseHostError> for ReaderError {
+    fn from(err: common::types::ParseHostError) -> ReaderError {
+        ReaderError::ParseHost(err)
+    }
+}
+
+impl From<url::ParseError> for ReaderError {
+    fn from(err: url::ParseError) -> ReaderError {
+        ReaderError::ParseUrl(err)
     }
 }
 
@@ -241,10 +259,12 @@ impl<R: io::Read> RecordRead for Reader<R> {
                         values.push(Value::Float(OrderedFloat::from(f)));
                     }
                     DataType::Host => {
-                        unimplemented!();
+                        let host = common::types::parse_host(s)?;
+                        values.push(Value::Host(host));
                     }
                     DataType::Url => {
-                        unimplemented!();
+                        let url = url::Url::parse(s)?;
+                        values.push(Value::Url(url));
                     }
                 }
             }

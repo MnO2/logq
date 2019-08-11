@@ -58,6 +58,8 @@ impl Record {
                 Value::Boolean(b) => Cell::new(&*b.to_string()),
                 Value::Null => Cell::new("<null>"),
                 Value::DateTime(dt) => Cell::new(&*dt.to_string()),
+                Value::Url(url) => Cell::new(&*url.to_string()),
+                Value::Host(host) => Cell::new(&*host.to_string())
             })
             .collect()
     }
