@@ -64,7 +64,6 @@ impl Record {
             .collect()
     }
 
-
     pub(crate) fn to_csv_record(&self) -> Vec<String> {
         self.data
             .iter()

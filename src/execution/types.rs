@@ -222,7 +222,7 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
             }
 
             match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::DateTime(dt)) => {
+                (Value::String(interval_str), Value::DateTime(dt)) => {
                     //FIXME: it's only a stub now
                     let new_dt = dt.with_second(0).map(|d| d.with_nanosecond(0)).unwrap().unwrap();
                     Ok(Value::DateTime(new_dt))

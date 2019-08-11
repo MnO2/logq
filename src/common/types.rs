@@ -168,6 +168,85 @@ pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest>
     }
 }
 
+pub(crate) type ParseTimeIntervalResult<T> = result::Result<T, ParseTimeIntervalError>;
+
+#[derive(Fail, Debug)]
+pub(crate) enum ParseTimeIntervalError {
+    #[fail(display = "Parse Integral Error: {}", _0)]
+    ParseIntegral(#[cause] std::num::ParseIntError),
+    #[fail(display = "Parse Unit Error")]
+    ParseUnit,
+    #[fail(display = "Missing Part")]
+    MissingPart,
+    #[fail(display = "Unknown Time Unit")]
+    UnknownTimeUnit,
+}
+
+impl From<std::num::ParseIntError> for ParseTimeIntervalError {
+    fn from(err: std::num::ParseIntError) -> ParseTimeIntervalError {
+        ParseTimeIntervalError::ParseIntegral(err)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum TimeIntervalUnit {
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Month,
+    Year,
+}
+
+#[derive(Debug)]
+pub(crate) struct TimeInterval {
+    pub(crate) n: u32,
+    pub(crate) unit: TimeIntervalUnit,
+}
+
+pub(crate) fn parse_time_interval_unit(s: &str) -> ParseTimeIntervalResult<TimeIntervalUnit> {
+    match s {
+        "second" => Ok(TimeIntervalUnit::Second),
+        "minute" => Ok(TimeIntervalUnit::Minute),
+        "hour" => Ok(TimeIntervalUnit::Hour),
+        "day" => Ok(TimeIntervalUnit::Day),
+        "month" => Ok(TimeIntervalUnit::Month),
+        "year" => Ok(TimeIntervalUnit::Year),
+        _ => Err(ParseTimeIntervalError::UnknownTimeUnit),
+    }
+}
+
+pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterval> {
+    let regex_literal = r#"[^\s"']+"#;
+    let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
+    let mut iter = split_the_line_regex.find_iter(&s);
+
+    let integral_opt = if let Some(m) = iter.next() {
+        let method = m.as_str().parse::<u32>()?;
+        Some(method)
+    } else {
+        None
+    };
+
+    let time_unit_opt = if let Some(m) = iter.next() {
+        let time_unit = parse_time_interval_unit(m.as_str())?;
+        Some(time_unit)
+    } else {
+        None
+    };
+
+    if let (Some(integral), Some(time_unit)) = (integral_opt, time_unit_opt) {
+        let interval = TimeInterval {
+            n: integral,
+            unit: time_unit,
+        };
+
+        Ok(interval)
+    } else {
+        Err(ParseTimeIntervalError::MissingPart)
+    }
+}
+
 pub(crate) type Tuple = Vec<Value>;
 pub(crate) type VariableName = String;
 pub(crate) type Variables = HashMap<VariableName, Value>;
