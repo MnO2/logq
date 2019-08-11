@@ -1,9 +1,9 @@
 use super::stream::Record;
+use crate::common;
 use crate::common::types::Value;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use url;
-use crate::common;
 
 use std::fmt;
 use std::fs::File;
@@ -40,6 +40,8 @@ pub(crate) enum ClassicLoadBalancerLogField {
     UserAgent = 12,
     SSLCipher = 13,
     SSLProtocol = 14,
+    TargetGroupArn = 15,
+    TraceID = 16,
 }
 
 impl fmt::Display for ClassicLoadBalancerLogField {
@@ -76,12 +78,18 @@ impl FromStr for ClassicLoadBalancerLogField {
             "user_agent" => Ok(ClassicLoadBalancerLogField::UserAgent),
             "ssl_cipher" => Ok(ClassicLoadBalancerLogField::SSLCipher),
             "ssl_protocol" => Ok(ClassicLoadBalancerLogField::SSLProtocol),
+            "target_group_arn" => Ok(ClassicLoadBalancerLogField::TargetGroupArn),
+            "trace_id" => Ok(ClassicLoadBalancerLogField::TraceID),
             _ => Err("unknown column name".to_string()),
         }
     }
 }
 
 impl ClassicLoadBalancerLogField {
+    pub(crate) fn len() -> usize {
+        17
+    }
+
     pub(crate) fn field_names() -> Vec<String> {
         vec![
             "timestamp".to_string(),
@@ -99,6 +107,8 @@ impl ClassicLoadBalancerLogField {
             "user_agent".to_string(),
             "ssl_cipher".to_string(),
             "ssl_protocol".to_string(),
+            "target_group_arn".to_string(),
+            "trace_id".to_string(),
         ]
     }
 
@@ -115,6 +125,8 @@ impl ClassicLoadBalancerLogField {
             DataType::String,
             DataType::Integral,
             DataType::Integral,
+            DataType::String,
+            DataType::String,
             DataType::String,
             DataType::String,
             DataType::String,
@@ -239,6 +251,9 @@ impl<R: io::Read> RecordRead for Reader<R> {
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
             for (i, m) in split_the_line_regex.find_iter(&buf).enumerate() {
+                if i >= ClassicLoadBalancerLogField::len() {
+                    break;
+                }
                 let s = m.as_str();
                 let datatype = ClassicLoadBalancerLogField::datatype(i);
 
@@ -286,6 +301,8 @@ impl<R: io::Read> RecordRead for Reader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common;
+    use chrono;
     use std::io::BufReader;
 
     #[test]
@@ -295,21 +312,23 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
-            Value::String("2015-11-07T18:45:33.559871Z".to_string()),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:33.559871Z").unwrap()),
             Value::String("elb1".to_string()),
-            Value::String("78.168.134.92:4586".to_string()),
-            Value::String("10.0.0.215:80".to_string()),
-            Value::String("0.000036".to_string()),
-            Value::String("0.001035".to_string()),
-            Value::String("0.000025".to_string()),
+            Value::Host(common::types::parse_host("78.168.134.92:4586").unwrap()),
+            Value::Host(common::types::parse_host("10.0.0.215:80").unwrap()),
+            Value::Float(OrderedFloat::from(0.000036)),
+            Value::Float(OrderedFloat::from(0.001035)),
+            Value::Float(OrderedFloat::from(0.000025)),
             Value::String("200".to_string()),
             Value::String("200".to_string()),
-            Value::String("0".to_string()),
-            Value::String("42355".to_string()),
+            Value::Int(0),
+            Value::Int(42355),
             Value::String("\"GET https://example.com:443/ HTTP/1.1\"".to_string()),
             Value::String("\"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36\"".to_string()),
             Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
             Value::String("TLSv1.2".to_string()),
+            Value::Null,
+            Value::Null
         ];
         let expected: Option<Record> = Some(Record::new(fields, data));
 
@@ -320,17 +339,17 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
-            Value::String("2015-11-07T18:45:37.691548Z".to_string()),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap()),
             Value::String("elb1".to_string()),
-            Value::String("176.219.166.226:48384".to_string()),
-            Value::String("10.0.2.143:80".to_string()),
-            Value::String("0.000023".to_string()),
-            Value::String("0.000348".to_string()),
-            Value::String("0.000025".to_string()),
+            Value::Host(common::types::parse_host("176.219.166.226:48384").unwrap()),
+            Value::Host(common::types::parse_host("10.0.2.143:80").unwrap()),
+            Value::Float(OrderedFloat::from(0.000023)),
+            Value::Float(OrderedFloat::from(0.000348)),
+            Value::Float(OrderedFloat::from(0.000025)),
             Value::String("200".to_string()),
             Value::String("200".to_string()),
-            Value::String("0".to_string()),
-            Value::String("41690".to_string()),
+            Value::Int(0),
+            Value::Int(41690),
             Value::String("\"GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1\"".to_string()),
             Value::String("\"Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]\"".to_string()),
             Value::String("-".to_string()),

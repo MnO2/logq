@@ -350,8 +350,9 @@ impl Aggregate {
             Aggregate::PercentileDisc(percentile, column_name, ordering) => {
                 let variables = common::empty_variables();
                 let physical_ordering = ordering.physical()?;
-                
-                let percentile_disc_aggregate = execution::PercentileDiscAggregate::new(percentile.clone(), physical_ordering);
+
+                let percentile_disc_aggregate =
+                    execution::PercentileDiscAggregate::new(percentile.clone(), physical_ordering);
                 let aggregate = execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.clone());
                 Ok((aggregate, variables))
             }
