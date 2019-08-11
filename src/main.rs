@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate failure;
+extern crate chrono;
 extern crate nom;
 extern crate prettytable;
 

@@ -57,6 +57,7 @@ impl Record {
                 Value::Float(f) => Cell::new(&*f.to_string()),
                 Value::Boolean(b) => Cell::new(&*b.to_string()),
                 Value::Null => Cell::new("<null>"),
+                Value::DateTime(dt) => Cell::new(&*dt.to_string()),
             })
             .collect()
     }

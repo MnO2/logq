@@ -1,6 +1,7 @@
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::path::PathBuf;
+use chrono;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {
@@ -9,6 +10,7 @@ pub(crate) enum Value {
     Boolean(bool),
     String(String),
     Null,
+    DateTime(chrono::DateTime::<chrono::Utc>),
 }
 
 pub(crate) type Tuple = Vec<Value>;
