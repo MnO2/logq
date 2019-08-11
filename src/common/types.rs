@@ -130,7 +130,7 @@ pub(crate) fn parse_http_version(s: &str) -> ParseHttpRequestResult<HttpVersion>
 
 pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest> {
     //FIXME: use different type for string hostname and Ipv4
-    let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
+    let regex_literal = r#"[^\s"']+"#;
     let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
     let mut iter = split_the_line_regex.find_iter(&s);
 

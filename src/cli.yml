@@ -6,6 +6,10 @@ subcommands:
     - query:
         about: select the data by query string
         args:
+          - output:
+              help: output format
+              long: output
+              takes_value: true
           - query:
               help: query string
               index: 1

@@ -63,6 +63,23 @@ impl Record {
             })
             .collect()
     }
+
+
+    pub(crate) fn to_csv_record(&self) -> Vec<String> {
+        self.data
+            .iter()
+            .map(|val| match val {
+                Value::String(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Boolean(b) => b.to_string(),
+                Value::Null => "<null>".to_string(),
+                Value::DateTime(dt) => dt.to_string(),
+                Value::HttpRequest(request) => request.to_string(),
+                Value::Host(host) => host.to_string(),
+            })
+            .collect()
+    }
 }
 
 pub(crate) trait RecordStream {
