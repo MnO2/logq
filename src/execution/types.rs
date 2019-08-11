@@ -1,6 +1,7 @@
 use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
+use chrono::Timelike;
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use std::collections::VecDeque;
@@ -212,6 +213,20 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
 
             match (&arguments[0], &arguments[1]) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "time_bucket" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::DateTime(dt)) => {
+                    //FIXME: it's only a stub now
+                    let new_dt = dt.with_second(0).map(|d| d.with_nanosecond(0)).unwrap().unwrap();
+                    Ok(Value::DateTime(new_dt))
+                }
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
