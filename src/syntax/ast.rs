@@ -54,48 +54,44 @@ pub(crate) enum SelectExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Expression {
-    Condition(Condition),
-    And(Box<Expression>, Box<Expression>),
-    Or(Box<Expression>, Box<Expression>),
-    Not(Box<Expression>),
-    Value(Box<ValueExpression>),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum Condition {
-    ComparisonExpression(RelationOperator, ValueExpression, ValueExpression),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum RelationOperator {
-    Equal,
-    NotEqual,
-    MoreThan,
-    LessThan,
-    GreaterEqual,
-    LessEqual,
+    Column(ColumnName),
+    Value(Value),
+    BinaryOperator(BinaryOperator, Box<Expression>, Box<Expression>),
+    UnaryOperator(UnaryOperator, Box<Expression>),
+    FuncCall(FuncName, Vec<SelectExpression>, Option<WithinGroupClause>),
 }
 
 pub(crate) type FuncName = String;
 pub(crate) type ColumnName = String;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum ValueExpression {
-    Column(ColumnName),
-    Value(Value),
-    Operator(ValueOperator, Box<ValueExpression>, Box<ValueExpression>),
-    FuncCall(FuncName, Vec<SelectExpression>, Option<WithinGroupClause>),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum ValueOperator {
+pub(crate) enum BinaryOperator {
     Plus,
     Minus,
     Times,
     Divide,
+    Equal,
+    NotEqual,
+    MoreThan,
+    LessThan,
+    GreaterEqual,
+    LessEqual,
+    And,
+    Or,
 }
 
-impl fmt::Display for ValueOperator {
+impl fmt::Display for BinaryOperator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum UnaryOperator {
+    Not,
+}
+
+impl fmt::Display for UnaryOperator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
@@ -189,7 +185,7 @@ impl OrderByExpression {
 #[derive(Debug, Clone)]
 pub(crate) struct FuncCallExpression {
     pub(crate) func_name: String,
-    pub(crate) arguments: Vec<ValueExpression>,
+    pub(crate) arguments: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

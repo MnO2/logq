@@ -38,27 +38,36 @@ fn parse_infix_operator(
 
 fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match expr {
-        ast::Expression::Condition(c) => parse_condition(c),
-        ast::Expression::And(l, r) => parse_infix_operator(types::LogicInfixOp::And, l, r),
-        ast::Expression::Or(l, r) => parse_infix_operator(types::LogicInfixOp::Or, l, r),
-        ast::Expression::Not(c) => parse_prefix_operator(types::LogicPrefixOp::Not, c),
-        ast::Expression::Value(value_expr) => parse_boolean_value(value_expr),
+        ast::Expression::BinaryOperator(op, l, r) => {
+            if op == &ast::BinaryOperator::And {
+                let formula = parse_infix_operator(types::LogicInfixOp::And, l, r)?;
+                Ok(formula)
+            } else if op == &ast::BinaryOperator::Or {
+                let formula = parse_infix_operator(types::LogicInfixOp::Or, l, r)?;
+                Ok(formula)
+            } else {
+                parse_condition(expr)
+            }
+        }
+        ast::Expression::UnaryOperator(op, c) => {
+            if op == &ast::UnaryOperator::Not {
+                let formula = parse_prefix_operator(types::LogicPrefixOp::Not, c)?;
+                Ok(formula)
+            } else {
+                unreachable!()
+            }
+        }
+        ast::Expression::Value(value_expr) => match value_expr {
+            ast::Value::Boolean(b) => Ok(Box::new(types::Formula::Constant(*b))),
+            _ => Err(ParseError::TypeMismatch),
+        },
+        _ => unreachable!(),
     }
 }
 
 fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     let formula = parse_logic(expr)?;
     Ok(Box::new(types::Expression::Logic(formula)))
-}
-
-fn parse_boolean_value(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Formula>> {
-    match value_expr {
-        ast::ValueExpression::Value(val) => match val {
-            ast::Value::Boolean(b) => Ok(Box::new(types::Formula::Constant(*b))),
-            _ => Err(ParseError::TypeMismatch),
-        },
-        _ => Err(ParseError::TypeMismatch),
-    }
 }
 
 fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
@@ -70,33 +79,63 @@ fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
     }
 }
 
-fn parse_arithemetic(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
+fn parse_binary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
-        ast::ValueExpression::Operator(op, left_expr, right_expr) => {
-            let func_name = (*op).to_string();
-            let left = parse_value_expression(left_expr)?;
-            let right = parse_value_expression(right_expr)?;
-            let args = vec![
-                types::Named::Expression(*left, None),
-                types::Named::Expression(*right, None),
-            ];
-            Ok(Box::new(types::Expression::Function(func_name, args)))
+        ast::Expression::BinaryOperator(op, left_expr, right_expr) => {
+            if op == &ast::BinaryOperator::And || op == &ast::BinaryOperator::Or {
+                parse_logic_expression(value_expr)
+            } else if op == &ast::BinaryOperator::Equal
+                || op == &ast::BinaryOperator::NotEqual
+                || op == &ast::BinaryOperator::MoreThan
+                || op == &ast::BinaryOperator::LessThan
+                || op == &ast::BinaryOperator::GreaterEqual
+                || op == &ast::BinaryOperator::LessEqual
+            {
+                let formula = parse_condition(value_expr)?;
+                Ok(Box::new(types::Expression::Logic(formula)))
+            } else {
+                let func_name = (*op).to_string();
+                let left = parse_value_expression(left_expr)?;
+                let right = parse_value_expression(right_expr)?;
+                let args = vec![
+                    types::Named::Expression(*left, None),
+                    types::Named::Expression(*right, None),
+                ];
+                Ok(Box::new(types::Expression::Function(func_name, args)))
+            }
         }
         _ => {
-            unimplemented!();
+            unreachable!();
         }
     }
 }
 
-fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<types::Expression>> {
+fn parse_unary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
-        ast::ValueExpression::Value(v) => {
+        ast::Expression::UnaryOperator(op, expr) => {
+            if op == &ast::UnaryOperator::Not {
+                let formula = parse_prefix_operator(types::LogicPrefixOp::Not, expr)?;
+                Ok(Box::new(types::Expression::Logic(formula)))
+            } else {
+                unreachable!();
+            }
+        }
+        _ => {
+            unreachable!();
+        }
+    }
+}
+
+fn parse_value_expression(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+    match value_expr {
+        ast::Expression::Value(v) => {
             let expr = parse_value(v)?;
             Ok(expr)
         }
-        ast::ValueExpression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
-        ast::ValueExpression::Operator(_, _, _) => parse_arithemetic(value_expr),
-        ast::ValueExpression::FuncCall(func_name, select_exprs, within_group_opt) => {
+        ast::Expression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
+        ast::Expression::BinaryOperator(_, _, _) => parse_binary_operator(value_expr),
+        ast::Expression::UnaryOperator(_, _) => parse_unary_operator(value_expr),
+        ast::Expression::FuncCall(func_name, select_exprs, within_group_opt) => {
             let mut args = Vec::new();
             for select_expr in select_exprs.iter() {
                 let arg = parse_expression(select_expr)?;
@@ -107,60 +146,42 @@ fn parse_value_expression(value_expr: &ast::ValueExpression) -> ParseResult<Box<
     }
 }
 
-fn parse_relation(op: &ast::RelationOperator) -> ParseResult<types::Relation> {
+fn parse_relation(op: &ast::BinaryOperator) -> ParseResult<types::Relation> {
     match op {
-        ast::RelationOperator::Equal => Ok(types::Relation::Equal),
-        ast::RelationOperator::NotEqual => Ok(types::Relation::NotEqual),
-        ast::RelationOperator::GreaterEqual => Ok(types::Relation::GreaterEqual),
-        ast::RelationOperator::LessEqual => Ok(types::Relation::LessEqual),
-        ast::RelationOperator::LessThan => Ok(types::Relation::LessThan),
-        ast::RelationOperator::MoreThan => Ok(types::Relation::MoreThan),
+        ast::BinaryOperator::Equal => Ok(types::Relation::Equal),
+        ast::BinaryOperator::NotEqual => Ok(types::Relation::NotEqual),
+        ast::BinaryOperator::GreaterEqual => Ok(types::Relation::GreaterEqual),
+        ast::BinaryOperator::LessEqual => Ok(types::Relation::LessEqual),
+        ast::BinaryOperator::LessThan => Ok(types::Relation::LessThan),
+        ast::BinaryOperator::MoreThan => Ok(types::Relation::MoreThan),
+        _ => unreachable!(),
     }
 }
 
-fn parse_condition(condition: &ast::Condition) -> ParseResult<Box<types::Formula>> {
+fn parse_condition(condition: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match condition {
-        ast::Condition::ComparisonExpression(op, left_expr, right_expr) => {
+        ast::Expression::BinaryOperator(op, left_expr, right_expr) => {
             let left = parse_value_expression(left_expr)?;
             let right = parse_value_expression(right_expr)?;
             let rel_op = parse_relation(op)?;
             Ok(Box::new(types::Formula::Predicate(rel_op, left, right)))
         }
+        _ => unreachable!(),
     }
 }
 
 fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Named>> {
     match select_expr {
         ast::SelectExpression::Star => Ok(Box::new(types::Named::Star)),
-        ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
-            ast::Expression::Condition(c) => {
-                let formula = parse_condition(c)?;
-                let logic_expression = types::Expression::Logic(formula);
-                let expr = types::Named::Expression(logic_expression, name_opt.clone());
-                Ok(Box::new(expr))
-            }
-            ast::Expression::And(_, _) => {
-                let e = parse_logic_expression(expr)?;
-                Ok(Box::new(types::Named::Expression(*e, None)))
-            }
-            ast::Expression::Or(_, _) => {
-                let e = parse_logic_expression(expr)?;
-                Ok(Box::new(types::Named::Expression(*e, None)))
-            }
-            ast::Expression::Not(_) => {
-                let e = parse_logic_expression(expr)?;
-                Ok(Box::new(types::Named::Expression(*e, None)))
-            }
-            ast::Expression::Value(value_expr) => {
-                let e = parse_value_expression(value_expr)?;
-                match &*e {
-                    types::Expression::Variable(name) => {
-                        Ok(Box::new(types::Named::Expression(*e.clone(), Some(name.clone()))))
-                    }
-                    _ => Ok(Box::new(types::Named::Expression(*e, None))),
+        ast::SelectExpression::Expression(expr, name_opt) => {
+            let e = parse_value_expression(expr)?;
+            match &*e {
+                types::Expression::Variable(name) => {
+                    Ok(Box::new(types::Named::Expression(*e.clone(), Some(name.clone()))))
                 }
+                _ => Ok(Box::new(types::Named::Expression(*e, None))),
             }
-        },
+        }
     }
 }
 
@@ -187,26 +208,21 @@ fn parse_ordering(ordering: ast::Ordering) -> ParseResult<types::Ordering> {
 fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::NamedAggregate> {
     match select_expr {
         ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
-            ast::Expression::Value(value_expr) => match &**value_expr {
-                ast::ValueExpression::FuncCall(func_name, args, within_group_opt) => {
-                    let named = *parse_expression(&args[0])?;
+            ast::Expression::FuncCall(func_name, args, within_group_opt) => {
+                let named = *parse_expression(&args[0])?;
 
-                    let aggregate = if let Some(within_group_clause) = within_group_opt {
-                        match named {
-                            types::Named::Expression(expr, _) => match expr {
-                                types::Expression::Constant(val) => match val {
-                                    common::Value::Float(f) => {
-                                        let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
-                                        types::Aggregate::PercentileDisc(
-                                            f,
-                                            within_group_clause.ordering_term.column_name.clone(),
-                                            o,
-                                        )
-                                    }
-                                    _ => {
-                                        unimplemented!();
-                                    }
-                                },
+                let aggregate = if let Some(within_group_clause) = within_group_opt {
+                    match named {
+                        types::Named::Expression(expr, _) => match expr {
+                            types::Expression::Constant(val) => match val {
+                                common::Value::Float(f) => {
+                                    let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
+                                    types::Aggregate::PercentileDisc(
+                                        f,
+                                        within_group_clause.ordering_term.column_name.clone(),
+                                        o,
+                                    )
+                                }
                                 _ => {
                                     unimplemented!();
                                 }
@@ -214,15 +230,17 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
                             _ => {
                                 unimplemented!();
                             }
+                        },
+                        _ => {
+                            unimplemented!();
                         }
-                    } else {
-                        from_str(&**func_name, named)?
-                    };
-                    let named_aggregate = types::NamedAggregate::new(aggregate, name_opt.clone());
-                    Ok(named_aggregate)
-                }
-                _ => Err(ParseError::TypeMismatch),
-            },
+                    }
+                } else {
+                    from_str(&**func_name, named)?
+                };
+                let named_aggregate = types::NamedAggregate::new(aggregate, name_opt.clone());
+                Ok(named_aggregate)
+            }
             _ => Err(ParseError::TypeMismatch),
         },
         _ => Err(ParseError::TypeMismatch),
@@ -317,13 +335,10 @@ mod test {
 
     #[test]
     fn test_parse_logic_expression() {
-        let before = ast::Expression::And(
-            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Boolean(true),
-            )))),
-            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-                ast::Value::Boolean(false),
-            )))),
+        let before = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::And,
+            Box::new(ast::Expression::Value(ast::Value::Boolean(true))),
+            Box::new(ast::Expression::Value(ast::Value::Boolean(false))),
         );
 
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
@@ -335,9 +350,10 @@ mod test {
         let ans = parse_logic_expression(&before).unwrap();
         assert_eq!(expected, ans);
 
-        let before = ast::Expression::Not(Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Value(
-            ast::Value::Boolean(false),
-        )))));
+        let before = ast::Expression::UnaryOperator(
+            ast::UnaryOperator::Not,
+            Box::new(ast::Expression::Value(ast::Value::Boolean(false))),
+        );
 
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::PrefixOperator(
             types::LogicPrefixOp::Not,
@@ -350,14 +366,14 @@ mod test {
 
     #[test]
     fn test_parse_value_expression() {
-        let before = ast::ValueExpression::Operator(
-            ast::ValueOperator::Plus,
-            Box::new(ast::ValueExpression::Operator(
-                ast::ValueOperator::Plus,
-                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
-                Box::new(ast::ValueExpression::Value(ast::Value::Integral(2))),
+        let before = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Plus,
+            Box::new(ast::Expression::BinaryOperator(
+                ast::BinaryOperator::Plus,
+                Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                Box::new(ast::Expression::Value(ast::Value::Integral(2))),
             )),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
+            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
         );
 
         let expected = Box::new(types::Expression::Function(
@@ -384,16 +400,14 @@ mod test {
     #[test]
     fn test_parse_aggregate() {
         let before = ast::SelectExpression::Expression(
-            Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
+            Box::new(ast::Expression::FuncCall(
                 "avg".to_string(),
                 vec![ast::SelectExpression::Expression(
-                    Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                        "a".to_string(),
-                    )))),
+                    Box::new(ast::Expression::Column("a".to_string())),
                     None,
                 )],
                 None,
-            )))),
+            )),
             None,
         );
 
@@ -406,10 +420,10 @@ mod test {
 
     #[test]
     fn test_parse_condition() {
-        let before = ast::Condition::ComparisonExpression(
-            ast::RelationOperator::Equal,
-            ast::ValueExpression::Column("a".to_string()),
-            ast::ValueExpression::Value(ast::Value::Integral(1)),
+        let before = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         );
 
         let expected = Box::new(types::Formula::Predicate(
@@ -425,25 +439,15 @@ mod test {
     #[test]
     fn test_parse_query_with_simple_select_where() {
         let select_exprs = vec![
-            ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                    "a".to_string(),
-                )))),
-                None,
-            ),
-            ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                    "b".to_string(),
-                )))),
-                None,
-            ),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
         ];
 
-        let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
-            ast::RelationOperator::Equal,
-            ast::ValueExpression::Column("a".to_string()),
-            ast::ValueExpression::Value(ast::Value::Integral(1)),
-        )));
+        let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+        ));
         //let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
         let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
@@ -474,38 +478,34 @@ mod test {
     fn test_parse_query_with_group_by() {
         let select_exprs = vec![
             ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
+                Box::new(ast::Expression::FuncCall(
                     "avg".to_string(),
                     vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                            "a".to_string(),
-                        )))),
+                        Box::new(ast::Expression::Column("a".to_string())),
                         None,
                     )],
                     None,
-                )))),
+                )),
                 None,
             ),
             ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
+                Box::new(ast::Expression::FuncCall(
                     "count".to_string(),
                     vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
-                            "b".to_string(),
-                        )))),
+                        Box::new(ast::Expression::Column("b".to_string())),
                         None,
                     )],
                     None,
-                )))),
+                )),
                 None,
             ),
         ];
 
-        let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
-            ast::RelationOperator::Equal,
-            ast::ValueExpression::Column("a".to_string()),
-            ast::ValueExpression::Value(ast::Value::Integral(1)),
-        )));
+        let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+        ));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
         let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None, None);
