@@ -494,12 +494,36 @@ impl Node {
                                     return i2.cmp(i1);
                                 }
                             },
+                            (Value::Boolean(b1), Value::Boolean(b2)) => match curr_ordering {
+                                Ordering::Asc => {
+                                    return b1.cmp(b2);
+                                }
+                                Ordering::Desc => {
+                                    return b2.cmp(b1);
+                                }
+                            },
+                            (Value::Float(f1), Value::Float(f2)) => match curr_ordering {
+                                Ordering::Asc => {
+                                    return f1.cmp(f2);
+                                }
+                                Ordering::Desc => {
+                                    return f2.cmp(f1);
+                                }
+                            },
                             (Value::String(s1), Value::String(s2)) => match curr_ordering {
                                 Ordering::Asc => {
                                     return s1.cmp(s2);
                                 }
                                 Ordering::Desc => {
                                     return s2.cmp(s1);
+                                }
+                            },
+                            (Value::DateTime(dt1), Value::DateTime(dt2)) => match curr_ordering {
+                                Ordering::Asc => {
+                                    return dt1.cmp(dt2);
+                                }
+                                Ordering::Desc => {
+                                    return dt2.cmp(dt1);
                                 }
                             },
                             _ => unimplemented!(),
