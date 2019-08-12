@@ -198,21 +198,33 @@ pub(crate) enum TimeIntervalUnit {
     Year,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct TimeInterval {
     pub(crate) n: u32,
     pub(crate) unit: TimeIntervalUnit,
 }
 
-pub(crate) fn parse_time_interval_unit(s: &str) -> ParseTimeIntervalResult<TimeIntervalUnit> {
-    match s {
-        "second" => Ok(TimeIntervalUnit::Second),
-        "minute" => Ok(TimeIntervalUnit::Minute),
-        "hour" => Ok(TimeIntervalUnit::Hour),
-        "day" => Ok(TimeIntervalUnit::Day),
-        "month" => Ok(TimeIntervalUnit::Month),
-        "year" => Ok(TimeIntervalUnit::Year),
-        _ => Err(ParseTimeIntervalError::UnknownTimeUnit),
+pub(crate) fn parse_time_interval_unit(s: &str, plural: bool) -> ParseTimeIntervalResult<TimeIntervalUnit> {
+    if plural {
+        match s {
+            "seconds" => Ok(TimeIntervalUnit::Second),
+            "minutes" => Ok(TimeIntervalUnit::Minute),
+            "hours" => Ok(TimeIntervalUnit::Hour),
+            "days" => Ok(TimeIntervalUnit::Day),
+            "months" => Ok(TimeIntervalUnit::Month),
+            "years" => Ok(TimeIntervalUnit::Year),
+            _ => Err(ParseTimeIntervalError::UnknownTimeUnit),
+        }
+    } else {
+        match s {
+            "second" => Ok(TimeIntervalUnit::Second),
+            "minute" => Ok(TimeIntervalUnit::Minute),
+            "hour" => Ok(TimeIntervalUnit::Hour),
+            "day" => Ok(TimeIntervalUnit::Day),
+            "month" => Ok(TimeIntervalUnit::Month),
+            "year" => Ok(TimeIntervalUnit::Year),
+            _ => Err(ParseTimeIntervalError::UnknownTimeUnit),
+        }
     }
 }
 
@@ -222,14 +234,14 @@ pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterv
     let mut iter = split_the_line_regex.find_iter(&s);
 
     let integral_opt = if let Some(m) = iter.next() {
-        let method = m.as_str().parse::<u32>()?;
-        Some(method)
+        let integral = m.as_str().parse::<u32>()?;
+        Some(integral)
     } else {
         None
     };
 
-    let time_unit_opt = if let Some(m) = iter.next() {
-        let time_unit = parse_time_interval_unit(m.as_str())?;
+    let time_unit_opt = if let (Some(m), Some(integral)) = (iter.next(), integral_opt) {
+        let time_unit = parse_time_interval_unit(m.as_str(), integral > 1)?;
         Some(time_unit)
     } else {
         None
@@ -263,4 +275,44 @@ pub(crate) fn merge(left: Variables, right: Variables) -> Variables {
 pub(crate) enum DataSource {
     File(PathBuf),
     Stdin,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_time_interval() {
+        let ans = parse_time_interval("1 minute").unwrap();
+        let expected = TimeInterval {
+            n: 1,
+            unit: TimeIntervalUnit::Minute,
+        };
+
+        assert_eq!(expected, ans);
+
+        let ans = parse_time_interval("3 minutes").unwrap();
+        let expected = TimeInterval {
+            n: 3,
+            unit: TimeIntervalUnit::Minute,
+        };
+
+        assert_eq!(expected, ans);
+
+        let ans = parse_time_interval("1 second").unwrap();
+        let expected = TimeInterval {
+            n: 1,
+            unit: TimeIntervalUnit::Second,
+        };
+
+        assert_eq!(expected, ans);
+
+        let ans = parse_time_interval("13 seconds").unwrap();
+        let expected = TimeInterval {
+            n: 13,
+            unit: TimeIntervalUnit::Second,
+        };
+
+        assert_eq!(expected, ans);
+    }
 }
