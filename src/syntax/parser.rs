@@ -224,13 +224,6 @@ fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<
     )(i)
 }
 
-// fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-//     alt((
-//         map(condition, ast::Expression::Condition),
-//         map(value_expression, |v_expr| ast::Expression::Value(Box::new(v_expr))),
-//     ))(i)
-// }
-
 fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
     preceded(
         space0,
