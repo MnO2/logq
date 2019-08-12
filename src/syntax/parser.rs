@@ -13,6 +13,14 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
+lazy_static! {
+    static ref KEYWORDS: Vec<&'static str> = {
+        vec![
+            "select", "from", "where", "group", "by", "limit", "order", "true", "false",
+        ]
+    };
+}
+
 fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
     escaped(none_of("\""), '\\', one_of("\"n\\"))(i)
 }
@@ -31,7 +39,25 @@ fn identifier<'a, E: nom::error::ParseError<&'a str>>(input: &'a str) -> IResult
 where
 {
     fn is_alphanumeric_or_underscore(chr: char) -> bool {
-        chr.is_alphabetic() || chr == '_'
+        chr.is_alphanumeric() || chr == '_'
+    }
+
+    fn start_with_number(s: &str) -> bool {
+        if let Some(c) = s.chars().next() {
+            "0123456789".contains(c)
+        } else {
+            false
+        }
+    }
+
+    fn all_underscore(s: &str) -> bool {
+        for c in s.chars() {
+            if c != '_' {
+                return false;
+            }
+        }
+
+        true
     }
 
     let result = input.split_at_position1_complete(
@@ -41,10 +67,10 @@ where
 
     match result {
         Ok((i, o)) => {
-            if o == "true" || o == "false" {
+            if start_with_number(o) || all_underscore(o) || KEYWORDS.contains(&o) {
                 Err(nom::Err::Failure(nom::error::ParseError::from_error_kind(
                     i,
-                    nom::error::ErrorKind::IsNot,
+                    nom::error::ErrorKind::Alpha, //FIXME: customize error
                 )))
             } else {
                 Ok((i, o))
@@ -325,6 +351,47 @@ pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatem
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_identifier() {
+        assert_eq!(
+            identifier::<VerboseError<&str>>("true"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+        assert_eq!(
+            identifier::<VerboseError<&str>>("false"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+        assert_eq!(
+            identifier::<VerboseError<&str>>("select"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+        assert_eq!(
+            identifier::<VerboseError<&str>>("order"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+        assert_eq!(
+            identifier::<VerboseError<&str>>("____"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+        assert_eq!(
+            identifier::<VerboseError<&str>>("123abc"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+        assert_eq!(identifier::<VerboseError<&str>>("abc_fef"), Ok(("", "abc_fef")));
+    }
 
     #[test]
     fn test_boolean() {
