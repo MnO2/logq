@@ -1,5 +1,6 @@
 use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
+use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use chrono::Timelike;
 use hashbrown::HashMap;
@@ -11,7 +12,7 @@ use std::result;
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
-pub enum EvaluateError {
+pub(crate) enum EvaluateError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
     #[fail(display = "{}", _0)]
@@ -59,7 +60,7 @@ impl From<StreamError> for CreateStreamError {
 pub(crate) type StreamResult<T> = result::Result<T, StreamError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
-pub enum StreamError {
+pub(crate) enum StreamError {
     #[fail(display = "{}", _0)]
     Get(#[cause] CreateStreamError),
     #[fail(display = "{}", _0)]
@@ -107,7 +108,7 @@ impl From<AggregateError> for StreamError {
 pub(crate) type ExpressionResult<T> = result::Result<T, ExpressionError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
-pub enum ExpressionError {
+pub(crate) enum ExpressionError {
     #[fail(display = "Key Not Found")]
     KeyNotFound,
     #[fail(display = "Invalid Arguments")]
@@ -118,11 +119,23 @@ pub enum ExpressionError {
     InvalidStar,
     #[fail(display = "Type Mismatch")]
     TypeMismatch,
+    #[fail(display = "{}", _0)]
+    ParseTimeInterval(#[cause] common::types::ParseTimeIntervalError),
+    #[fail(display = "TimeInterval Not Supported Yet")]
+    TimeIntervalNotSupported,
+    #[fail(display = "Zero TimeInterval")]
+    TimeIntervalZero,
 }
 
 impl From<EvaluateError> for ExpressionError {
     fn from(_: EvaluateError) -> ExpressionError {
         ExpressionError::KeyNotFound
+    }
+}
+
+impl From<common::types::ParseTimeIntervalError> for ExpressionError {
+    fn from(e: common::types::ParseTimeIntervalError) -> ExpressionError {
+        ExpressionError::ParseTimeInterval(e)
     }
 }
 
@@ -222,10 +235,93 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
             }
 
             match (&arguments[0], &arguments[1]) {
-                (Value::String(interval_str), Value::DateTime(dt)) => {
-                    //FIXME: it's only a stub now
-                    let new_dt = dt.with_second(0).map(|d| d.with_nanosecond(0)).unwrap().unwrap();
-                    Ok(Value::DateTime(new_dt))
+                (Value::String(time_interval_str), Value::DateTime(dt)) => {
+                    let time_interval = common::types::parse_time_interval(time_interval_str)?;
+
+                    if time_interval.n == 0 {
+                        return Err(ExpressionError::TimeIntervalZero);
+                    }
+
+                    match time_interval.unit {
+                        common::types::TimeIntervalUnit::Second => {
+                            if time_interval.n > 60 || 60 % time_interval.n != 0 {
+                                return Err(ExpressionError::TimeIntervalNotSupported);
+                            }
+
+                            let mut target_opt: Option<u32> = None;
+                            let step_size: usize = (60 % time_interval.n) as usize;
+                            //FIXME: binary search
+                            for point in (0..=60u32).rev().step_by(step_size) {
+                                if point <= time_interval.n {
+                                    target_opt = Some(point);
+                                    break;
+                                }
+                            }
+
+                            if let Some(target) = target_opt {
+                                let new_dt = dt.with_second(target).and_then(|d| d.with_nanosecond(0)).unwrap();
+                                Ok(Value::DateTime(new_dt))
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                        common::types::TimeIntervalUnit::Minute => {
+                            if time_interval.n > 60 || 60 % time_interval.n != 0 {
+                                return Err(ExpressionError::TimeIntervalNotSupported);
+                            }
+
+                            let mut target_opt: Option<u32> = None;
+                            let step_size: usize = (60 % time_interval.n) as usize;
+                            //FIXME: binary search
+                            for point in (0..=60u32).rev().step_by(step_size) {
+                                if point <= time_interval.n {
+                                    target_opt = Some(point);
+                                    break;
+                                }
+                            }
+
+                            if let Some(target) = target_opt {
+                                let new_dt = dt
+                                    .with_minute(target)
+                                    .and_then(|d| d.with_second(0))
+                                    .and_then(|d| d.with_nanosecond(0))
+                                    .unwrap();
+                                Ok(Value::DateTime(new_dt))
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                        common::types::TimeIntervalUnit::Hour => {
+                            if time_interval.n > 24 || 24 % time_interval.n != 0 {
+                                return Err(ExpressionError::TimeIntervalNotSupported);
+                            }
+
+                            let mut target_opt: Option<u32> = None;
+                            let step_size: usize = (24 % time_interval.n) as usize;
+                            //FIXME: binary search
+                            for point in (0..=24u32).rev().step_by(step_size) {
+                                if point <= time_interval.n {
+                                    target_opt = Some(point);
+                                    break;
+                                }
+                            }
+
+                            if let Some(target) = target_opt {
+                                let new_dt = dt
+                                    .with_hour(target)
+                                    .and_then(|d| d.with_minute(0))
+                                    .and_then(|d| d.with_second(0))
+                                    .and_then(|d| d.with_nanosecond(0))
+                                    .unwrap();
+                                Ok(Value::DateTime(new_dt))
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                        _ => {
+                            return Err(ExpressionError::TimeIntervalNotSupported);
+                        }
+                    }
                 }
                 _ => Err(ExpressionError::InvalidArguments),
             }

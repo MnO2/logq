@@ -170,7 +170,7 @@ pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest>
 
 pub(crate) type ParseTimeIntervalResult<T> = result::Result<T, ParseTimeIntervalError>;
 
-#[derive(Fail, Debug)]
+#[derive(Fail, PartialEq, Eq, Clone, Debug)]
 pub(crate) enum ParseTimeIntervalError {
     #[fail(display = "Parse Integral Error: {}", _0)]
     ParseIntegral(#[cause] std::num::ParseIntError),

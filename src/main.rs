@@ -23,7 +23,7 @@ use std::str::FromStr;
 pub(crate) type AppResult<T> = result::Result<T, AppError>;
 
 #[derive(Fail, Debug)]
-pub enum AppError {
+pub(crate) enum AppError {
     #[fail(display = "Syntax Error: {}", _0)]
     Syntax(String),
     #[fail(display = "Input is fully consumed, the leftover are \"{}\"", _0)]
