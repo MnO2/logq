@@ -1,5 +1,6 @@
 use super::types;
 use crate::common::types as common;
+use crate::execution;
 use crate::syntax::ast;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
@@ -8,6 +9,10 @@ pub enum ParseError {
     TypeMismatch,
     #[fail(display = "Not Aggregate Function")]
     NotAggregateFunction,
+    #[fail(display = "Group By statement but no aggregate function provided")]
+    GroupByWithoutAggregateFunction,
+    #[fail(display = "Group By statement mismatch with the non-aggregate fields")]
+    GroupByFieldsMismatch,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -249,8 +254,10 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     let mut root = types::Node::DataSource(data_source);
     let mut named_aggregates = Vec::new();
+    let mut named_list: Vec<types::Named> = Vec::new();
+    let mut non_aggregates: Vec<types::Named> = Vec::new();
+
     if !query.select_exprs.is_empty() {
-        let mut named_list: Vec<types::Named> = Vec::new();
         for select_expr in query.select_exprs.iter() {
             let parse_aggregate_result = parse_aggregate(select_expr);
             if parse_aggregate_result.is_ok() {
@@ -286,6 +293,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 }
             } else {
                 let named = *parse_expression(select_expr)?;
+                non_aggregates.push(named.clone());
                 named_list.push(named);
             }
         }
@@ -301,10 +309,20 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     if !named_aggregates.is_empty() {
         if let Some(group_by) = query.group_by_exprs_opt {
             let fields = group_by.exprs.clone();
+
+            if !is_match_group_by_fields(&fields, &non_aggregates) {
+                return Err(ParseError::GroupByFieldsMismatch);
+            }
+
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
         } else {
             let fields = Vec::new();
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+        }
+    } else {
+        //sanity check if there is a group by statement
+        if query.group_by_exprs_opt.is_some() {
+            return Err(ParseError::GroupByWithoutAggregateFunction);
         }
     }
 
@@ -325,6 +343,54 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     }
 
     Ok(root)
+}
+
+fn is_match_group_by_fields(variables: &Vec<common::VariableName>, named_list: &[types::Named]) -> bool {
+    let mut a: Vec<String> = variables.clone();
+    let mut b: Vec<String> = Vec::new();
+
+    for named in named_list.iter() {
+        match named {
+            types::Named::Expression(expr, name_opt) => {
+                if let Some(name) = name_opt {
+                    b.push(name.clone());
+                } else {
+                    match expr {
+                        types::Expression::Variable(var_name) => {
+                            b.push(var_name.clone());
+                        }
+                        _ => {
+                            return false;
+                        }
+                    }
+                }
+            }
+            types::Named::Star => {
+                for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
+                    b.push(field_name);
+                }
+            }
+        }
+    }
+
+    dbg!(&a, &b);
+
+    if a.len() != b.len() {
+        false
+    } else {
+        a.sort();
+        b.sort();
+
+        let mut a_iter = a.iter();
+        let mut b_iter = b.iter();
+        while let (Some(aa), Some(bb)) = (a_iter.next(), b_iter.next()) {
+            if aa != bb {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 #[cfg(test)]
@@ -446,7 +512,6 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        //let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
         let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
         let data_source = common::DataSource::Stdin;
@@ -486,17 +551,7 @@ mod test {
                 )),
                 None,
             ),
-            ast::SelectExpression::Expression(
-                Box::new(ast::Expression::FuncCall(
-                    "count".to_string(),
-                    vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Column("b".to_string())),
-                        None,
-                    )],
-                    None,
-                )),
-                None,
-            ),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
@@ -526,27 +581,66 @@ mod test {
             )),
         );
 
-        let named_aggregates = vec![
-            types::NamedAggregate::new(
-                types::Aggregate::Avg(types::Named::Expression(
-                    types::Expression::Variable("a".to_string()),
-                    Some("a".to_string()),
-                )),
-                None,
-            ),
-            types::NamedAggregate::new(
-                types::Aggregate::Count(types::Named::Expression(
-                    types::Expression::Variable("b".to_string()),
-                    Some("b".to_string()),
-                )),
-                None,
-            ),
-        ];
+        let named_aggregates = vec![types::NamedAggregate::new(
+            types::Aggregate::Avg(types::Named::Expression(
+                types::Expression::Variable("a".to_string()),
+                Some("a".to_string()),
+            )),
+            None,
+        )];
 
         let fields = vec!["b".to_string()];
         let expected = types::Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
         let ans = parse_query(before, data_source).unwrap();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query_group_by_without_aggregate() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+        ];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+        ));
+        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+
+        let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None, None);
+        let data_source = common::DataSource::Stdin;
+        let ans = parse_query(before, data_source);
+        let expected = Err(ParseError::GroupByWithoutAggregateFunction);
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query_group_by_mismatch_fields() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::FuncCall(
+                    "count".to_string(),
+                    vec![ast::SelectExpression::Expression(
+                        Box::new(ast::Expression::Column("c".to_string())),
+                        None,
+                    )],
+                    None,
+                )),
+                None,
+            ),
+        ];
+
+        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+
+        let before = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None);
+        let data_source = common::DataSource::Stdin;
+        let ans = parse_query(before, data_source);
+        let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
     }
 }

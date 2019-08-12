@@ -419,7 +419,6 @@ impl Aggregate {
                 let aggregate = execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.clone());
                 Ok((aggregate, variables))
             }
-            _ => unimplemented!(),
         }
     }
 }
