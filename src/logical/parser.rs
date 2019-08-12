@@ -172,9 +172,13 @@ fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<type
             let e = parse_value_expression(expr)?;
             match &*e {
                 types::Expression::Variable(name) => {
-                    Ok(Box::new(types::Named::Expression(*e.clone(), Some(name.clone()))))
+                    if let Some(rename) = name_opt {
+                        Ok(Box::new(types::Named::Expression(*e.clone(), Some(rename.clone()))))
+                    } else {
+                        Ok(Box::new(types::Named::Expression(*e.clone(), Some(name.clone()))))
+                    }
                 }
-                _ => Ok(Box::new(types::Named::Expression(*e, None))),
+                _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
             }
         }
     }
