@@ -766,4 +766,30 @@ mod test {
             Ok(("", ans))
         );
     }
+
+    #[test]
+    fn test_select_stmt_error() {
+        assert_eq!(
+            select_query("select select from elb"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![
+                    (
+                        " from elb",
+                        nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha)
+                    ),
+                    (
+                        " select from elb",
+                        nom::error::VerboseErrorKind::Context("select_expression_list")
+                    )
+                ]
+            }))
+        );
+
+        assert_eq!(
+            select_query("select * from elb where limit 1"),
+            Err(nom::Err::Failure(VerboseError {
+                errors: vec![(" 1", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
+            }))
+        );
+    }
 }
