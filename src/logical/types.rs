@@ -331,6 +331,22 @@ impl Aggregate {
                 let aggregate = execution::Aggregate::Count(count_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
+            Aggregate::Sum(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let sum_aggregate = execution::SumAggregate::new();
+                let aggregate = execution::Aggregate::Sum(sum_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
             Aggregate::First(named) => {
                 let mut variables = common::empty_variables();
 
@@ -347,12 +363,59 @@ impl Aggregate {
                 let aggregate = execution::Aggregate::First(first_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
+            Aggregate::Last(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let last_aggregate = execution::LastAggregate::new();
+                let aggregate = execution::Aggregate::Last(last_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
+            Aggregate::Min(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let min_aggregate = execution::MinAggregate::new();
+                let aggregate = execution::Aggregate::Min(min_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
+            Aggregate::Max(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let max_aggregate = execution::MaxAggregate::new();
+                let aggregate = execution::Aggregate::Max(max_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
             Aggregate::PercentileDisc(percentile, column_name, ordering) => {
                 let variables = common::empty_variables();
                 let physical_ordering = ordering.physical()?;
 
-                let percentile_disc_aggregate =
-                    execution::PercentileDiscAggregate::new(percentile.clone(), physical_ordering);
+                let percentile_disc_aggregate = execution::PercentileDiscAggregate::new(*percentile, physical_ordering);
                 let aggregate = execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.clone());
                 Ok((aggregate, variables))
             }

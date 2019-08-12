@@ -13,8 +13,6 @@ pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
 pub(crate) enum EvaluateError {
-    #[fail(display = "Key Not Found")]
-    KeyNotFound,
     #[fail(display = "{}", _0)]
     Expression(#[cause] ExpressionError),
 }
@@ -29,8 +27,6 @@ pub(crate) type CreateStreamResult<T> = result::Result<T, CreateStreamError>;
 
 #[derive(Fail, PartialEq, Eq, Debug)]
 pub enum CreateStreamError {
-    #[fail(display = "Key Not Found")]
-    KeyNotFound,
     #[fail(display = "Io Error")]
     Io,
     #[fail(display = "Reader Error")]
@@ -581,7 +577,6 @@ impl Aggregate {
             Aggregate::Max(agg, _) => agg.add_record(key, value),
             Aggregate::Min(agg, _) => agg.add_record(key, value),
             Aggregate::PercentileDisc(agg, _) => agg.add_record(key, value),
-            _ => unimplemented!(),
         }
     }
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
@@ -594,7 +589,6 @@ impl Aggregate {
             Aggregate::Max(agg, _) => agg.get_aggregated(key),
             Aggregate::Min(agg, _) => agg.get_aggregated(key),
             Aggregate::PercentileDisc(agg, _) => agg.get_aggregated(key),
-            _ => unimplemented!(),
         }
     }
 }
