@@ -1,19 +1,19 @@
 # logq - A fast server log file command line toolkit written in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
+[![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
 
-This project is still under active development and not yet finished.
+
+This project is in alpha stage, PRs are welcomed.
 
 logq is a command line program for easily analyzing, querying, aggregating and
 joining log files. Right now only AWS Elastic Load Balancer's log format is
 supported, since it is where this project was inspired.
 
-This project took a lot of inspiration from [xsv](https://github.com/BurntSushi/xsv) and jq. I agree that the commands should be simple, fast, and composable:
 
-1. Simple tasks should be easy.
-2. Performance should be transparent and very little overhead due to the volume
-   size.
+## Installation
 
+TBD
 
 ## Examples
 
@@ -51,6 +51,13 @@ logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9
 +----------+
 | 0.088791 |
 +----------+
+```
+
+To output in different format, you can specify the format by `--output`
+```
+logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+33148328
+12256229
 ```
 
 If you are unclear how the execution was running, you can explain the query.
@@ -121,3 +128,10 @@ the 99th percentile to this endpoint, by ignoring the user_id in the restful
 endpoing within a certain time range". It would be easier to have a software
 providing those handy function to extract or canonicalize the information from
 the log.
+
+
+## Roadmap
+
+* More supported functions
+* Window Function
+* Implementing approximate_percentile_disc with t-digest algorithm when the input is large.
