@@ -63,7 +63,7 @@ pub(crate) enum Expression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Condition {
-    ComparisonExpression(RelationOperator, Box<ValueExpression>, Box<ValueExpression>),
+    ComparisonExpression(RelationOperator, ValueExpression, ValueExpression),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

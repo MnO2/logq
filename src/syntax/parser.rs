@@ -27,23 +27,35 @@ fn string_literal<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&
     )(i)
 }
 
-fn identifier<T, E: nom::error::ParseError<T>>(input: T) -> IResult<T, T, E>
+fn identifier<'a, E: nom::error::ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
-    T: InputTakeAtPosition,
-    <T as InputTakeAtPosition>::Item: AsChar,
 {
     fn is_alphanumeric_or_underscore(chr: char) -> bool {
         chr.is_alphabetic() || chr == '_'
     }
 
-    input.split_at_position1_complete(
+    let result = input.split_at_position1_complete(
         |item| !is_alphanumeric_or_underscore(item.as_char()),
         nom::error::ErrorKind::Alpha,
-    )
+    );
+
+    match result {
+        Ok((i, o)) => {
+            if o == "true" || o == "false" {
+                Err(nom::Err::Failure(nom::error::ParseError::from_error_kind(
+                    i,
+                    nom::error::ErrorKind::IsNot,
+                )))
+            } else {
+                Ok((i, o))
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn column_name<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
-    identifier(i)
+    terminated(identifier, not(char('(')))(i)
 }
 
 fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
@@ -116,9 +128,9 @@ fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::ValueExpression, VerboseError
         space0,
         alt((
             parens,
-            func_call,
             map(value, ast::ValueExpression::Value),
             map(column_name, |n| ast::ValueExpression::Column(n.to_string())),
+            func_call,
         )),
         space0,
     )(i)
@@ -160,41 +172,39 @@ fn condition<'a>(i: &'a str) -> IResult<&'a str, ast::Condition, VerboseError<&'
     alt((
         map(
             separated_pair(value_expression, tag("="), value_expression),
-            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, Box::new(l), Box::new(r)),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::Equal, l, r),
         ),
         map(
             separated_pair(value_expression, tag("/="), value_expression),
-            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::NotEqual, Box::new(l), Box::new(r)),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::NotEqual, l, r),
         ),
         map(
             separated_pair(value_expression, tag(">="), value_expression),
-            |(l, r)| {
-                ast::Condition::ComparisonExpression(ast::RelationOperator::GreaterEqual, Box::new(l), Box::new(r))
-            },
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::GreaterEqual, l, r),
         ),
         map(
             separated_pair(value_expression, tag("<="), value_expression),
-            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::LessEqual, Box::new(l), Box::new(r)),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::LessEqual, l, r),
         ),
         map(
             separated_pair(value_expression, tag(">"), value_expression),
-            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::MoreThan, Box::new(l), Box::new(r)),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::MoreThan, l, r),
         ),
         map(
             separated_pair(value_expression, tag("<"), value_expression),
-            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::LessThan, Box::new(l), Box::new(r)),
+            |(l, r)| ast::Condition::ComparisonExpression(ast::RelationOperator::LessThan, l, r),
         ),
     ))(i)
 }
 
 fn expression_term_opt_not<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     map(
-        pair(opt(preceded(space1, tag("NOT"))), value_expression),
-        |(opt_not, val)| {
+        pair(opt(tuple((space1, tag("not"), space1))), condition),
+        |(opt_not, condition)| {
             if opt_not.is_some() {
-                ast::Expression::Not(Box::new(ast::Expression::Value(Box::new(val))))
+                ast::Expression::Not(Box::new(ast::Expression::Condition(condition)))
             } else {
-                ast::Expression::Value(Box::new(val))
+                ast::Expression::Condition(condition)
             }
         },
     )(i)
@@ -204,10 +214,10 @@ fn expression_term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseE
     let (i, init) = expression_term_opt_not(i)?;
 
     fold_many0(
-        pair(alt((tag("OR"), tag("AND"))), expression_term_opt_not),
+        pair(alt((tag("or"), tag("and"))), expression_term_opt_not),
         init,
         |acc, (op, val): (&str, ast::Expression)| {
-            if op == "AND" {
+            if op == "and" {
                 ast::Expression::And(Box::new(acc), Box::new(val))
             } else {
                 ast::Expression::Or(Box::new(acc), Box::new(val))
@@ -217,7 +227,10 @@ fn expression_term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseE
 }
 
 fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    alt((map(condition, ast::Expression::Condition), expression_term))(i)
+    alt((
+        map(condition, ast::Expression::Condition),
+        map(value_expression, |v_expr| ast::Expression::Value(Box::new(v_expr))),
+    ))(i)
 }
 
 fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
@@ -228,7 +241,7 @@ fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, 
             map(
                 pair(
                     expression,
-                    opt(preceded(tuple((space1, tag("as"), space1)), identifier)),
+                    opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
                 ),
                 |(e, name_opt)| ast::SelectExpression::Expression(Box::new(e), name_opt.map(|s| s.to_string())),
             ),
@@ -365,7 +378,7 @@ mod test {
     }
 
     #[test]
-    fn test_where_value_expression() {
+    fn test_value_expression() {
         let ans = ast::ValueExpression::Operator(
             ast::ValueOperator::Plus,
             Box::new(ast::ValueExpression::Operator(
@@ -376,21 +389,65 @@ mod test {
             Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
         );
         assert_eq!(value_expression("1 + 2 + 3"), Ok(("", ans)));
+
+        let ans = ast::ValueExpression::Operator(
+            ast::ValueOperator::Minus,
+            Box::new(ast::ValueExpression::Operator(
+                ast::ValueOperator::Plus,
+                Box::new(ast::ValueExpression::Operator(
+                    ast::ValueOperator::Times,
+                    Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
+                    Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                )),
+                Box::new(ast::ValueExpression::Operator(
+                    ast::ValueOperator::Divide,
+                    Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
+                    Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                )),
+            )),
+            Box::new(ast::ValueExpression::Value(ast::Value::Integral(5))),
+        );
+
+        assert_eq!(value_expression("3*1 + 3/1 - (5)"), Ok(("", ans)));
     }
 
     #[test]
     fn test_condition_expression() {
         let ans = ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Operator(
+            ast::ValueExpression::Operator(
                 ast::ValueOperator::Plus,
-                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
-                Box::new(ast::ValueExpression::Value(ast::Value::Integral(2))),
-            )),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
+                Box::new(ast::ValueExpression::Column("a".to_string())),
+                Box::new(ast::ValueExpression::Column("b".to_string())),
+            ),
+            ast::ValueExpression::Value(ast::Value::Integral(3)),
         );
 
-        assert_eq!(condition("1 + 2 = 3"), Ok(("", ans)));
+        assert_eq!(condition("a+b = 3"), Ok(("", ans)));
+
+        let ans = ast::Condition::ComparisonExpression(
+            ast::RelationOperator::MoreThan,
+            ast::ValueExpression::Operator(
+                ast::ValueOperator::Plus,
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(3))),
+            ),
+            ast::ValueExpression::Value(ast::Value::Integral(3)),
+        );
+
+        assert_eq!(condition("1 + 3 > 3"), Ok(("", ans)));
+
+        let ans = ast::Condition::ComparisonExpression(
+            ast::RelationOperator::NotEqual,
+            ast::ValueExpression::Operator(
+                ast::ValueOperator::Minus,
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                Box::new(ast::ValueExpression::Value(ast::Value::Integral(4))),
+            ),
+            ast::ValueExpression::Value(ast::Value::Integral(3)),
+        );
+
+        assert_eq!(condition("1-4/=3"), Ok(("", ans)));
     }
 
     #[test]
@@ -403,7 +460,21 @@ mod test {
                 ast::ValueExpression::Value(ast::Value::Boolean(true)),
             ))))),
         );
-        assert_eq!(expression_term("true AND NOT true"), Ok(("", ans)));
+        assert_eq!(expression_term("true and not true"), Ok(("", ans)));
+
+        let ans = ast::Expression::And(
+            Box::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
+                ast::RelationOperator::Equal,
+                ast::ValueExpression::Column("a".to_string()),
+                ast::ValueExpression::Value(ast::Value::Integral(1)),
+            ))),
+            Box::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
+                ast::RelationOperator::Equal,
+                ast::ValueExpression::Column("b".to_string()),
+                ast::ValueExpression::Value(ast::Value::Integral(2)),
+            ))),
+        );
+        assert_eq!(expression_term("a = 1 and b = 2"), Ok(("", ans)));
     }
 
     #[test]
@@ -485,8 +556,8 @@ mod test {
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+            ast::ValueExpression::Column("a".to_string()),
+            ast::ValueExpression::Value(ast::Value::Integral(1)),
         )));
         let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
 
@@ -514,8 +585,8 @@ mod test {
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+            ast::ValueExpression::Column("a".to_string()),
+            ast::ValueExpression::Value(ast::Value::Integral(1)),
         )));
 
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
@@ -636,8 +707,8 @@ mod test {
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+            ast::ValueExpression::Column("a".to_string()),
+            ast::ValueExpression::Value(ast::Value::Integral(1)),
         )));
         let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
 
@@ -736,6 +807,45 @@ mod test {
 
         assert_eq!(
             select_query("select a, percentile_disc(0.9) within group (order by b asc) from elb group by a"),
+            Ok(("", ans))
+        );
+    }
+
+    #[test]
+    fn test_select_statement_with_as() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                    "a".to_string(),
+                )))),
+                Some("aa".to_string()),
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::FuncCall(
+                    "foo".to_string(),
+                    vec![ast::SelectExpression::Expression(
+                        Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Column(
+                            "b".to_string(),
+                        )))),
+                        None,
+                    )],
+                    None,
+                )))),
+                Some("bb".to_string()),
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Value(Box::new(ast::ValueExpression::Operator(
+                    ast::ValueOperator::Plus,
+                    Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                    Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+                )))),
+                Some("cc".to_string()),
+            ),
+        ];
+
+        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None);
+        assert_eq!(
+            select_query("select a as aa, foo( b ) as bb, 1+1 as cc from elb"),
             Ok(("", ans))
         );
     }

@@ -408,8 +408,8 @@ mod test {
     fn test_parse_condition() {
         let before = ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+            ast::ValueExpression::Column("a".to_string()),
+            ast::ValueExpression::Value(ast::Value::Integral(1)),
         );
 
         let expected = Box::new(types::Formula::Predicate(
@@ -441,8 +441,8 @@ mod test {
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+            ast::ValueExpression::Column("a".to_string()),
+            ast::ValueExpression::Value(ast::Value::Integral(1)),
         )));
         //let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
@@ -503,8 +503,8 @@ mod test {
 
         let where_expr = ast::WhereExpression::new(ast::Expression::Condition(ast::Condition::ComparisonExpression(
             ast::RelationOperator::Equal,
-            Box::new(ast::ValueExpression::Column("a".to_string())),
-            Box::new(ast::ValueExpression::Value(ast::Value::Integral(1))),
+            ast::ValueExpression::Column("a".to_string()),
+            ast::ValueExpression::Value(ast::Value::Integral(1)),
         )));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
