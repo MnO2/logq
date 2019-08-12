@@ -1,18 +1,13 @@
 use super::types;
 use crate::common::types as common;
 use crate::syntax::ast;
-use ordered_float::OrderedFloat;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     #[fail(display = "Type Mismatch")]
     TypeMismatch,
-    #[fail(display = "Unsupported Logic Operator")]
-    UnsupportedLogicOperator,
     #[fail(display = "Not Aggregate Function")]
     NotAggregateFunction,
-    #[fail(display = "Select Expression Must Be Named")]
-    SelectExprMustBeNamed,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -135,7 +130,7 @@ fn parse_value_expression(value_expr: &ast::Expression) -> ParseResult<Box<types
         ast::Expression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
         ast::Expression::BinaryOperator(_, _, _) => parse_binary_operator(value_expr),
         ast::Expression::UnaryOperator(_, _) => parse_unary_operator(value_expr),
-        ast::Expression::FuncCall(func_name, select_exprs, within_group_opt) => {
+        ast::Expression::FuncCall(func_name, select_exprs, _) => {
             let mut args = Vec::new();
             for select_expr in select_exprs.iter() {
                 let arg = parse_expression(select_expr)?;
@@ -284,7 +279,6 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         types::Expression::Variable(column_name.clone()),
                         Some(column_name.clone()),
                     )),
-                    _ => unimplemented!(),
                 }
             } else {
                 let named = *parse_expression(select_expr)?;

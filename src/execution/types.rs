@@ -71,8 +71,6 @@ pub(crate) enum StreamError {
     Reader,
     #[fail(display = "Aggregate Error")]
     Aggregate,
-    #[fail(display = "There should be at least one field in group by clause")]
-    GroupByZeroField,
 }
 
 impl From<CreateStreamError> for StreamError {
@@ -318,15 +316,13 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                                 unreachable!();
                             }
                         }
-                        _ => {
-                            return Err(ExpressionError::TimeIntervalNotSupported);
-                        }
+                        _ => Err(ExpressionError::TimeIntervalNotSupported),
                     }
                 }
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
-        _ => Err(ExpressionError::InvalidArguments),
+        _ => Err(ExpressionError::UnknownFunction),
     }
 }
 
@@ -876,7 +872,7 @@ impl FirstAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        if let Some(_) = self.firsts.get(&key) {
+        if self.firsts.get(&key).is_some() {
             //do nothing
             Ok(())
         } else {
@@ -905,13 +901,8 @@ impl LastAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        if let Some(last) = self.lasts.get(&key) {
-            self.lasts.insert(key.clone(), value);
-            Ok(())
-        } else {
-            self.lasts.insert(key.clone(), value);
-            Ok(())
-        }
+        self.lasts.insert(key.clone(), value);
+        Ok(())
     }
 
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {

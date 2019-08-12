@@ -9,7 +9,7 @@ use nom::{
     error::{context, VerboseError},
     multi::{fold_many0, separated_list},
     number::complete,
-    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
+    sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult, InputTakeAtPosition,
 };
 

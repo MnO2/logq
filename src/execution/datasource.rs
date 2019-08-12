@@ -32,7 +32,6 @@ impl fmt::Display for DataType {
             DataType::Float => "Float",
             DataType::Host => "Host",
             DataType::HttpRequest => "HttpRequest",
-            _ => unimplemented!(),
         };
 
         write!(f, "{}", name)
@@ -361,9 +360,9 @@ mod tests {
             Value::String("elb1".to_string()),
             Value::Host(common::types::parse_host("78.168.134.92:4586").unwrap()),
             Value::Host(common::types::parse_host("10.0.0.215:80").unwrap()),
-            Value::Float(OrderedFloat::from(0.000036)),
-            Value::Float(OrderedFloat::from(0.001035)),
-            Value::Float(OrderedFloat::from(0.000025)),
+            Value::Float(OrderedFloat::from(0.000_036)),
+            Value::Float(OrderedFloat::from(0.001_035)),
+            Value::Float(OrderedFloat::from(0.000_025)),
             Value::String("200".to_string()),
             Value::String("200".to_string()),
             Value::Int(0),
@@ -388,9 +387,9 @@ mod tests {
             Value::String("elb1".to_string()),
             Value::Host(common::types::parse_host("176.219.166.226:48384").unwrap()),
             Value::Host(common::types::parse_host("10.0.2.143:80").unwrap()),
-            Value::Float(OrderedFloat::from(0.000023)),
-            Value::Float(OrderedFloat::from(0.000348)),
-            Value::Float(OrderedFloat::from(0.000025)),
+            Value::Float(OrderedFloat::from(0.000_023)),
+            Value::Float(OrderedFloat::from(0.000_348)),
+            Value::Float(OrderedFloat::from(0.000_025)),
             Value::String("200".to_string()),
             Value::String("200".to_string()),
             Value::Int(0),

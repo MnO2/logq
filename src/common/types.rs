@@ -174,8 +174,6 @@ pub(crate) type ParseTimeIntervalResult<T> = result::Result<T, ParseTimeInterval
 pub(crate) enum ParseTimeIntervalError {
     #[fail(display = "Parse Integral Error: {}", _0)]
     ParseIntegral(#[cause] std::num::ParseIntError),
-    #[fail(display = "Parse Unit Error")]
-    ParseUnit,
     #[fail(display = "Missing Part")]
     MissingPart,
     #[fail(display = "Unknown Time Unit")]
