@@ -345,8 +345,8 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     Ok(root)
 }
 
-fn is_match_group_by_fields(variables: &Vec<common::VariableName>, named_list: &[types::Named]) -> bool {
-    let mut a: Vec<String> = variables.clone();
+fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[types::Named]) -> bool {
+    let mut a: Vec<String> = variables.to_vec();
     let mut b: Vec<String> = Vec::new();
 
     for named in named_list.iter() {
@@ -372,8 +372,6 @@ fn is_match_group_by_fields(variables: &Vec<common::VariableName>, named_list: &
             }
         }
     }
-
-    dbg!(&a, &b);
 
     if a.len() != b.len() {
         false
