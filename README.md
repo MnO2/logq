@@ -17,21 +17,89 @@ This project took a lot of inspiration from [xsv](https://github.com/BurntSushi/
 
 ## Examples
 
-Project the columns of `timestamp` and `backend_and_port` field and print it out.
+Project the columns of `timestamp` and `backend_and_port` field and print the first three records out.
+
 ```
-logq select --query "timestamp, backend_and_port" data/AWSLogs.log
+logq query 'select timestamp, backend_processing_time from elb order by timestamp asc limit 3' data/AWSLogs.log
+
++-----------------------------------+----------+
+| 2015-11-07 18:45:33.007671 +00:00 | 0.618779 |
++-----------------------------------+----------+
+| 2015-11-07 18:45:33.054086 +00:00 | 0.654135 |
++-----------------------------------+----------+
+| 2015-11-07 18:45:33.094266 +00:00 | 0.506634 |
++-----------------------------------+----------+
 ```
 
 
-Aggregate the average processing time and partition by backend_and_port.
+Summing up the total sent bytes in 5 seconds time frame.
 ```
-logq select --query "avg(backend_processing_time) over (partition by backend_and_port)" data/AWSLogs.log
+logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
++----------+
+| 12256229 |
++----------+
+| 33148328 |
++----------+
 ```
 
-Select the most latency hitting to a backend server 
+
+Select the 90th percentile backend_processsing_time.
 ```
-logq select --query "PERCENTILE_DISC(1) within group (order by backend_processing_time desc) over (partition by backend_and_port)" data/AWSLogs.log
+logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t' data/AWSLogs.log
++----------+
+| 0.112312 |
++----------+
+| 0.088791 |
++----------+
 ```
+
+If you are unclear how the execution was running, you can explain the query.
+```
+logq explain 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t'
+Query Plan:
+GroupBy(["t"], [NamedAggregate { aggregate: Sum(SumAggregate { sums: {} }, Expression(Variable("sent_bytes"), Some("sent_bytes"))), name_opt: Some("s") }], Map([Expression(Function("time_bucket", [Expression(Variable("const_000000000"), None), Expression(Variable("timestamp"), Some("timestamp"))]), Some("t")), Expression(Variable("sent_bytes"), Some("sent_bytes"))], DataSource(Stdin)))
+```
+
+To know what are the fields, here is the table schema.
+```
+logq schema
++--------------------------+-------------+
+| timestamp                | DateTime    |
++--------------------------+-------------+
+| elbname                  | String      |
++--------------------------+-------------+
+| client_and_port          | Host        |
++--------------------------+-------------+
+| backend_and_port         | Host        |
++--------------------------+-------------+
+| request_processing_time  | Float       |
++--------------------------+-------------+
+| backend_processing_time  | Float       |
++--------------------------+-------------+
+| response_processing_time | Float       |
++--------------------------+-------------+
+| elb_status_code          | String      |
++--------------------------+-------------+
+| backend_status_code      | String      |
++--------------------------+-------------+
+| received_bytes           | Integral    |
++--------------------------+-------------+
+| sent_bytes               | Integral    |
++--------------------------+-------------+
+| request                  | HttpRequest |
++--------------------------+-------------+
+| user_agent               | String      |
++--------------------------+-------------+
+| ssl_cipher               | String      |
++--------------------------+-------------+
+| ssl_protocol             | String      |
++--------------------------+-------------+
+| target_group_arn         | String      |
++--------------------------+-------------+
+| trace_id                 | String      |
++--------------------------+-------------+
+```
+
 
 ## Motivation
 
