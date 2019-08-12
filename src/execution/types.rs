@@ -249,10 +249,10 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                             }
 
                             let mut target_opt: Option<u32> = None;
-                            let step_size: usize = (60 % time_interval.n) as usize;
+                            let step_size: usize = time_interval.n as usize;
                             //FIXME: binary search
                             for point in (0..=60u32).rev().step_by(step_size) {
-                                if point <= time_interval.n {
+                                if point <= dt.second() {
                                     target_opt = Some(point);
                                     break;
                                 }
@@ -271,10 +271,10 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                             }
 
                             let mut target_opt: Option<u32> = None;
-                            let step_size: usize = (60 % time_interval.n) as usize;
+                            let step_size: usize = time_interval.n as usize;
                             //FIXME: binary search
                             for point in (0..=60u32).rev().step_by(step_size) {
-                                if point <= time_interval.n {
+                                if point <= dt.minute() {
                                     target_opt = Some(point);
                                     break;
                                 }
@@ -297,10 +297,10 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                             }
 
                             let mut target_opt: Option<u32> = None;
-                            let step_size: usize = (24 % time_interval.n) as usize;
+                            let step_size: usize = time_interval.n as usize;
                             //FIXME: binary search
                             for point in (0..=24u32).rev().step_by(step_size) {
-                                if point <= time_interval.n {
+                                if point <= dt.hour() {
                                     target_opt = Some(point);
                                     break;
                                 }
