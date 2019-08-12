@@ -624,6 +624,14 @@ impl PercentileDiscAggregate {
                 Ordering::Asc => i1.cmp(i2),
                 Ordering::Desc => i2.cmp(i1),
             },
+            (Value::Float(f1), Value::Float(f2)) => match self.ordering {
+                Ordering::Asc => f1.cmp(f2),
+                Ordering::Desc => f2.cmp(f1),
+            },
+            (Value::DateTime(dt1), Value::DateTime(dt2)) => match self.ordering {
+                Ordering::Asc => dt1.cmp(dt2),
+                Ordering::Desc => dt2.cmp(dt1),
+            },
             (Value::String(s1), Value::String(s2)) => match self.ordering {
                 Ordering::Asc => s1.cmp(s2),
                 Ordering::Desc => s2.cmp(s1),
