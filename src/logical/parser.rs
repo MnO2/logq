@@ -292,6 +292,18 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         }
     }
 
+    if let Some(order_by_expr) = query.order_by_expr_opt {
+        let mut column_names = Vec::new();
+        let mut orderings = Vec::new();
+        for ordering_term in order_by_expr.ordering_terms {
+            column_names.push(ordering_term.column_name.clone());
+            let ordering = parse_ordering(ordering_term.ordering)?;
+            orderings.push(ordering);
+        }
+
+        root = types::Node::OrderBy(column_names, orderings, Box::new(root));
+    }
+
     if let Some(limit_expr) = query.limit_expr_opt {
         root = types::Node::Limit(limit_expr.row_count, Box::new(root));
     }
