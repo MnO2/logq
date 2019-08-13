@@ -114,7 +114,19 @@ impl fmt::Display for ClassicLoadBalancerLogField {
             ClassicLoadBalancerLogField::Elbname => "elbname",
             ClassicLoadBalancerLogField::ClientAndPort => "client_and_port",
             ClassicLoadBalancerLogField::BackendAndPort => "backend_and_port",
-            _ => unimplemented!(),
+            ClassicLoadBalancerLogField::RequestProcessingTime => "request_processing_time",
+            ClassicLoadBalancerLogField::BackendProcessingTime => "backend_processing_time",
+            ClassicLoadBalancerLogField::ResponseProcessingTime => "response_processing_time",
+            ClassicLoadBalancerLogField::ELBStatusCode => "elb_status_code",
+            ClassicLoadBalancerLogField::BackendStatusCode => "backend_status_code",
+            ClassicLoadBalancerLogField::ReceivedBytes => "received_bytes",
+            ClassicLoadBalancerLogField::SentBytes => "sent_bytes",
+            ClassicLoadBalancerLogField::Request => "request",
+            ClassicLoadBalancerLogField::UserAgent => "user_agent",
+            ClassicLoadBalancerLogField::SSLCipher => "ssl_cipher",
+            ClassicLoadBalancerLogField::SSLProtocol => "ssl_protocol",
+            ClassicLoadBalancerLogField::TargetGroupArn => "target_group_arn",
+            ClassicLoadBalancerLogField::TraceID => "trace_id",
         };
 
         write!(f, "{}", name)
