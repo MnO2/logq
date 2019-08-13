@@ -181,48 +181,8 @@ impl Expression {
     }
 }
 
-fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
+fn evaluate_url_functions(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
     match func_name {
-        "Plus" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Minus" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Times" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Divide" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
         "url_host" => {
             if arguments.len() != 1 {
                 return Err(ExpressionError::InvalidArguments);
@@ -281,6 +241,72 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                         Ok(Value::Null)
                     }
                 }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "url_query" => {
+            if arguments.len() != 1 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match &arguments[0] {
+                Value::HttpRequest(r) => {
+                    if let Some(url_query) = r.url.query() {
+                        Ok(Value::String(url_query.to_string()))
+                    } else {
+                        Ok(Value::Null)
+                    }
+                }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        _ => Err(ExpressionError::UnknownFunction),
+    }
+}
+
+fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
+    if func_name.starts_with("url_") {
+        return evaluate_url_functions(func_name, arguments);
+    }
+
+    match func_name {
+        "Plus" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "Minus" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "Times" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "Divide" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
