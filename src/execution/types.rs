@@ -230,7 +230,7 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
 
             match &arguments[0] {
                 Value::HttpRequest(r) => {
-                    if let Some(host) = r.url.host() {
+                    if let Some(host) = r.url.host_str() {
                         Ok(Value::String(host.to_string()))
                     } else {
                         Ok(Value::Null)
@@ -251,6 +251,19 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                     } else {
                         Ok(Value::Null)
                     }
+                }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "url_path" => {
+            if arguments.len() != 1 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match &arguments[0] {
+                Value::HttpRequest(r) => {
+                    let url_path = r.url.path();
+                    Ok(Value::String(url_path.to_string()))
                 }
                 _ => Err(ExpressionError::InvalidArguments),
             }
