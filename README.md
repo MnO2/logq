@@ -133,5 +133,9 @@ the log.
 ## Roadmap
 
 * More supported functions
+* time_bucket with arbitrary interval (begin from epoch)
 * Window Function
 * Implementing approximate_percentile_disc with t-digest algorithm when the input is large.
+* Streaming mode to work with `tail -f`
+* Customizable Reader, to follow GoAccess's style
+* More supported log format
