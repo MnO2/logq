@@ -260,6 +260,28 @@ fn evaluate_url_functions(func_name: &str, arguments: &[Value]) -> ExpressionRes
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
+        "url_path_segments" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::HttpRequest(r), Value::Int(idx)) => {
+                    if let Some(url_path_segments) = r.url.path_segments() {
+                        let idx = *idx as usize;
+                        for (i, segment) in url_path_segments.enumerate() {
+                            if i == idx {
+                                return Ok(Value::String(segment.to_string()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    } else {
+                        Ok(Value::Null)
+                    }
+                }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
         _ => Err(ExpressionError::UnknownFunction),
     }
 }
