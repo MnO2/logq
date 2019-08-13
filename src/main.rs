@@ -40,6 +40,8 @@ pub(crate) enum AppError {
     InvalidLogFileFormat,
     #[fail(display = "{}", _0)]
     WriteCsv(#[cause] csv::Error),
+    #[fail(display = "{}", _0)]
+    WriteJson(#[cause] json::Error),
 }
 
 impl From<nom::Err<VerboseError<&str>>> for AppError {
@@ -95,6 +97,12 @@ impl From<execution::types::StreamError> for AppError {
 impl From<csv::Error> for AppError {
     fn from(err: csv::Error) -> AppError {
         AppError::WriteCsv(err)
+    }
+}
+
+impl From<json::Error> for AppError {
+    fn from(err: json::Error) -> AppError {
+        AppError::WriteJson(err)
     }
 }
 
@@ -157,7 +165,44 @@ fn run(
                     wtr.write_record(csv_record)?;
                 }
             }
-            OutputMode::Json => {}
+            OutputMode::Json => {
+                let mut data = json::JsonValue::new_array();
+                while let Some(record) = stream.next()? {
+                    let mut obj = json::JsonValue::new_object();
+                    for (key, val) in record.to_tuples() {
+                        match val {
+                            common::types::Value::Boolean(b) => {
+                                obj[key] = b.into();
+                            }
+                            common::types::Value::DateTime(dt) => {
+                                obj[key] = dt.to_string().into();
+                            }
+                            common::types::Value::Float(f) => {
+                                obj[key] = f.into_inner().into();
+                            }
+                            common::types::Value::Host(h) => {
+                                obj[key] = h.to_string().into();
+                            }
+                            common::types::Value::HttpRequest(h) => {
+                                obj[key] = h.to_string().into();
+                            }
+                            common::types::Value::Int(i) => {
+                                obj[key] = i.into();
+                            }
+                            common::types::Value::Null => {
+                                obj[key] = json::Null;
+                            }
+                            common::types::Value::String(s) => {
+                                obj[key] = s.into();
+                            }
+                        }
+                    }
+
+                    data.push(obj)?;
+                }
+                let s = data.dump();
+                println!("{}", s);
+            }
         }
 
         Ok(())
