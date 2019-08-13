@@ -173,3 +173,4 @@ the log.
 * Streaming mode to work with `tail -f`
 * Customizable Reader, to follow GoAccess's style
 * More supported log format
+* Plugin quickjs for user-defined functions
