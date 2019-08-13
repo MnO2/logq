@@ -405,4 +405,22 @@ mod tests {
 
         assert_eq!(expected, record)
     }
+
+    #[test]
+    fn test_reader_on_empty_input() {
+        let content = r#"                   \n          "#;
+        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record();
+
+        assert_eq!(record.is_err(), true)
+    }
+
+    #[test]
+    fn test_reader_on_malformed_input() {
+        let content = r#"2015-11-07T18:45:37.691548Z elb1 176.219.166.226:48384 10.0.2.143:80 0.000 on=1 HTTP/1.1" "Mozilla/5.0 (Linux; Android 5.137.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]" - - arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354""#;
+        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record();
+
+        assert_eq!(record.is_err(), true)
+    }
 }
