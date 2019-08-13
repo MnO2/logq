@@ -654,7 +654,38 @@ impl Node {
                                     return dt2.cmp(dt1);
                                 }
                             },
-                            _ => unimplemented!(),
+                            (Value::Null, Value::Null) => {
+                                return std::cmp::Ordering::Equal;
+                            }
+                            (Value::Host(h1), Value::Host(h2)) => {
+                                let s1 = h1.to_string();
+                                let s2 = h2.to_string();
+
+                                match curr_ordering {
+                                    Ordering::Asc => {
+                                        return s1.cmp(&s2);
+                                    }
+                                    Ordering::Desc => {
+                                        return s2.cmp(&s1);
+                                    }
+                                }
+                            }
+                            (Value::HttpRequest(h1), Value::HttpRequest(h2)) => {
+                                let s1 = h1.to_string();
+                                let s2 = h2.to_string();
+
+                                match curr_ordering {
+                                    Ordering::Asc => {
+                                        return s1.cmp(&s2);
+                                    }
+                                    Ordering::Desc => {
+                                        return s2.cmp(&s1);
+                                    }
+                                }
+                            }
+                            _ => {
+                                unreachable!();
+                            }
                         }
                     }
 
@@ -760,6 +791,10 @@ impl PercentileDiscAggregate {
                 Ordering::Asc => i1.cmp(i2),
                 Ordering::Desc => i2.cmp(i1),
             },
+            (Value::Boolean(b1), Value::Boolean(b2)) => match self.ordering {
+                Ordering::Asc => b1.cmp(b2),
+                Ordering::Desc => b2.cmp(b1),
+            },
             (Value::Float(f1), Value::Float(f2)) => match self.ordering {
                 Ordering::Asc => f1.cmp(f2),
                 Ordering::Desc => f2.cmp(f1),
@@ -772,7 +807,28 @@ impl PercentileDiscAggregate {
                 Ordering::Asc => s1.cmp(s2),
                 Ordering::Desc => s2.cmp(s1),
             },
-            _ => unimplemented!(),
+            (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
+            (Value::Host(h1), Value::Host(h2)) => {
+                let s1 = h1.to_string();
+                let s2 = h2.to_string();
+
+                match self.ordering {
+                    Ordering::Asc => s1.cmp(&s2),
+                    Ordering::Desc => s2.cmp(&s1),
+                }
+            }
+            (Value::HttpRequest(h1), Value::HttpRequest(h2)) => {
+                let s1 = h1.to_string();
+                let s2 = h2.to_string();
+
+                match self.ordering {
+                    Ordering::Asc => s1.cmp(&s2),
+                    Ordering::Desc => s2.cmp(&s1),
+                }
+            }
+            _ => {
+                unreachable!();
+            }
         });
 
         let f32_percentile: f32 = self.percentile.into();
