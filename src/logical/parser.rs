@@ -233,15 +233,17 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
                                     )
                                 }
                                 _ => {
-                                    unimplemented!();
+                                    return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
                                 }
                             },
                             _ => {
-                                unimplemented!();
+                                //FIXME: should be ok for a function returning Float as well
+                                return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
                             }
                         },
                         _ => {
-                            unimplemented!();
+                            //Star should be disallowed.
+                            return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
                         }
                     }
                 } else {
