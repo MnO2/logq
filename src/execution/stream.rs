@@ -267,7 +267,7 @@ impl RecordStream for GroupByStream {
             let mut groups: hash_set::HashSet<Option<Tuple>> = hash_set::HashSet::new();
             while let Some(record) = self.source.next()? {
                 let variables = common::types::merge(self.variables.clone(), record.to_variables());
-                let key = if self.keys.len() == 0 {
+                let key = if self.keys.is_empty() {
                     None
                 } else {
                     Some(record.get(&self.keys))
@@ -280,7 +280,7 @@ impl RecordStream for GroupByStream {
                             let val = match named {
                                 Named::Expression(expr, name_opt) => expr.expression_value(variables.clone())?,
                                 Named::Star => {
-                                    unimplemented!();
+                                    unreachable!();
                                 }
                             };
 
@@ -304,7 +304,7 @@ impl RecordStream for GroupByStream {
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
-                                    unimplemented!();
+                                    unreachable!();
                                 }
                             };
                         }
@@ -315,7 +315,7 @@ impl RecordStream for GroupByStream {
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
-                                    unimplemented!();
+                                    unreachable!();
                                 }
                             };
                         }
@@ -326,7 +326,7 @@ impl RecordStream for GroupByStream {
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
-                                    unimplemented!();
+                                    unreachable!();
                                 }
                             };
                         }
@@ -337,7 +337,7 @@ impl RecordStream for GroupByStream {
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
-                                    unimplemented!();
+                                    unreachable!();
                                 }
                             };
                         }
@@ -348,7 +348,7 @@ impl RecordStream for GroupByStream {
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
-                                    unimplemented!();
+                                    unreachable!();
                                 }
                             };
                         }
@@ -356,7 +356,6 @@ impl RecordStream for GroupByStream {
                             let val = variables.get(column_name).unwrap();
                             inner.add_record(key.clone(), val.clone())?;
                         }
-                        _ => unimplemented!(),
                     }
                 }
             }

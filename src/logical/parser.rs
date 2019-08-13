@@ -16,6 +16,8 @@ pub enum ParseError {
     GroupByFieldsMismatch,
     #[fail(display = "Conflict variable naming")]
     ConflictVariableNaming,
+    #[fail(display = "Invalid Arguments: {}", _0)]
+    InvalidArguments(String),
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -295,24 +297,43 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
                 match named_aggregate.aggregate {
                     types::Aggregate::Avg(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("avg".to_string()));
+                        }
+
                         named_list.push(named);
                     }
                     types::Aggregate::Count(named) => {
                         named_list.push(named);
                     }
                     types::Aggregate::First(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("first".to_string()));
+                        }
                         named_list.push(named);
                     }
                     types::Aggregate::Last(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("last".to_string()));
+                        }
                         named_list.push(named);
                     }
                     types::Aggregate::Sum(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("sum".to_string()));
+                        }
                         named_list.push(named);
                     }
                     types::Aggregate::Max(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("max".to_string()));
+                        }
                         named_list.push(named);
                     }
                     types::Aggregate::Min(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("min".to_string()));
+                        }
                         named_list.push(named);
                     }
                     types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(
