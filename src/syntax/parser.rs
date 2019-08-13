@@ -1,5 +1,6 @@
 use super::ast;
 use ordered_float::OrderedFloat;
+use std::str::FromStr;
 
 use nom::{
     branch::alt,
@@ -12,6 +13,8 @@ use nom::{
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult, InputTakeAtPosition,
 };
+
+use hashbrown::hash_map::HashMap;
 
 lazy_static! {
     static ref KEYWORDS: Vec<&'static str> = {
@@ -320,6 +323,62 @@ fn order_by_clause<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, V
 
 fn from_clause<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
     terminated(preceded(tuple((tag("from"), space1)), identifier), space0)(i)
+}
+
+fn parse_expression_atom<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    factor(i)
+}
+
+fn parse_expression_op<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+    alt((
+        tag("+"),
+        tag("-"),
+        tag("*"),
+        tag("/"),
+        tag("="),
+        tag("!="),
+        tag(">"),
+        tag("<"),
+        tag(">="),
+        tag("<="),
+        tag("and"),
+        tag("or"),
+    ))(i)
+}
+
+fn parse_expression_at_precedence<'a>(
+    i0: &'a str,
+    current_precedence: u32,
+    precedence_table: &HashMap<String, u32>,
+) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    let (mut i1, mut expr) = parse_expression_atom(i0)?;
+    loop {
+        let r = parse_expression_op(i1);
+        if r.is_err() {
+            break;
+        }
+
+        let (i2, op) = r.unwrap();
+        let op_precedence: u32 = *precedence_table.get(op).unwrap();
+
+        if op_precedence < current_precedence {
+            break;
+        }
+
+        let op_right_ssociative = false;
+        let (i3, b) = if op_right_ssociative {
+            parse_expression_at_precedence(i2, op_precedence, precedence_table)?
+        } else {
+            parse_expression_at_precedence(i2, op_precedence + 1, precedence_table)?
+        };
+
+        let op = ast::BinaryOperator::from_str(op).unwrap();
+        expr = ast::Expression::BinaryOperator(op, Box::new(expr), Box::new(b));
+
+        i1 = i3;
+    }
+
+    return Ok((i1, expr));
 }
 
 pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
@@ -791,5 +850,57 @@ mod test {
                 errors: vec![(" 1", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
             }))
         );
+    }
+
+    #[test]
+    fn test_parse_expression_atom() {
+        let (_, ans) = parse_expression_atom("1").unwrap();
+        let expected = ast::Expression::Value(ast::Value::Integral(1));
+
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_expression_op() {
+        let (_, ans) = parse_expression_op("+").unwrap();
+        let expected = "+";
+        assert_eq!(expected, ans);
+
+        let (_, ans) = parse_expression_op("*").unwrap();
+        let expected = "*";
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_expression_at_precedence() {
+        let mut precedence_table: HashMap<String, u32> = HashMap::new();
+        precedence_table.insert("*".to_string(), 7);
+        precedence_table.insert("/".to_string(), 7);
+        precedence_table.insert("+".to_string(), 6);
+        precedence_table.insert("-".to_string(), 6);
+        precedence_table.insert("<".to_string(), 4);
+        precedence_table.insert("<=".to_string(), 4);
+        precedence_table.insert(">".to_string(), 4);
+        precedence_table.insert(">=".to_string(), 4);
+        precedence_table.insert("=".to_string(), 3);
+        precedence_table.insert("!=".to_string(), 3);
+        precedence_table.insert("and".to_string(), 2);
+        precedence_table.insert("or".to_string(), 1);
+        let (_, ans) = parse_expression_at_precedence(" 1 +1*2- 3", 1, &precedence_table).unwrap();
+        let expected = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Minus,
+            Box::new(ast::Expression::BinaryOperator(
+                ast::BinaryOperator::Plus,
+                Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                Box::new(ast::Expression::BinaryOperator(
+                    ast::BinaryOperator::Times,
+                    Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                    Box::new(ast::Expression::Value(ast::Value::Integral(2))),
+                )),
+            )),
+            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
+        );
+
+        assert_eq!(expected, ans);
     }
 }

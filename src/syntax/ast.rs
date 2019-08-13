@@ -80,6 +80,30 @@ pub(crate) enum BinaryOperator {
     Or,
 }
 
+impl FromStr for BinaryOperator {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "+" => Ok(BinaryOperator::Plus),
+            "-" => Ok(BinaryOperator::Minus),
+            "*" => Ok(BinaryOperator::Times),
+            "/" => Ok(BinaryOperator::Divide),
+            "=" => Ok(BinaryOperator::Equal),
+            "!=" => Ok(BinaryOperator::NotEqual),
+            ">" => Ok(BinaryOperator::MoreThan),
+            "<" => Ok(BinaryOperator::LessThan),
+            ">=" => Ok(BinaryOperator::GreaterEqual),
+            "<=" => Ok(BinaryOperator::LessEqual),
+            "and" => Ok(BinaryOperator::And),
+            "or" => Ok(BinaryOperator::Or),
+            _ => Err("unknown binary operator".to_string()),
+        }
+    }
+}
+
+
+
 impl fmt::Display for BinaryOperator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
