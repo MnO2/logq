@@ -674,4 +674,24 @@ mod test {
         let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
     }
+
+    #[test]
+    fn test_parse_query_group_by_conflict_naming() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Column("a".to_string())),
+                Some("t".to_string()),
+            ),
+            ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Column("b".to_string())),
+                Some("t".to_string()),
+            ),
+        ];
+
+        let before = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None);
+        let data_source = common::DataSource::Stdin;
+        let ans = parse_query(before, data_source);
+        let expected = Err(ParseError::ConflictVariableNaming);
+        assert_eq!(expected, ans);
+    }
 }
