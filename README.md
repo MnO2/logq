@@ -1,4 +1,4 @@
-# logq - A fast server log file command line toolkit written in Rust
+# logq - A server log file command line toolkit written in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
 [![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
@@ -158,6 +158,8 @@ the log.
 
 ## Roadmap
 
+* Conforms to the much more complicated SQL syntax as [sqlite](https://www.sqlite.org/lang_expr.html)
+* Performance optimization, avoid unnecessary parsing
 * More supported functions
 * time_bucket with arbitrary interval (begin from epoch)
 * Window Function

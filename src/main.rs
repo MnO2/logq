@@ -213,16 +213,25 @@ fn main() {
                 sub_m.usage();
             }
         }
-        ("schema", Some(_)) => {
-            let schema = execution::datasource::ClassicLoadBalancerLogField::schema();
-            let mut table = Table::new();
-            for (field, datatype) in schema.iter() {
-                table.add_row(Row::new(vec![
-                    Cell::new(&*field.to_string()),
-                    Cell::new(&*datatype.to_string()),
-                ]));
+        ("schema", Some(sub_m)) => {
+            if let Some(type_str) = sub_m.value_of("type") {
+                if type_str == "elb" {
+                    let schema = execution::datasource::ClassicLoadBalancerLogField::schema();
+                    let mut table = Table::new();
+                    for (field, datatype) in schema.iter() {
+                        table.add_row(Row::new(vec![
+                            Cell::new(&*field.to_string()),
+                            Cell::new(&*datatype.to_string()),
+                        ]));
+                    }
+                    table.printstd();
+                } else {
+                    eprintln!("Unknown log format");
+                }
+            } else {
+                println!("The supported log format");
+                println!("* elb");
             }
-            table.printstd();
         }
         _ => {
             app_m.usage();
