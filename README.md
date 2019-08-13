@@ -79,11 +79,16 @@ To collapse the part of the url path so that they are mapping to the same Restfu
 +----------------------------+----------------------------------------------+
 ```
 
-To output in different format, you can specify the format by `--output`
+To output in different format, you can specify the format by `--output`, it supports `json` and `csv` at this moment.
 ```
 > logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
 33148328
 12256229
+```
+
+```
+> logq query --output json 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+[{"t":33148328},{"t":12256229}]
 ```
 
 If you are unclear how the execution was running, you can explain the query.
