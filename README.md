@@ -13,7 +13,9 @@ supported, since it is where this project was inspired.
 
 ## Installation
 
-TBD
+```
+cargo install logq
+```
 
 ## Examples
 
