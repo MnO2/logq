@@ -268,6 +268,22 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
+        "url_fragment" => {
+            if arguments.len() != 1 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match &arguments[0] {
+                Value::HttpRequest(r) => {
+                    if let Some(url_fragment) = r.url.fragment() {
+                        Ok(Value::String(url_fragment.to_string()))
+                    } else {
+                        Ok(Value::Null)
+                    }
+                }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
         "time_bucket" => {
             if arguments.len() != 2 {
                 return Err(ExpressionError::InvalidArguments);
