@@ -7,7 +7,7 @@ license = "MIT"
 authors = ["Paul Meng <me@paulme.ng>"]
 readme = "README.md"
 keywords = ["log", "sql", "query", "search"]
-categories = ["toolkit", "sql"]
+categories = ["command-line-utilities"]
 edition = "2018"
 exclude = ["/benches/**", "/.travis.yml", "/data/**"]
 
