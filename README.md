@@ -20,7 +20,7 @@ TBD
 Project the columns of `timestamp` and `backend_and_port` field and print the first three records out.
 
 ```
-logq query 'select timestamp, backend_processing_time from elb order by timestamp asc limit 3' data/AWSLogs.log
+> logq query 'select timestamp, backend_processing_time from elb order by timestamp asc limit 3' data/AWSLogs.log
 
 +-----------------------------------+----------+
 | 2015-11-07 18:45:33.007671 +00:00 | 0.618779 |
@@ -34,7 +34,7 @@ logq query 'select timestamp, backend_processing_time from elb order by timestam
 
 Summing up the total sent bytes in 5 seconds time frame.
 ```
-logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+> logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
 +----------+
 | 12256229 |
 +----------+
@@ -45,7 +45,7 @@ logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as 
 
 Select the 90th percentile backend_processsing_time.
 ```
-logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t' data/AWSLogs.log
+> logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t' data/AWSLogs.log
 +----------+
 | 0.112312 |
 +----------+
@@ -55,7 +55,7 @@ logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9
 
 To collapse the part of the url path so that they are mapping to the same Restful handler, you could use `url_path_bucket`
 ```
-logq query 'select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from elb limit 10' data/AWSLogs.log
+> logq query 'select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from elb limit 10' data/AWSLogs.log
 +----------------------------+----------------------------------------------+
 | 2015-11-07 18:45:30 +00:00 | /                                            |
 +----------------------------+----------------------------------------------+
@@ -81,21 +81,21 @@ logq query 'select time_bucket("5 seconds", timestamp) as t, url_path_bucket(req
 
 To output in different format, you can specify the format by `--output`
 ```
-logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+> logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
 33148328
 12256229
 ```
 
 If you are unclear how the execution was running, you can explain the query.
 ```
-logq explain 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t'
+> logq explain 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t'
 Query Plan:
 GroupBy(["t"], [NamedAggregate { aggregate: Sum(SumAggregate { sums: {} }, Expression(Variable("sent_bytes"), Some("sent_bytes"))), name_opt: Some("s") }], Map([Expression(Function("time_bucket", [Expression(Variable("const_000000000"), None), Expression(Variable("timestamp"), Some("timestamp"))]), Some("t")), Expression(Variable("sent_bytes"), Some("sent_bytes"))], DataSource(Stdin)))
 ```
 
 To know what are the fields, here is the table schema.
 ```
-logq schema
+> logq schema elb
 +--------------------------+-------------+
 | timestamp                | DateTime    |
 +--------------------------+-------------+
@@ -133,6 +133,12 @@ logq schema
 +--------------------------+-------------+
 ```
 
+To know the supported log format at this moment
+```
+> logq schema 
+The supported log format
+* elb
+```
 
 ## Motivation
 
