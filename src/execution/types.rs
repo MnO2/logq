@@ -282,6 +282,33 @@ fn evaluate_url_functions(func_name: &str, arguments: &[Value]) -> ExpressionRes
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
+        "url_path_bucket" => {
+            if arguments.len() != 3 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1], &arguments[2]) {
+                (Value::HttpRequest(r), Value::Int(idx), Value::String(target)) => {
+                    if let Some(url_path_segments) = r.url.path_segments() {
+                        let idx = *idx as usize;
+                        let mut res = String::new();
+                        for (i, segment) in url_path_segments.enumerate() {
+                            if i == idx {
+                                res.push('/');
+                                res.push_str(target);
+                            } else {
+                                res.push('/');
+                                res.push_str(segment);
+                            }
+                        }
+                        Ok(Value::String(res))
+                    } else {
+                        Ok(Value::Null)
+                    }
+                }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
         _ => Err(ExpressionError::UnknownFunction),
     }
 }
