@@ -9,6 +9,7 @@ pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
 #[derive(Fail, PartialEq, Eq, Debug)]
 pub enum PhysicalPlanError {
     #[fail(display = "Type Mismatch")]
+    #[allow(dead_code)]
     TypeMisMatch,
 }
 

@@ -591,7 +591,7 @@ impl Node {
             }
             Node::Limit(row_count, source) => {
                 let record_stream = source.get(variables.clone())?;
-                let stream = LimitStream::new(*row_count, variables, record_stream);
+                let stream = LimitStream::new(*row_count, record_stream);
                 Ok(Box::new(stream))
             }
             Node::OrderBy(column_names, orderings, source) => {
@@ -734,6 +734,7 @@ pub(crate) enum Aggregate {
 }
 
 impl Aggregate {
+    #[allow(dead_code)]
     pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
         match self {
             Aggregate::Avg(agg, _) => agg.add_record(key, value),

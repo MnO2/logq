@@ -147,16 +147,14 @@ impl RecordStream for MapStream {
 pub(crate) struct LimitStream {
     curr: u32,
     row_count: u32,
-    variables: Variables,
     source: Box<dyn RecordStream>,
 }
 
 impl LimitStream {
-    pub(crate) fn new(row_count: u32, variables: Variables, source: Box<dyn RecordStream>) -> Self {
+    pub(crate) fn new(row_count: u32, source: Box<dyn RecordStream>) -> Self {
         LimitStream {
             curr: 0,
             row_count,
-            variables,
             source,
         }
     }
@@ -278,7 +276,7 @@ impl RecordStream for GroupByStream {
                     match &mut named_agg.aggregate {
                         Aggregate::Avg(ref mut inner, named) => {
                             let val = match named {
-                                Named::Expression(expr, name_opt) => expr.expression_value(variables.clone())?,
+                                Named::Expression(expr, _) => expr.expression_value(variables.clone())?,
                                 Named::Star => {
                                     unreachable!();
                                 }
@@ -288,7 +286,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::Count(ref mut inner, named) => {
                             match named {
-                                Named::Expression(expr, name_opt) => {
+                                Named::Expression(expr, _) => {
                                     let val = expr.expression_value(variables.clone())?;
                                     inner.add_record(key.clone(), val)?;
                                 }
@@ -299,7 +297,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::First(ref mut inner, named) => {
                             match named {
-                                Named::Expression(expr, name_opt) => {
+                                Named::Expression(expr, _) => {
                                     let val = expr.expression_value(variables.clone())?;
                                     inner.add_record(key.clone(), val)?;
                                 }
@@ -310,7 +308,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::Last(ref mut inner, named) => {
                             match named {
-                                Named::Expression(expr, name_opt) => {
+                                Named::Expression(expr, _) => {
                                     let val = expr.expression_value(variables.clone())?;
                                     inner.add_record(key.clone(), val)?;
                                 }
@@ -321,7 +319,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::Max(ref mut inner, named) => {
                             match named {
-                                Named::Expression(expr, name_opt) => {
+                                Named::Expression(expr, _) => {
                                     let val = expr.expression_value(variables.clone())?;
                                     inner.add_record(key.clone(), val)?;
                                 }
@@ -332,7 +330,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::Min(ref mut inner, named) => {
                             match named {
-                                Named::Expression(expr, name_opt) => {
+                                Named::Expression(expr, _) => {
                                     let val = expr.expression_value(variables.clone())?;
                                     inner.add_record(key.clone(), val)?;
                                 }
@@ -343,7 +341,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::Sum(ref mut inner, named) => {
                             match named {
-                                Named::Expression(expr, name_opt) => {
+                                Named::Expression(expr, _) => {
                                     let val = expr.expression_value(variables.clone())?;
                                     inner.add_record(key.clone(), val)?;
                                 }
@@ -434,7 +432,7 @@ mod tests {
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut limit_stream = LimitStream::new(1, variables, stream);
+        let mut limit_stream = LimitStream::new(1, stream);
 
         let mut result = Vec::new();
         while let Some(n) = limit_stream.next().unwrap() {
