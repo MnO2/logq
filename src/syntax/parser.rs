@@ -8,7 +8,7 @@ use nom::{
     character::complete::{char, digit1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
-    multi::{fold_many0, separated_list},
+    multi::separated_list,
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult, InputTakeAtPosition,
@@ -115,7 +115,7 @@ fn value<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> 
 }
 
 fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    delimited(space0, delimited(tag("("), value_expression, tag(")")), space0)(i)
+    delimited(space0, delimited(tag("("), expression, tag(")")), space0)(i)
 }
 
 fn order_by_clause_for_within_group<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, VerboseError<&'a str>> {
@@ -165,92 +165,36 @@ fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a 
     )(i)
 }
 
-fn term<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let (i, init) = factor(i)?;
-
-    fold_many0(
-        pair(alt((char('*'), char('/'))), factor),
-        init,
-        |acc, (op, val): (char, ast::Expression)| {
-            if op == '*' {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::Times, Box::new(acc), Box::new(val))
-            } else {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::Divide, Box::new(acc), Box::new(val))
-            }
-        },
-    )(i)
-}
-
-fn value_expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let (i, init) = term(i)?;
-
-    fold_many0(
-        pair(alt((char('+'), char('-'))), term),
-        init,
-        |acc, (op, val): (char, ast::Expression)| {
-            if op == '+' {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::Plus, Box::new(acc), Box::new(val))
-            } else {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::Minus, Box::new(acc), Box::new(val))
-            }
-        },
-    )(i)
-}
-
-fn condition<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let (i, init) = value_expression(i)?;
-
-    fold_many0(
-        pair(
-            alt((tag("="), tag("!="), tag(">="), tag("<="), tag(">"), tag("<"))),
-            value_expression,
-        ),
-        init,
-        |acc, (op, val): (&str, ast::Expression)| {
-            if op == "=" {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::Equal, Box::new(acc), Box::new(val))
-            } else if op == "!=" {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::NotEqual, Box::new(acc), Box::new(val))
-            } else if op == ">=" {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::GreaterEqual, Box::new(acc), Box::new(val))
-            } else if op == "<=" {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::LessEqual, Box::new(acc), Box::new(val))
-            } else if op == ">" {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::MoreThan, Box::new(acc), Box::new(val))
-            } else {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::LessThan, Box::new(acc), Box::new(val))
-            }
-        },
-    )(i)
-}
-
 fn expression_term_opt_not<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     map(
-        pair(opt(tuple((space1, tag("not"), space1))), condition),
-        |(opt_not, condition)| {
+        pair(opt(tuple((space1, tag("not"), space1))), factor),
+        |(opt_not, factor)| {
             if opt_not.is_some() {
-                ast::Expression::UnaryOperator(ast::UnaryOperator::Not, Box::new(condition))
+                ast::Expression::UnaryOperator(ast::UnaryOperator::Not, Box::new(factor))
             } else {
-                condition
+                factor
             }
         },
     )(i)
 }
 
 fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let (i, init) = expression_term_opt_not(i)?;
+    let mut precedence_table: HashMap<String, (u32, bool)> = HashMap::new();
+    precedence_table.insert("*".to_string(), (7, true));
+    precedence_table.insert("/".to_string(), (7, true));
+    precedence_table.insert("+".to_string(), (6, true));
+    precedence_table.insert("-".to_string(), (6, true));
+    precedence_table.insert("<".to_string(), (4, true));
+    precedence_table.insert("<=".to_string(), (4, true));
+    precedence_table.insert(">".to_string(), (4, true));
+    precedence_table.insert(">=".to_string(), (4, true));
+    precedence_table.insert("=".to_string(), (3, true));
+    precedence_table.insert("!=".to_string(), (3, true));
+    precedence_table.insert("and".to_string(), (2, true));
+    precedence_table.insert("or".to_string(), (1, true));
 
-    fold_many0(
-        pair(alt((tag("or"), tag("and"))), expression_term_opt_not),
-        init,
-        |acc, (op, val): (&str, ast::Expression)| {
-            if op == "and" {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::And, Box::new(acc), Box::new(val))
-            } else {
-                ast::Expression::BinaryOperator(ast::BinaryOperator::Or, Box::new(acc), Box::new(val))
-            }
-        },
-    )(i)
+    let (i1, expr) = parse_expression_at_precedence(i, 1, &precedence_table)?;
+    Ok((i1, expr))
 }
 
 fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
@@ -326,7 +270,7 @@ fn from_clause<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str
 }
 
 fn parse_expression_atom<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    factor(i)
+    expression_term_opt_not(i)
 }
 
 fn parse_expression_op<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
@@ -349,7 +293,7 @@ fn parse_expression_op<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError
 fn parse_expression_at_precedence<'a>(
     i0: &'a str,
     current_precedence: u32,
-    precedence_table: &HashMap<String, u32>,
+    precedence_table: &HashMap<String, (u32, bool)>,
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     let (mut i1, mut expr) = parse_expression_atom(i0)?;
     loop {
@@ -359,17 +303,16 @@ fn parse_expression_at_precedence<'a>(
         }
 
         let (i2, op) = r.unwrap();
-        let op_precedence: u32 = *precedence_table.get(op).unwrap();
+        let (op_precedence, op_left_associative) = *precedence_table.get(op).unwrap();
 
         if op_precedence < current_precedence {
             break;
         }
 
-        let op_right_ssociative = false;
-        let (i3, b) = if op_right_ssociative {
-            parse_expression_at_precedence(i2, op_precedence, precedence_table)?
-        } else {
+        let (i3, b) = if op_left_associative {
             parse_expression_at_precedence(i2, op_precedence + 1, precedence_table)?
+        } else {
+            parse_expression_at_precedence(i2, op_precedence, precedence_table)?
         };
 
         let op = ast::BinaryOperator::from_str(op).unwrap();
@@ -378,7 +321,7 @@ fn parse_expression_at_precedence<'a>(
         i1 = i3;
     }
 
-    return Ok((i1, expr));
+    Ok((i1, expr))
 }
 
 pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
@@ -495,6 +438,45 @@ mod test {
     }
 
     #[test]
+    fn test_condition_expression() {
+        let ans = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::BinaryOperator(
+                ast::BinaryOperator::Plus,
+                Box::new(ast::Expression::Column("a".to_string())),
+                Box::new(ast::Expression::Column("b".to_string())),
+            )),
+            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
+        );
+
+        assert_eq!(expression("a+b = 3"), Ok(("", ans)));
+
+        let ans = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::MoreThan,
+            Box::new(ast::Expression::BinaryOperator(
+                ast::BinaryOperator::Plus,
+                Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                Box::new(ast::Expression::Value(ast::Value::Integral(3))),
+            )),
+            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
+        );
+
+        assert_eq!(expression("1 + 3 > 3"), Ok(("", ans)));
+
+        let ans = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::NotEqual,
+            Box::new(ast::Expression::BinaryOperator(
+                ast::BinaryOperator::Minus,
+                Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                Box::new(ast::Expression::Value(ast::Value::Integral(4))),
+            )),
+            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
+        );
+
+        assert_eq!(expression("1-4 !=3"), Ok(("", ans)));
+    }
+
+    #[test]
     fn test_value_expression() {
         let ans = ast::Expression::BinaryOperator(
             ast::BinaryOperator::Plus,
@@ -505,7 +487,7 @@ mod test {
             )),
             Box::new(ast::Expression::Value(ast::Value::Integral(3))),
         );
-        assert_eq!(value_expression("1 + 2 + 3"), Ok(("", ans)));
+        assert_eq!(expression("1 + 2 + 3"), Ok(("", ans)));
 
         let ans = ast::Expression::BinaryOperator(
             ast::BinaryOperator::Minus,
@@ -525,46 +507,7 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(5))),
         );
 
-        assert_eq!(value_expression("3*1 + 3/1 - (5)"), Ok(("", ans)));
-    }
-
-    #[test]
-    fn test_condition_expression() {
-        let ans = ast::Expression::BinaryOperator(
-            ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::BinaryOperator(
-                ast::BinaryOperator::Plus,
-                Box::new(ast::Expression::Column("a".to_string())),
-                Box::new(ast::Expression::Column("b".to_string())),
-            )),
-            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
-        );
-
-        assert_eq!(condition("a+b = 3"), Ok(("", ans)));
-
-        let ans = ast::Expression::BinaryOperator(
-            ast::BinaryOperator::MoreThan,
-            Box::new(ast::Expression::BinaryOperator(
-                ast::BinaryOperator::Plus,
-                Box::new(ast::Expression::Value(ast::Value::Integral(1))),
-                Box::new(ast::Expression::Value(ast::Value::Integral(3))),
-            )),
-            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
-        );
-
-        assert_eq!(condition("1 + 3 > 3"), Ok(("", ans)));
-
-        let ans = ast::Expression::BinaryOperator(
-            ast::BinaryOperator::NotEqual,
-            Box::new(ast::Expression::BinaryOperator(
-                ast::BinaryOperator::Minus,
-                Box::new(ast::Expression::Value(ast::Value::Integral(1))),
-                Box::new(ast::Expression::Value(ast::Value::Integral(4))),
-            )),
-            Box::new(ast::Expression::Value(ast::Value::Integral(3))),
-        );
-
-        assert_eq!(condition("1-4 !=3"), Ok(("", ans)));
+        assert_eq!(expression("3*1 + 3/1 - (5)"), Ok(("", ans)));
     }
 
     #[test]
@@ -873,19 +816,19 @@ mod test {
 
     #[test]
     fn test_parse_expression_at_precedence() {
-        let mut precedence_table: HashMap<String, u32> = HashMap::new();
-        precedence_table.insert("*".to_string(), 7);
-        precedence_table.insert("/".to_string(), 7);
-        precedence_table.insert("+".to_string(), 6);
-        precedence_table.insert("-".to_string(), 6);
-        precedence_table.insert("<".to_string(), 4);
-        precedence_table.insert("<=".to_string(), 4);
-        precedence_table.insert(">".to_string(), 4);
-        precedence_table.insert(">=".to_string(), 4);
-        precedence_table.insert("=".to_string(), 3);
-        precedence_table.insert("!=".to_string(), 3);
-        precedence_table.insert("and".to_string(), 2);
-        precedence_table.insert("or".to_string(), 1);
+        let mut precedence_table: HashMap<String, (u32, bool)> = HashMap::new();
+        precedence_table.insert("*".to_string(), (7, true));
+        precedence_table.insert("/".to_string(), (7, true));
+        precedence_table.insert("+".to_string(), (6, true));
+        precedence_table.insert("-".to_string(), (6, true));
+        precedence_table.insert("<".to_string(), (4, true));
+        precedence_table.insert("<=".to_string(), (4, true));
+        precedence_table.insert(">".to_string(), (4, true));
+        precedence_table.insert(">=".to_string(), (4, true));
+        precedence_table.insert("=".to_string(), (3, true));
+        precedence_table.insert("!=".to_string(), (3, true));
+        precedence_table.insert("and".to_string(), (2, true));
+        precedence_table.insert("or".to_string(), (1, true));
         let (_, ans) = parse_expression_at_precedence(" 1 +1*2- 3", 1, &precedence_table).unwrap();
         let expected = ast::Expression::BinaryOperator(
             ast::BinaryOperator::Minus,

@@ -102,8 +102,6 @@ impl FromStr for BinaryOperator {
     }
 }
 
-
-
 impl fmt::Display for BinaryOperator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
