@@ -1,8 +1,15 @@
 [package]
 name = "logq"
+description = "A web-server log file command line toolkit with SQL interface"
+repository = "https://github.com/MnO2/logq"
 version = "0.1.0"
+license = "MIT"
 authors = ["Paul Meng <me@paulme.ng>"]
+readme = "README.md"
+keywords = ["log", "sql", "query", "search"]
+categories = ["toolkit", "sql"]
 edition = "2018"
+exclude = ["/benches/**", "/.travis.yml", "/data/**"]
 
 [dependencies]
 clap = {version = "2.33.0", features = ["yaml"]}

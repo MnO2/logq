@@ -1,4 +1,4 @@
-# logq - A server log file command line toolkit written in Rust
+# logq - A web-server log file command line toolkit with SQL interface written in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
 [![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
