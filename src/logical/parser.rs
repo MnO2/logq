@@ -2,6 +2,7 @@ use super::types;
 use crate::common::types as common;
 use crate::execution;
 use crate::syntax::ast;
+use std::collections::hash_set::HashSet;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -13,6 +14,8 @@ pub enum ParseError {
     GroupByWithoutAggregateFunction,
     #[fail(display = "Group By statement mismatch with the non-aggregate fields")]
     GroupByFieldsMismatch,
+    #[fail(display = "Conflict variable naming")]
+    ConflictVariableNaming,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -251,6 +254,32 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
     }
 }
 
+fn check_conflict_naming(named_list: &[types::Named]) -> bool {
+    let mut name_set: HashSet<String> = HashSet::new();
+    for named in named_list {
+        match named {
+            types::Named::Expression(expr, var_name_opt) => {
+                if let Some(var_name) = var_name_opt {
+                    if name_set.contains(var_name) {
+                        return true;
+                    } else {
+                        name_set.insert(var_name.clone());
+                    }
+                } else if let types::Expression::Variable(var_name) = expr {
+                    if name_set.contains(var_name) {
+                        return true;
+                    }
+
+                    name_set.insert(var_name.clone());
+                }
+            }
+            types::Named::Star => {}
+        }
+    }
+
+    false
+}
+
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     let mut root = types::Node::DataSource(data_source);
     let mut named_aggregates = Vec::new();
@@ -296,6 +325,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 non_aggregates.push(named.clone());
                 named_list.push(named);
             }
+        }
+
+        if check_conflict_naming(&named_list) {
+            return Err(ParseError::ConflictVariableNaming);
         }
 
         root = types::Node::Map(named_list, Box::new(root));
