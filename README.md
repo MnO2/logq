@@ -33,7 +33,6 @@ Project the columns of `timestamp` and `backend_and_port` field and print the fi
 +-----------------------------------+----------+
 ```
 
-
 Summing up the total sent bytes in 5 seconds time frame.
 ```
 > logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
@@ -93,14 +92,13 @@ To output in different format, you can specify the format by `--output`, it supp
 [{"t":"2015-11-07 18:45:30 +00:00","s":12256229},{"t":"2015-11-07 18:45:35 +00:00","s":33148328}]
 ```
 
-You can use graphing command line tools to draw
+You can use graphing command line tools to draw it in the terminal. For example, [termgraph](https://github.com/mkaz/termgraph) would be a good choice for bar charts
 ```
 > logq query --output csv 'select backend_and_port, sum(sent_bytes) from elb group by backend_and_port' data/AWSLogs.log | termgraph
 
 10.0.2.143:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 20014156.00
 10.0.0.215:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 25390392.00
 ```
-
 
 If you are unclear how the execution was running, you can explain the query.
 ```
@@ -155,6 +153,19 @@ To know the supported log format at this moment
 The supported log format
 * elb
 ```
+
+## Available Functions
+
+Function Name          Description         Example
+-------------------  ---------------  ----------------
+url_host
+url_port
+url_path
+url_fragment
+url_query
+url_path_segments
+url_path_bucket
+time_bucket
 
 ## Motivation
 
