@@ -37,22 +37,22 @@ Project the columns of `timestamp` and `backend_and_port` field and print the fi
 Summing up the total sent bytes in 5 seconds time frame.
 ```
 > logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
-+----------+
-| 12256229 |
-+----------+
-| 33148328 |
-+----------+
++----------------------------+----------+
+| 2015-11-07 18:45:30 +00:00 | 12256229 |
++----------------------------+----------+
+| 2015-11-07 18:45:35 +00:00 | 33148328 |
++----------------------------+----------+
 ```
 
 
 Select the 90th percentile backend_processsing_time.
 ```
 > logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t' data/AWSLogs.log
-+----------+
-| 0.112312 |
-+----------+
-| 0.088791 |
-+----------+
++----------------------------+----------+
+| 2015-11-07 18:45:30 +00:00 | 0.112312 |
++----------------------------+----------+
+| 2015-11-07 18:45:35 +00:00 | 0.088791 |
++----------------------------+----------+
 ```
 
 To collapse the part of the url path so that they are mapping to the same Restful handler, you could use `url_path_bucket`
@@ -84,14 +84,23 @@ To collapse the part of the url path so that they are mapping to the same Restfu
 To output in different format, you can specify the format by `--output`, it supports `json` and `csv` at this moment.
 ```
 > logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
-33148328
-12256229
+2015-11-07 18:45:35 +00:00,33148328
+2015-11-07 18:45:30 +00:00,12256229
 ```
 
 ```
 > logq query --output json 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
-[{"t":33148328},{"t":12256229}]
+[{"t":"2015-11-07 18:45:30 +00:00","s":12256229},{"t":"2015-11-07 18:45:35 +00:00","s":33148328}]
 ```
+
+You can use graphing command line tools to draw
+```
+> logq query --output csv 'select backend_and_port, sum(sent_bytes) from elb group by backend_and_port' data/AWSLogs.log | termgraph
+
+10.0.2.143:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 20014156.00
+10.0.0.215:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 25390392.00
+```
+
 
 If you are unclear how the execution was running, you can explain the query.
 ```
