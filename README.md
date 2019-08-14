@@ -6,10 +6,9 @@
 
 This project is in alpha stage, PRs are welcomed.
 
-logq is a command line program for easily analyzing, querying, aggregating and
-joining log files. Right now only AWS Elastic Load Balancer's log format is
-supported, since it is where this project was inspired.
-
+logq is a command line tool for easily analyzing, querying, aggregating web-server log files though SQL inteface. 
+Right now only AWS Elastic Load Balancer's log format is supported, since this project was driven by the author's own need. 
+More log formats would be supported in the future, and ideally it could be customized through configuration like what GoAccess does.
 
 ## Installation
 
@@ -19,7 +18,7 @@ cargo install logq
 
 ## Examples
 
-Project the columns of `timestamp` and `backend_and_port` field and print the first three records out.
+Project the columns of `timestamp` and `backend_and_port` fields from the log file and print the first three records out.
 
 ```
 > logq query 'select timestamp, backend_processing_time from elb order by timestamp asc limit 3' data/AWSLogs.log
@@ -43,8 +42,7 @@ Summing up the total sent bytes in 5 seconds time frame.
 +----------------------------+----------+
 ```
 
-
-Select the 90th percentile backend_processsing_time.
+Select the 90th percentile backend_processsing_time with 5 second as the time frame.
 ```
 > logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t' data/AWSLogs.log
 +----------------------------+----------+
@@ -80,7 +78,7 @@ To collapse the part of the url path so that they are mapping to the same Restfu
 +----------------------------+----------------------------------------------+
 ```
 
-To output in different format, you can specify the format by `--output`, it supports `json` and `csv` at this moment.
+Output in different format, you can specify the format by `--output`, it supports `json` and `csv` at this moment.
 ```
 > logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
 2015-11-07 18:45:35 +00:00,33148328
@@ -92,7 +90,7 @@ To output in different format, you can specify the format by `--output`, it supp
 [{"t":"2015-11-07 18:45:30 +00:00","s":12256229},{"t":"2015-11-07 18:45:35 +00:00","s":33148328}]
 ```
 
-You can use graphing command line tools to draw it in the terminal. For example, [termgraph](https://github.com/mkaz/termgraph) would be a good choice for bar charts
+You can use graphing command-line tools to graph the data set in terminal. For example, [termgraph](https://github.com/mkaz/termgraph) would be a good choice for bar charts
 ```
 > logq query --output csv 'select backend_and_port, sum(sent_bytes) from elb group by backend_and_port' data/AWSLogs.log | termgraph
 
@@ -106,7 +104,7 @@ Or you could use [spark](https://github.com/holman/spark) to draw the processing
 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁██▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
-If you are unclear how the execution was running, you can explain the query.
+If you are unclear how the execution was running, the query plan could be explained.
 ```
 > logq explain 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t'
 Query Plan:
@@ -153,7 +151,7 @@ To know what are the fields, here is the table schema.
 +--------------------------+-------------+
 ```
 
-To know the supported log format at this moment
+To know the supported log format at this moment.
 ```
 > logq schema 
 The supported log format
@@ -178,24 +176,22 @@ The supported log format
 
 ## Motivation
 
-The very same criticisms to xsv could also be asked to this project.
+Often time in the daily work when you are troubleshooting the production issues, there are certain metrics that's not provided by AWS Cloudwatch or in-house ELK. Then you would download the original access logs from your company's archive and write an one-off script to analyze it. However, this approach has a few drawbacks.
 
-That is, you shouldn't be working with log file directly in a large scale settings, you should ship it to stack like ELK for searching and analyzing. For more advanced need you could leverage on Spark etc. However, in the daily work when you
-would like to quickly troubleshooting things, oftentime you are still handed with several gigabytes of log file, and it's time consuming to set things up.  Usually the modern laptop/pc is very powerful and enough for analyzing gigabytes of volumes, when the implementation is well performance considered.
-This software is inspired by the daily need in the author's daily work, where I
-believe many people have the same kind of needs.
+1. You spend a lot of time to parse of the log format, but not focus on calculating the metrics helping to troubleshoot your production issues.
+2. Most of the log formats are commonly seen and we should ideally abstract it and have every one benefit from the shared abstraction
+3. For web-server log cases, the log volume usually is huge, it could be several hundred MB or even a few GB. Doing it in scripting langauges would make yourself impatiently waiting it is running at your local.
+
+For sure you could finely tuned the analytical tooling like AWS Athena or ELK to analyze the large volume of data, but often times you just want to adhocly analyze logs and don't bother to set things up and cost extra mony. Also, the modern laptop/PC is actually powerful enough to analyze gigabytes of log volumes, just that the implementation is not efficient enough for doing that. Implementing logq in Rust is in hope to resolve those inconvenience and concerns.
+
 
 ### Why not TextQL, or insert the space delimited fields into sqlite?
 
-TextQL is implemented in python ant it's ok for the smaller cases. In the case
-of AWS ELB log where it often goes up to gigabytes of logs it is too slow
-regarding to speed. Furthermore, either TextQL and sqlite are limited in their
-provided SQL functions, it makes the domain processing like URL, and HTTP
-headers very hard. You would probably need to answer the questions like "What is
-the 99th percentile to this endpoint, by ignoring the user_id in the restful
-endpoing within a certain time range". It would be easier to have a software
-providing those handy function to extract or canonicalize the information from
-the log.
+TextQL is implemented in python ant it's ok for the smaller cases. In the case of high traffic AWS ELB log files, it often goes up to gigabytes in volume and it is slow
+regarding to the speed. Furthermore, either TextQL and sqlite are limited in their provided SQL functions and data types, it makes the domain processing like URL, and HTTP
+reuqests line and User-Agents tedious. 
+
+Also, in the use case of web-traffic analytics, the questions you would to be answered are like "What is the 99th percentile in a given time frame to this Restful endpoint, by ignoring the user_id in the URL path segments". It would be easier to have a software providing handy functions to extract or canonicalize the information from the log.
 
 
 ## Roadmap
