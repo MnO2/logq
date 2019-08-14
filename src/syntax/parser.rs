@@ -296,13 +296,7 @@ fn parse_expression_at_precedence<'a>(
     precedence_table: &HashMap<String, (u32, bool)>,
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     let (mut i1, mut expr) = parse_expression_atom(i0)?;
-    loop {
-        let r = parse_expression_op(i1);
-        if r.is_err() {
-            break;
-        }
-
-        let (i2, op) = r.unwrap();
+    while let Ok((i2, op)) = parse_expression_op(i1) {
         let (op_precedence, op_left_associative) = *precedence_table.get(op).unwrap();
 
         if op_precedence < current_precedence {
