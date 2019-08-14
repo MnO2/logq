@@ -167,6 +167,8 @@ The supported log format
 | url_path_bucket | | |
 | time_bucket | | |
 | date_part | | |
+| host_name | | |
+| host_port | | |
 
 ## Motivation
 

@@ -323,9 +323,38 @@ fn evaluate_url_functions(func_name: &str, arguments: &[Value]) -> ExpressionRes
     }
 }
 
+fn evaluate_host_functions(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
+    match func_name {
+        "host_name" => {
+            if arguments.len() != 1 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+            match &arguments[0] {
+                Value::Host(h) => Ok(Value::String(h.hostname.clone())),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "host_port" => {
+            if arguments.len() != 1 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match &arguments[0] {
+                Value::Host(h) => Ok(Value::Int(i32::from(h.port))),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        _ => Err(ExpressionError::UnknownFunction),
+    }
+}
+
 fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
     if func_name.starts_with("url_") {
         return evaluate_url_functions(func_name, arguments);
+    }
+
+    if func_name.starts_with("host_") {
+        return evaluate_host_functions(func_name, arguments);
     }
 
     match func_name {
