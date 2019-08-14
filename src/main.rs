@@ -242,7 +242,7 @@ fn main() {
                     println!("{}", e);
                 }
             } else {
-                sub_m.usage();
+                println!("{}", sub_m.usage());
             }
         }
         ("explain", Some(sub_m)) => {
@@ -255,7 +255,7 @@ fn main() {
                     println!("{}", e);
                 }
             } else {
-                sub_m.usage();
+                println!("{}", sub_m.usage());
             }
         }
         ("schema", Some(sub_m)) => {
@@ -279,7 +279,7 @@ fn main() {
             }
         }
         _ => {
-            app_m.usage();
+            println!("{}", app_m.usage());
         }
     }
 }

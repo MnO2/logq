@@ -1,7 +1,7 @@
 name: logq 
 version: "0.1"
 author: Paul Meng <me@paulme.ng>
-about: query agasint log files 
+about: A web-server log file command line toolkit with SQL interface.
 subcommands:
     - query:
         about: select the data by query string
