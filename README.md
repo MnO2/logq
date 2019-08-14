@@ -156,16 +156,16 @@ The supported log format
 
 ## Available Functions
 
-Function Name          Description         Example
--------------------  ---------------  ----------------
-url_host
-url_port
-url_path
-url_fragment
-url_query
-url_path_segments
-url_path_bucket
-time_bucket
+| Function Name | Description | Example |
+| --- | --- | --- |
+| url_host | | |
+| url_port | | |
+| url_path | | |
+| url_fragment | | |
+| url_query | | |
+| url_path_segments | | |
+| url_path_bucket | | |
+| time_bucket | | |
 
 ## Motivation
 
