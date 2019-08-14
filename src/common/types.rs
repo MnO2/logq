@@ -202,6 +202,38 @@ pub(crate) struct TimeInterval {
     pub(crate) unit: TimeIntervalUnit,
 }
 
+
+pub(crate) type ParseDatePartResult<T> = result::Result<T, ParseDatePartError>;
+
+#[derive(Fail, PartialEq, Eq, Clone, Debug)]
+pub(crate) enum ParseDatePartError {
+    #[fail(display = "Unknown DatePart Unit")]
+    UnknownDatePartUnit,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum DatePartUnit {
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Month,
+    Year,
+}
+
+pub(crate) fn parse_date_part_unit(s: &str) -> ParseDatePartResult<DatePartUnit> {
+    match s {
+        "second" => Ok(DatePartUnit::Second),
+        "minute" => Ok(DatePartUnit::Minute),
+        "hour" => Ok(DatePartUnit::Hour),
+        "day" => Ok(DatePartUnit::Day),
+        "month" => Ok(DatePartUnit::Month),
+        "year" => Ok(DatePartUnit::Year),
+        _ => Err(ParseDatePartError::UnknownDatePartUnit),
+    }
+}
+
+
 pub(crate) fn parse_time_interval_unit(s: &str, plural: bool) -> ParseTimeIntervalResult<TimeIntervalUnit> {
     if plural {
         match s {

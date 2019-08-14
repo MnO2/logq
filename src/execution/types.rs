@@ -119,6 +119,10 @@ pub(crate) enum ExpressionError {
     TimeIntervalNotSupported,
     #[fail(display = "Zero TimeInterval")]
     TimeIntervalZero,
+    #[fail(display = "DatePartUnit Not Supported Yet")]
+    DatePartUnitNotSupported,
+    #[fail(display = "{}", _0)]
+    ParseDatePart(#[cause] common::types::ParseDatePartError),
 }
 
 impl From<EvaluateError> for ExpressionError {
@@ -130,6 +134,12 @@ impl From<EvaluateError> for ExpressionError {
 impl From<common::types::ParseTimeIntervalError> for ExpressionError {
     fn from(e: common::types::ParseTimeIntervalError) -> ExpressionError {
         ExpressionError::ParseTimeInterval(e)
+    }
+}
+
+impl From<common::types::ParseDatePartError> for ExpressionError {
+    fn from(e: common::types::ParseDatePartError) -> ExpressionError {
+        ExpressionError::ParseDatePart(e)
     }
 }
 
@@ -356,6 +366,24 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
 
             match (&arguments[0], &arguments[1]) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
+        "date_part" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+
+            match (&arguments[0], &arguments[1]) {
+                (Value::String(date_part_unit_str), Value::DateTime(dt)) => {
+                    let date_part_unit = common::types::parse_date_part_unit(date_part_unit_str)?;
+
+                    match date_part_unit {
+                        common::types::DatePartUnit::Second => Ok(Value::Float(OrderedFloat::from(dt.second() as f32))),
+                        common::types::DatePartUnit::Minute => Ok(Value::Float(OrderedFloat::from(dt.minute() as f32))),
+                        _ => Err(ExpressionError::DatePartUnitNotSupported),
+                    }
+                }
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
