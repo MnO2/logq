@@ -166,6 +166,7 @@ The supported log format
 | url_path_segments | | |
 | url_path_bucket | | |
 | time_bucket | | |
+| date_part | | |
 
 ## Motivation
 
