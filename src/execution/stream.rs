@@ -365,18 +365,29 @@ impl RecordStream for GroupByStream {
         if let Some(key) = iter.next() {
             let mut values: Vec<Value> = Vec::new();
             let mut fields: Vec<VariableName> = Vec::new();
+
+            if let Some(values_in_key) = &key {
+                for k in self.keys.iter() {
+                    fields.push(k.clone());
+                }
+
+                for v in values_in_key {
+                    values.push(v.clone());
+                }
+            }
+
             for named_agg in self.aggregates.iter() {
                 if let Some(ref field_name) = named_agg.name_opt {
                     fields.push(field_name.clone());
                 } else {
-                    //FIXME: there should be better choice than empty string
+                    //FIXME: Insert empty string for now
                     fields.push("".to_string());
                 }
                 let v = named_agg.aggregate.get_aggregated(&key)?;
                 values.push(v);
             }
 
-            let record = Record::new(self.keys.clone(), values);
+            let record = Record::new(fields, values);
             Ok(Some(record))
         } else {
             Ok(None)
