@@ -202,7 +202,6 @@ pub(crate) struct TimeInterval {
     pub(crate) unit: TimeIntervalUnit,
 }
 
-
 pub(crate) type ParseDatePartResult<T> = result::Result<T, ParseDatePartError>;
 
 #[derive(Fail, PartialEq, Eq, Clone, Debug)]
@@ -232,7 +231,6 @@ pub(crate) fn parse_date_part_unit(s: &str) -> ParseDatePartResult<DatePartUnit>
         _ => Err(ParseDatePartError::UnknownDatePartUnit),
     }
 }
-
 
 pub(crate) fn parse_time_interval_unit(s: &str, plural: bool) -> ParseTimeIntervalResult<TimeIntervalUnit> {
     if plural {

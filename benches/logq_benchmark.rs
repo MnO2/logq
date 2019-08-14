@@ -4,7 +4,7 @@ extern crate criterion;
 use criterion::Criterion;
 
 fn bench_parse_query() {
-    let _ = 1+1;
+    let _ = 1 + 1;
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
