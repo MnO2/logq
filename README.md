@@ -174,6 +174,21 @@ The supported log format
 | host_name | | |
 | host_port | | |
 
+## Aggregation Functions
+
+| Function Name | Description | Example |
+| --- | --- | --- |
+| avg | | |
+| count | | |
+| first | | |
+| last | | |
+| min | | |
+| max | | |
+| sum | | |
+| percentile_disc | | |
+| approx_percentile | | |
+
+
 ## Motivation
 
 Often time in the daily work when you are troubleshooting the production issues, there are certain metrics that's not provided by AWS Cloudwatch or in-house ELK. Then you would download the original access logs from your company's archive and write an one-off script to analyze it. However, this approach has a few drawbacks.
