@@ -2,7 +2,7 @@
 name = "logq"
 description = "A web-server log file command line toolkit with SQL interface"
 repository = "https://github.com/MnO2/logq"
-version = "0.1.2"
+version = "0.1.3"
 license = "MIT"
 authors = ["Paul Meng <me@paulme.ng>"]
 readme = "README.md"
