@@ -8,6 +8,7 @@ use ordered_float::OrderedFloat;
 use std::collections::VecDeque;
 use std::io;
 use std::result;
+use tdigest::TDigest;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
@@ -788,6 +789,7 @@ pub(crate) enum Aggregate {
     Min(MinAggregate, Named),
     Sum(SumAggregate, Named),
     PercentileDisc(PercentileDiscAggregate, String),
+    ApproxPercentile(ApproxPercentileAggregate, String),
 }
 
 impl Aggregate {
@@ -802,6 +804,7 @@ impl Aggregate {
             Aggregate::Max(agg, _) => agg.add_record(key, value),
             Aggregate::Min(agg, _) => agg.add_record(key, value),
             Aggregate::PercentileDisc(agg, _) => agg.add_record(key, value),
+            Aggregate::ApproxPercentile(agg, _) => agg.add_record(key, value),
         }
     }
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
@@ -814,6 +817,7 @@ impl Aggregate {
             Aggregate::Max(agg, _) => agg.get_aggregated(key),
             Aggregate::Min(agg, _) => agg.get_aggregated(key),
             Aggregate::PercentileDisc(agg, _) => agg.get_aggregated(key),
+            Aggregate::ApproxPercentile(agg, _) => agg.get_aggregated(key),
         }
     }
 }
@@ -892,6 +896,51 @@ impl PercentileDiscAggregate {
         let f32_percentile: f32 = self.percentile.into();
         let idx: usize = ((v.len() as f32) * f32_percentile) as usize;
         let ans = v[idx].clone();
+        Ok(ans)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ApproxPercentileAggregate {
+    pub(crate) partitions: HashMap<Option<Tuple>, TDigest>,
+    pub(crate) percentile: OrderedFloat<f32>,
+    pub(crate) ordering: Ordering,
+}
+
+impl ApproxPercentileAggregate {
+    pub(crate) fn new(percentile: OrderedFloat<f32>, ordering: Ordering) -> Self {
+        ApproxPercentileAggregate {
+            partitions: HashMap::new(),
+            percentile,
+            ordering,
+        }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+        let v = self.partitions.entry(key).or_insert(TDigest::new_with_size(100));
+
+        match value {
+            Value::Float(f) => {
+                let fv = vec![f64::from(f.into_inner())];
+                v.merge_unsorted(fv);
+            }
+            Value::Int(i) => {
+                let fv = vec![f64::from(i)];
+                v.merge_unsorted(fv);
+            }
+            _ => {
+                return Err(AggregateError::InvalidType);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
+        let t = self.partitions.get(key).unwrap().clone();
+        let f32_percentile: f32 = self.percentile.into();
+        let f64_percentile: f64 = f64::from(f32_percentile);
+        let f64_ans = t.estimate_quantile(f64_percentile);
+        let ans = Value::Float(OrderedFloat::from(f64_ans as f32));
         Ok(ans)
     }
 }

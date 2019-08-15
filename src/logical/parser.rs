@@ -18,6 +18,8 @@ pub enum ParseError {
     ConflictVariableNaming,
     #[fail(display = "Invalid Arguments: {}", _0)]
     InvalidArguments(String),
+    #[fail(display = "Invalid Arguments: {}", _0)]
+    UnknownFunction(String),
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -226,11 +228,22 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
                             types::Expression::Constant(val) => match val {
                                 common::Value::Float(f) => {
                                     let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
-                                    types::Aggregate::PercentileDisc(
-                                        f,
-                                        within_group_clause.ordering_term.column_name.clone(),
-                                        o,
-                                    )
+
+                                    if func_name == "percentile_disc" {
+                                        types::Aggregate::PercentileDisc(
+                                            f,
+                                            within_group_clause.ordering_term.column_name.clone(),
+                                            o,
+                                        )
+                                    } else if func_name == "approx_percentile" {
+                                        types::Aggregate::ApproxPercentile(
+                                            f,
+                                            within_group_clause.ordering_term.column_name.clone(),
+                                            o,
+                                        )
+                                    } else {
+                                        return Err(ParseError::UnknownFunction(func_name.to_string()));
+                                    }
                                 }
                                 _ => {
                                     return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
@@ -339,6 +352,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         named_list.push(named);
                     }
                     types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(
+                        types::Expression::Variable(column_name.clone()),
+                        Some(column_name.clone()),
+                    )),
+                    types::Aggregate::ApproxPercentile(_, column_name, _) => named_list.push(types::Named::Expression(
                         types::Expression::Variable(column_name.clone()),
                         Some(column_name.clone()),
                     )),

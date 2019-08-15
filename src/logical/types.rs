@@ -292,6 +292,7 @@ pub(crate) enum Aggregate {
     Min(Named),
     Sum(Named),
     PercentileDisc(OrderedFloat<f32>, VariableName, Ordering),
+    ApproxPercentile(OrderedFloat<f32>, VariableName, Ordering),
 }
 
 impl Aggregate {
@@ -418,6 +419,14 @@ impl Aggregate {
 
                 let percentile_disc_aggregate = execution::PercentileDiscAggregate::new(*percentile, physical_ordering);
                 let aggregate = execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.clone());
+                Ok((aggregate, variables))
+            }
+            Aggregate::ApproxPercentile(percentile, column_name, ordering) => {
+                let variables = common::empty_variables();
+                let physical_ordering = ordering.physical()?;
+
+                let approx_percentile_aggregate = execution::ApproxPercentileAggregate::new(*percentile, physical_ordering);
+                let aggregate = execution::Aggregate::ApproxPercentile(approx_percentile_aggregate, column_name.clone());
                 Ok((aggregate, variables))
             }
         }

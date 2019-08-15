@@ -354,6 +354,10 @@ impl RecordStream for GroupByStream {
                             let val = variables.get(column_name).unwrap();
                             inner.add_record(key.clone(), val.clone())?;
                         }
+                        Aggregate::ApproxPercentile(ref mut inner, column_name) => {
+                            let val = variables.get(column_name).unwrap();
+                            inner.add_record(key.clone(), val.clone())?;
+                        }
                     }
                 }
             }
