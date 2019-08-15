@@ -380,7 +380,7 @@ impl RecordStream for GroupByStream {
                 }
             }
 
-            for named_agg in self.aggregates.iter() {
+            for named_agg in self.aggregates.iter_mut() {
                 if let Some(ref field_name) = named_agg.name_opt {
                     fields.push(field_name.clone());
                 } else {

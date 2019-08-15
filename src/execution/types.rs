@@ -807,7 +807,7 @@ impl Aggregate {
             Aggregate::ApproxPercentile(agg, _) => agg.add_record(key, value),
         }
     }
-    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
+    pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
         match self {
             Aggregate::Avg(agg, _) => agg.get_aggregated(key),
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
@@ -903,6 +903,7 @@ impl PercentileDiscAggregate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ApproxPercentileAggregate {
     pub(crate) partitions: HashMap<Option<Tuple>, TDigest>,
+    pub(crate) buffer: HashMap<Option<Tuple>, Vec<Value>>,
     pub(crate) percentile: OrderedFloat<f32>,
     pub(crate) ordering: Ordering,
 }
@@ -911,32 +912,75 @@ impl ApproxPercentileAggregate {
     pub(crate) fn new(percentile: OrderedFloat<f32>, ordering: Ordering) -> Self {
         ApproxPercentileAggregate {
             partitions: HashMap::new(),
+            buffer: HashMap::new(),
             percentile,
             ordering,
         }
     }
 
     pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        let v = self.partitions.entry(key).or_insert(TDigest::new_with_size(100));
+        let buf = self.buffer.entry(key.clone()).or_insert(Vec::new());
+        buf.push(value);
 
-        match value {
-            Value::Float(f) => {
-                let fv = vec![f64::from(f.into_inner())];
-                v.merge_unsorted(fv);
+        if buf.len() < 10000 {
+            Ok(())
+        } else {
+            let v = self
+                .partitions
+                .entry(key.clone())
+                .or_insert(TDigest::new_with_size(100));
+
+            let mut fvec = Vec::new();
+            for val in buf.iter() {
+                match val {
+                    Value::Float(f) => {
+                        fvec.push(f64::from(f.into_inner()));
+                    }
+                    Value::Int(i) => {
+                        fvec.push(f64::from(*i));
+                    }
+                    _ => {
+                        return Err(AggregateError::InvalidType);
+                    }
+                }
             }
-            Value::Int(i) => {
-                let fv = vec![f64::from(i)];
-                v.merge_unsorted(fv);
-            }
-            _ => {
-                return Err(AggregateError::InvalidType);
-            }
+
+            let new_digest = v.merge_unsorted(fvec);
+            self.partitions.insert(key, new_digest);
+            buf.clear();
+
+            Ok(())
         }
-        Ok(())
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
-        let t = self.partitions.get(key).unwrap().clone();
+    pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
+        let buf = self.buffer.entry(key.clone()).or_insert(Vec::new());
+        let t = if !buf.is_empty() {
+            let v = self
+                .partitions
+                .entry(key.clone())
+                .or_insert(TDigest::new_with_size(100));
+
+            let mut fvec = Vec::new();
+            for val in buf.iter() {
+                match val {
+                    Value::Float(f) => {
+                        fvec.push(f64::from(f.into_inner()));
+                    }
+                    Value::Int(i) => {
+                        fvec.push(f64::from(*i));
+                    }
+                    _ => {
+                        return Err(AggregateError::InvalidType);
+                    }
+                }
+            }
+
+            v.merge_unsorted(fvec)
+        } else {
+            self.partitions.get(key).unwrap().clone()
+        };
+
         let f32_percentile: f32 = self.percentile.into();
         let f64_percentile: f64 = f64::from(f32_percentile);
         let f64_ans = t.estimate_quantile(f64_percentile);
