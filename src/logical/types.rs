@@ -425,8 +425,10 @@ impl Aggregate {
                 let variables = common::empty_variables();
                 let physical_ordering = ordering.physical()?;
 
-                let approx_percentile_aggregate = execution::ApproxPercentileAggregate::new(*percentile, physical_ordering);
-                let aggregate = execution::Aggregate::ApproxPercentile(approx_percentile_aggregate, column_name.clone());
+                let approx_percentile_aggregate =
+                    execution::ApproxPercentileAggregate::new(*percentile, physical_ordering);
+                let aggregate =
+                    execution::Aggregate::ApproxPercentile(approx_percentile_aggregate, column_name.clone());
                 Ok((aggregate, variables))
             }
         }
