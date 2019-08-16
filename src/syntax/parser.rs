@@ -228,7 +228,10 @@ fn column_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::ColumnNam
     context(
         "column_expression_list",
         map(
-            terminated(separated_list(preceded(space0, char(',')), column_name), space0),
+            terminated(
+                separated_list(preceded(space0, char(',')), preceded(space0, column_name)),
+                space0,
+            ),
             |v| v.into_iter().map(|s| s.to_string()).collect(),
         ),
     )(i)
@@ -584,11 +587,11 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+        let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string(), "b".to_string()]);
         let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None, None);
 
         assert_eq!(
-            select_query("select a, b, c from elb where a = 1 group by b"),
+            select_query("select a, b, c from elb where a = 1 group by a, b"),
             Ok(("", ans))
         );
     }
