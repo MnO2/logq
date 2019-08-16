@@ -191,13 +191,13 @@ The supported log format
 
 ## Motivation
 
-Often time in the daily work when you are troubleshooting the production issues, there are certain metrics that's not provided by AWS Cloudwatch or in-house ELK. Then you would download the original access logs from your company's archive and write an one-off script to analyze it. However, this approach has a few drawbacks.
+Often time in the daily work when you are troubleshooting the production issues, there are certain metrics that's not provided by AWS CloudWatch or in-house ELK. Then you would download the original access logs from your company's archive and write an one-off script to analyze it. However, this approach has a few drawbacks.
 
 1. You spend a lot of time to parse of the log format, but not focus on calculating the metrics helping to troubleshoot your production issues.
 2. Most of the log formats are commonly seen and we should ideally abstract it and have every one benefit from the shared abstraction
 3. For web-server log cases, the log volume usually is huge, it could be several hundred MB or even a few GB. Doing it in scripting langauges would make yourself impatiently waiting it is running at your local.
 
-For sure you could finely tuned the analytical tooling like AWS Athena or ELK to analyze the large volume of data, but often times you just want to adhocly analyze logs and don't bother to set things up and cost extra mony. Also, the modern laptop/PC is actually powerful enough to analyze gigabytes of log volumes, just that the implementation is not efficient enough for doing that. Implementing logq in Rust is in hope to resolve those inconvenience and concerns.
+For sure you could finely tuned the analytical tooling like AWS Athena or ELK to analyze the large volume of data, but often times you just want to adhocly analyze logs and don't bother to set things up and cost extra money. Also, the modern laptop/PC is actually powerful enough to analyze gigabytes of log volumes, just that the implementation is not efficient enough for doing that. Implementing logq in Rust is in hope to resolve those inconvenience and concerns.
 
 
 ### Why not TextQL, or insert the space delimited fields into sqlite?
