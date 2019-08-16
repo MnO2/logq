@@ -707,6 +707,7 @@ mod test {
     fn test_select_statement_with_within_group() {
         let select_exprs = vec![
             ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::FuncCall(
                     "percentile_disc".to_string(),
@@ -722,11 +723,11 @@ mod test {
             ),
         ];
 
-        let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string()]);
+        let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string(), "c".to_string()]);
         let ans = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None);
 
         assert_eq!(
-            select_query("select a, percentile_disc(0.9) within group (order by b asc) from elb group by a"),
+            select_query("select a, c, percentile_disc(0.9) within group (order by b asc) from elb group by a, c "),
             Ok(("", ans))
         );
     }
