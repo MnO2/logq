@@ -164,19 +164,19 @@ The supported log format
 
 ## Available Functions
 
-| Function Name | Description | Example |
+| Function Name | Description | Input Type | Output Type | 
 | --- | --- | --- |
-| url_host | | |
-| url_port | | |
-| url_path | | |
-| url_fragment | | |
-| url_query | | |
-| url_path_segments | | |
-| url_path_bucket | | |
-| time_bucket | | |
-| date_part | | |
-| host_name | | |
-| host_port | | |
+| url_host | To retrieve the host from the request | Request | String |
+| url_port | To retrieve the port from teh request | Request | String |
+| url_path | To retrieve the path from the request | Request | String |
+| url_fragment | To retrieve the fragment from the request | Request | String |
+| url_query | To retrive the query from the request | Request | String |
+| url_path_segments | To retrieve the path segments from the request | Request | String |
+| url_path_bucket | To map the path segments into given string | Request, Integral, String | String |
+| time_bucket | To bucket the timestamp into given interval | String, DateTime | DateTime |
+| date_part | To get the part of the datetime with the given unit | String, DateTime | Float |
+| host_name | To retreive the hostname from host | Host | String |
+| host_port | To retreive the port from host | Host | String |
 
 ## Aggregation Functions
 
