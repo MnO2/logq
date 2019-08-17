@@ -1,4 +1,4 @@
-# logq - A web-server log file command line toolkit with SQL interface written in Rust
+# logq - Analyzing log files in SQL with command-line toolkit, implemented in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
 [![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
@@ -7,7 +7,11 @@
 This project is in alpha stage, PRs are welcomed.
 
 logq is a command line tool for easily analyzing, querying, aggregating web-server log files though SQL inteface. 
-Right now only AWS Elastic Load Balancer's log format is supported, since this project was driven by the author's own need. 
+Right now the supported formats are
+
+1. AWS classic elastic load balancer
+2. Squid native format (preliminary support)
+
 More log formats would be supported in the future, and ideally it could be customized through configuration like what GoAccess does.
 
 ## Installation
