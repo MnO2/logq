@@ -180,17 +180,17 @@ The supported log format
 
 ## Aggregation Functions
 
-| Function Name | Description | Example |
+| Function Name | Description | Input Type |
 | --- | --- | --- |
-| avg | | |
-| count | | |
-| first | | |
-| last | | |
-| min | | |
-| max | | |
-| sum | | |
-| percentile_disc | | |
-| approx_percentile | | |
+| avg | average the numbers | Integral or Float |
+| count | counting the number of records | Any |
+| first | get the first of the records | Any |
+| last | get the last of the records | Any |
+| min | get the min of the records | Any |
+| max | get the max of the records | Any |
+| sum | get the sum of the numbers | Integral or Float |
+| percentile_disc | calculate record at the percentile | Float |
+| approx_percentile | calculate approximate record at the percentile | Float |
 
 
 ## Motivation
