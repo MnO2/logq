@@ -287,6 +287,7 @@ fn main() {
             } else {
                 println!("The supported log format");
                 println!("* elb");
+                println!("* squid");
             }
         }
         _ => {
