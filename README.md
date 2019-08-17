@@ -165,7 +165,7 @@ The supported log format
 ## Available Functions
 
 | Function Name | Description | Input Type | Output Type | 
-| --- | --- | --- |
+| --- | --- | --- | --- |
 | url_host | To retrieve the host from the request | Request | String |
 | url_port | To retrieve the port from teh request | Request | String |
 | url_path | To retrieve the path from the request | Request | String |
