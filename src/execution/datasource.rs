@@ -86,6 +86,40 @@ lazy_static! {
     };
 }
 
+lazy_static! {
+    static ref SQUID_FIELD_NAMES: Vec<String> = {
+        vec![
+            "timestamp".to_string(),
+            "elapsed".to_string(),
+            "remote_host".to_string(),
+            "code_and_status".to_string(),
+            "bytes".to_string(),
+            "method".to_string(),
+            "url".to_string(),
+            "rfc931".to_string(),
+            "peer_status_and_peer_host".to_string(),
+            "type".to_string(),
+        ]
+    };
+}
+
+lazy_static! {
+    static ref SQUID_DATATYPES: Vec<DataType> = {
+        vec![
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+        ]
+    };
+}
+
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
 pub(crate) enum ClassicLoadBalancerLogField {
     Timestamp = 0,
@@ -184,6 +218,64 @@ impl ClassicLoadBalancerLogField {
     }
 }
 
+//Reference: https://wiki.squid-cache.org/Features/LogFormat
+pub(crate) enum SquidLogField {
+    Timestamp = 0,
+    Elapsed = 1,
+    RemoteHost = 2,
+    CodeAndStatus = 3,
+    Bytes = 4,
+    Method = 5,
+    Url = 6,
+    Rfc931 = 7,
+    PeerstatusAndPeerhost = 8,
+    Type = 9,
+}
+
+impl FromStr for SquidLogField {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "timestamp" => Ok(SquidLogField::Timestamp),
+            "elapsed" => Ok(SquidLogField::Elapsed),
+            "remote_host" => Ok(SquidLogField::RemoteHost),
+            "code_and_status" => Ok(SquidLogField::CodeAndStatus),
+            "bytes" => Ok(SquidLogField::Bytes),
+            "method" => Ok(SquidLogField::Method),
+            "url" => Ok(SquidLogField::Url),
+            "rfc931" => Ok(SquidLogField::Rfc931),
+            "peer_status_and_peer_host" => Ok(SquidLogField::PeerstatusAndPeerhost),
+            "type" => Ok(SquidLogField::Type),
+            _ => Err("unknown column name".to_string()),
+        }
+    }
+}
+
+impl SquidLogField {
+    pub(crate) fn len() -> usize {
+        10
+    }
+
+    pub(crate) fn field_names() -> Vec<String> {
+        SQUID_FIELD_NAMES.clone()
+    }
+
+    pub(crate) fn datatypes() -> Vec<DataType> {
+        SQUID_DATATYPES.clone()
+    }
+
+    pub(crate) fn datatype(idx: usize) -> DataType {
+        SQUID_DATATYPES[idx].clone()
+    }
+
+    pub(crate) fn schema() -> Vec<(String, DataType)> {
+        let fields = Self::field_names();
+        let datatypes = Self::datatypes();
+        fields.into_iter().zip(datatypes.into_iter()).collect()
+    }
+}
+
 pub(crate) type ReaderResult<T> = result::Result<T, ReaderError>;
 
 #[derive(Fail, Debug)]
@@ -249,14 +341,7 @@ impl From<url::ParseError> for ReaderError {
 #[derive(Debug)]
 pub(crate) struct ReaderBuilder {
     capacity: usize,
-}
-
-impl Default for ReaderBuilder {
-    fn default() -> Self {
-        ReaderBuilder {
-            capacity: 8 * (1 << 10),
-        }
-    }
+    table_name: String,
 }
 
 pub(crate) trait RecordRead {
@@ -264,29 +349,34 @@ pub(crate) trait RecordRead {
 }
 
 impl ReaderBuilder {
-    pub(crate) fn new() -> Self {
-        ReaderBuilder::default()
+    pub(crate) fn new(table_name: String) -> Self {
+        ReaderBuilder {
+            capacity: 8 * (1 << 10),
+            table_name,
+        }
     }
 
     pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<File>> {
-        Ok(Reader::new(self, File::open(path)?))
+        Ok(Reader::new(self, File::open(path)?, self.table_name.clone()))
     }
 
     #[allow(dead_code)]
     pub(crate) fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
-        Reader::new(self, rdr)
+        Reader::new(self, rdr, self.table_name.clone())
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct Reader<R> {
     rdr: io::BufReader<R>,
+    table_name: String,
 }
 
 impl<R: io::Read> Reader<R> {
-    pub(crate) fn new(builder: &ReaderBuilder, rdr: R) -> Reader<R> {
+    pub(crate) fn new(builder: &ReaderBuilder, rdr: R, table_name: String) -> Reader<R> {
         Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
+            table_name,
         }
     }
 
@@ -300,17 +390,35 @@ impl<R: io::Read> RecordRead for Reader<R> {
         let more_data = self.rdr.read_line(&mut buf)?;
 
         if more_data > 0 {
-            let field_names = ClassicLoadBalancerLogField::field_names();
+            let field_names = if self.table_name == "elb" {
+                ClassicLoadBalancerLogField::field_names()
+            } else {
+                SquidLogField::field_names()
+            };
+
             let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
             let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
             for (i, m) in split_the_line_regex.find_iter(&buf).enumerate() {
-                if i >= ClassicLoadBalancerLogField::len() {
-                    break;
+                if self.table_name == "elb" {
+                    if i >= ClassicLoadBalancerLogField::len() {
+                        break;
+                    }
+                } else if self.table_name == "squid" {
+                    if i >= SquidLogField::len() {
+                        break;
+                    }
+                } else {
+                    unreachable!();
                 }
+
                 let s = m.as_str();
-                let datatype = ClassicLoadBalancerLogField::datatype(i);
+                let datatype = if self.table_name == "elb" {
+                    ClassicLoadBalancerLogField::datatype(i)
+                } else {
+                    SquidLogField::datatype(i)
+                };
 
                 match datatype {
                     DataType::DateTime => {
@@ -364,7 +472,7 @@ mod tests {
     #[test]
     fn test_reader() {
         let content = r#"2015-11-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#;
-        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
@@ -391,7 +499,7 @@ mod tests {
         assert_eq!(expected, record);
 
         let content = r#"2015-11-07T18:45:37.691548Z elb1 176.219.166.226:48384 10.0.2.143:80 0.000023 0.000348 0.000025 200 200 0 41690 "GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1" "Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]" - - arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354""#;
-        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
@@ -421,7 +529,7 @@ mod tests {
     #[test]
     fn test_reader_on_empty_input() {
         let content = r#"                   \n          "#;
-        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record();
 
         assert_eq!(record.is_err(), true)
@@ -430,7 +538,7 @@ mod tests {
     #[test]
     fn test_reader_on_malformed_input() {
         let content = r#"2015-11-07T18:45:37.691548Z elb1 176.219.166.226:48384 10.0.2.143:80 0.000 on=1 HTTP/1.1" "Mozilla/5.0 (Linux; Android 5.137.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]" - - arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354""#;
-        let mut reader = ReaderBuilder::new().with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record();
 
         assert_eq!(record.is_err(), true)

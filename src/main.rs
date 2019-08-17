@@ -136,9 +136,10 @@ fn run(
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
 
-    if select_stmt.table_name != "elb" {
+    if !["elb", "squid"].contains(&&*select_stmt.table_name) {
         return Err(AppError::InvalidLogFileFormat);
     }
+
     let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
@@ -262,6 +263,16 @@ fn main() {
             if let Some(type_str) = sub_m.value_of("type") {
                 if type_str == "elb" {
                     let schema = execution::datasource::ClassicLoadBalancerLogField::schema();
+                    let mut table = Table::new();
+                    for (field, datatype) in schema.iter() {
+                        table.add_row(Row::new(vec![
+                            Cell::new(&*field.to_string()),
+                            Cell::new(&*datatype.to_string()),
+                        ]));
+                    }
+                    table.printstd();
+                } else if type_str == "squid" {
+                    let schema = execution::datasource::SquidLogField::schema();
                     let mut table = Table::new();
                     for (field, datatype) in schema.iter() {
                         table.add_row(Row::new(vec![

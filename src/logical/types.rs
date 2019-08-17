@@ -15,7 +15,7 @@ pub enum PhysicalPlanError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(DataSource),
+    DataSource(DataSource, String),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
@@ -29,8 +29,8 @@ impl Node {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
         match self {
-            Node::DataSource(data_source) => {
-                let node = execution::Node::DataSource(data_source.clone());
+            Node::DataSource(data_source, table_name) => {
+                let node = execution::Node::DataSource(data_source.clone(), table_name.clone());
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
@@ -534,7 +534,7 @@ mod test {
                     Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(Node::DataSource(DataSource::Stdin)),
+                Box::new(Node::DataSource(DataSource::Stdin, "elb".to_string())),
             )),
         );
 
@@ -552,7 +552,7 @@ mod test {
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
-            Box::new(execution::Node::DataSource(DataSource::Stdin)),
+            Box::new(execution::Node::DataSource(DataSource::Stdin, "elb".to_string())),
         );
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
@@ -579,7 +579,7 @@ mod test {
                     Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(Node::DataSource(DataSource::Stdin)),
+                Box::new(Node::DataSource(DataSource::Stdin, "elb".to_string())),
             )),
         );
 
@@ -617,7 +617,7 @@ mod test {
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
-            Box::new(execution::Node::DataSource(DataSource::Stdin)),
+            Box::new(execution::Node::DataSource(DataSource::Stdin, "elb".to_string())),
         );
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));

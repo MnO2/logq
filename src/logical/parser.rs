@@ -298,7 +298,7 @@ fn check_conflict_naming(named_list: &[types::Named]) -> bool {
 }
 
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
-    let mut root = types::Node::DataSource(data_source);
+    let mut root = types::Node::DataSource(data_source, query.table_name.clone());
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -381,7 +381,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         if let Some(group_by) = query.group_by_exprs_opt {
             let fields = group_by.exprs.clone();
 
-            if !is_match_group_by_fields(&fields, &non_aggregates) {
+            if !is_match_group_by_fields(&fields, &non_aggregates, &query.table_name) {
                 return Err(ParseError::GroupByFieldsMismatch);
             }
 
@@ -416,7 +416,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     Ok(root)
 }
 
-fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[types::Named]) -> bool {
+fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[types::Named], table_name: &str) -> bool {
     let mut a: Vec<String> = variables.to_vec();
     let mut b: Vec<String> = Vec::new();
 
@@ -437,8 +437,16 @@ fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[ty
                 }
             }
             types::Named::Star => {
-                for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
-                    b.push(field_name);
+                if table_name == "elb" {
+                    for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
+                        b.push(field_name);
+                    }
+                } else if table_name == "squid" {
+                    for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
+                        b.push(field_name);
+                    }
+                } else {
+                    unreachable!();
                 }
             }
         }
@@ -598,7 +606,7 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(types::Node::DataSource(common::DataSource::Stdin)),
+                Box::new(types::Node::DataSource(common::DataSource::Stdin, "elb".to_string())),
             )),
         );
 
@@ -646,7 +654,7 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(types::Node::DataSource(common::DataSource::Stdin)),
+                Box::new(types::Node::DataSource(common::DataSource::Stdin, "elb".to_string())),
             )),
         );
 
