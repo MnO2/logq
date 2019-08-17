@@ -305,9 +305,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     if !query.select_exprs.is_empty() {
         for select_expr in query.select_exprs.iter() {
-            let parse_aggregate_result = parse_aggregate(select_expr);
-            if parse_aggregate_result.is_ok() {
-                let named_aggregate = parse_aggregate_result.unwrap();
+            if let Ok(named_aggregate) = parse_aggregate(select_expr) {
                 named_aggregates.push(named_aggregate.clone());
 
                 match named_aggregate.aggregate {
