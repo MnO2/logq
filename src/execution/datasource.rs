@@ -39,7 +39,7 @@ impl fmt::Display for DataType {
 }
 
 lazy_static! {
-    static ref DATATYPES: Vec<DataType> = {
+    static ref AWS_ELB_DATATYPES: Vec<DataType> = {
         vec![
             DataType::DateTime,
             DataType::String,
@@ -63,7 +63,7 @@ lazy_static! {
 }
 
 lazy_static! {
-    static ref FIELD_NAMES: Vec<String> = {
+    static ref AWS_ELB_FIELD_NAMES: Vec<String> = {
         vec![
             "timestamp".to_string(),
             "elbname".to_string(),
@@ -200,15 +200,15 @@ impl ClassicLoadBalancerLogField {
     }
 
     pub(crate) fn field_names() -> Vec<String> {
-        FIELD_NAMES.clone()
+        AWS_ELB_FIELD_NAMES.clone()
     }
 
     pub(crate) fn datatypes() -> Vec<DataType> {
-        DATATYPES.clone()
+        AWS_ELB_DATATYPES.clone()
     }
 
     pub(crate) fn datatype(idx: usize) -> DataType {
-        DATATYPES[idx].clone()
+        AWS_ELB_DATATYPES[idx].clone()
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
