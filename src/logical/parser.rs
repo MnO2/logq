@@ -445,6 +445,10 @@ fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[ty
                     for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
                         b.push(field_name);
                     }
+                } else if table_name == "s3" {
+                    for field_name in execution::datasource::S3Field::field_names().into_iter() {
+                        b.push(field_name);
+                    }
                 } else {
                     unreachable!();
                 }

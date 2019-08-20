@@ -87,6 +87,68 @@ lazy_static! {
 }
 
 lazy_static! {
+    static ref AWS_S3_FIELD_NAMES: Vec<String> = {
+        vec![
+            "bucket_owner".to_string(),
+            "bucket".to_string(),
+            "time".to_string(),
+            "remote_ip".to_string(),
+            "requester".to_string(),
+            "request_id".to_string(),
+            "operation".to_string(),
+            "key".to_string(),
+            "request_uri".to_string(),
+            "http_status".to_string(),
+            "error_code".to_string(),
+            "bytes_sent".to_string(),
+            "object_size".to_string(),
+            "total_time".to_string(),
+            "turn_around_time".to_string(),
+            "refererr".to_string(),
+            "user_agent".to_string(),
+            "version_id".to_string(),
+            "host_id".to_string(),
+            "signature_version".to_string(),
+            "cipher_suite".to_string(),
+            "authentication_type".to_string(),
+            "host_header".to_string(),
+            "tls_version".to_string(),
+        ]
+    };
+}
+
+lazy_static! {
+    static ref AWS_S3_DATATYPES: Vec<DataType> = {
+        vec![
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+        ]
+    };
+}
+
+lazy_static! {
     static ref SQUID_FIELD_NAMES: Vec<String> = {
         vec![
             "timestamp".to_string(),
@@ -209,6 +271,92 @@ impl ClassicLoadBalancerLogField {
 
     pub(crate) fn datatype(idx: usize) -> DataType {
         AWS_ELB_DATATYPES[idx].clone()
+    }
+
+    pub(crate) fn schema() -> Vec<(String, DataType)> {
+        let fields = Self::field_names();
+        let datatypes = Self::datatypes();
+        fields.into_iter().zip(datatypes.into_iter()).collect()
+    }
+}
+
+// https://docs.aws.amazon.com/AmazonS3/latest/dev/LogFormat.html
+pub(crate) enum S3Field {
+    BucketOwner = 0,
+    Bucket = 1,
+    Time = 2,
+    RemoteIp = 3,
+    Requester = 4,
+    RequestId = 5,
+    Operation = 6,
+    Key = 7,
+    RequestUri = 8,
+    HttpStatus = 9,
+    ErrorCode = 10,
+    BytesSent = 11,
+    ObjectSize = 12,
+    TotalTime = 13,
+    TurnAroundTime = 14,
+    Referrer = 15,
+    UserAgent = 16,
+    VersionId = 17,
+    HostId = 18,
+    SignatureVersion = 19,
+    CipherSuite = 20,
+    AuthenticationType = 21,
+    HostHeader = 22,
+    TlsVersion = 23,
+}
+
+impl FromStr for S3Field {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "bucket_owner" => Ok(S3Field::BucketOwner),
+            "bucket" => Ok(S3Field::Bucket),
+            "time" => Ok(S3Field::Time),
+            "remote_ip" => Ok(S3Field::RemoteIp),
+            "requester" => Ok(S3Field::Requester),
+            "request_id" => Ok(S3Field::RequestId),
+            "operation" => Ok(S3Field::Operation),
+            "key" => Ok(S3Field::Key),
+            "request_uri" => Ok(S3Field::RequestUri),
+            "http_status" => Ok(S3Field::HttpStatus),
+            "error_code" => Ok(S3Field::ErrorCode),
+            "bytes_sent" => Ok(S3Field::BytesSent),
+            "object_size" => Ok(S3Field::ObjectSize),
+            "total_time" => Ok(S3Field::TotalTime),
+            "turn_around_time" => Ok(S3Field::TurnAroundTime),
+            "refererr" => Ok(S3Field::Referrer),
+            "user_agent" => Ok(S3Field::UserAgent),
+            "version_id" => Ok(S3Field::VersionId),
+            "host_id" => Ok(S3Field::HostId),
+            "signature_version" => Ok(S3Field::SignatureVersion),
+            "cipher_suite" => Ok(S3Field::CipherSuite),
+            "authentication_type" => Ok(S3Field::AuthenticationType),
+            "host_header" => Ok(S3Field::HostHeader),
+            "tls_version" => Ok(S3Field::TlsVersion),
+            _ => Err("unknown column name".to_string()),
+        }
+    }
+}
+
+impl S3Field {
+    pub(crate) fn len() -> usize {
+        24
+    }
+
+    pub(crate) fn field_names() -> Vec<String> {
+        AWS_S3_FIELD_NAMES.clone()
+    }
+
+    pub(crate) fn datatypes() -> Vec<DataType> {
+        AWS_S3_DATATYPES.clone()
+    }
+
+    pub(crate) fn datatype(idx: usize) -> DataType {
+        AWS_S3_DATATYPES[idx].clone()
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
@@ -392,11 +540,13 @@ impl<R: io::Read> RecordRead for Reader<R> {
         if more_data > 0 {
             let field_names = if self.table_name == "elb" {
                 ClassicLoadBalancerLogField::field_names()
+            } else if self.table_name == "s3" {
+                S3Field::field_names()
             } else {
                 SquidLogField::field_names()
             };
 
-            let regex_literal = r#"[^\s"']+|"([^"]*)"|'([^']*)'"#;
+            let regex_literal = r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#;
             let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
@@ -409,6 +559,10 @@ impl<R: io::Read> RecordRead for Reader<R> {
                     if i >= SquidLogField::len() {
                         break;
                     }
+                } else if self.table_name == "s3" {
+                    if i >= S3Field::len() {
+                        break;
+                    }
                 } else {
                     unreachable!();
                 }
@@ -416,6 +570,8 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 let s = m.as_str();
                 let datatype = if self.table_name == "elb" {
                     ClassicLoadBalancerLogField::datatype(i)
+                } else if self.table_name == "s3" {
+                    S3Field::datatype(i)
                 } else {
                     SquidLogField::datatype(i)
                 };
