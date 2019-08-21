@@ -1388,5 +1388,9 @@ mod tests {
         assert_eq!(port, Value::Int(8000));
         let path = evaluate_url_functions("url_path", &vec![v.clone()]).unwrap();
         assert_eq!(path, Value::String("/".to_string()));
+        let fragment = evaluate_url_functions("url_fragment", &vec![v.clone()]).unwrap();
+        assert_eq!(fragment, Value::Null);
+        let query = evaluate_url_functions("url_query", &vec![v.clone()]).unwrap();
+        assert_eq!(query, Value::String("mode=json&after=&iteration=1".to_string()));
     }
 }
