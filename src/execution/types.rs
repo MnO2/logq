@@ -1379,18 +1379,28 @@ mod tests {
     #[test]
     fn test_evaluate_url_functions() {
         let v = Value::HttpRequest(
-            common::types::parse_http_request("GET http://example.com:8000/?mode=json&after=&iteration=1 HTTP/1.1")
-                .unwrap(),
+            common::types::parse_http_request(
+                "GET http://example.com:8000/users/123?mode=json&after=&iteration=1 HTTP/1.1",
+            )
+            .unwrap(),
         );
         let name = evaluate_url_functions("url_host", &vec![v.clone()]).unwrap();
         assert_eq!(name, Value::String("example.com".to_string()));
         let port = evaluate_url_functions("url_port", &vec![v.clone()]).unwrap();
         assert_eq!(port, Value::Int(8000));
         let path = evaluate_url_functions("url_path", &vec![v.clone()]).unwrap();
-        assert_eq!(path, Value::String("/".to_string()));
+        assert_eq!(path, Value::String("/users/123".to_string()));
         let fragment = evaluate_url_functions("url_fragment", &vec![v.clone()]).unwrap();
         assert_eq!(fragment, Value::Null);
         let query = evaluate_url_functions("url_query", &vec![v.clone()]).unwrap();
         assert_eq!(query, Value::String("mode=json&after=&iteration=1".to_string()));
+        let path_segments = evaluate_url_functions("url_path_segments", &vec![v.clone(), Value::Int(1)]).unwrap();
+        assert_eq!(path_segments, Value::String("123".to_string()));
+        let mapped_path = evaluate_url_functions(
+            "url_path_bucket",
+            &vec![v.clone(), Value::Int(1), Value::String("_".to_string())],
+        )
+        .unwrap();
+        assert_eq!(mapped_path, Value::String("/users/_".to_string()));
     }
 }
