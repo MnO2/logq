@@ -1366,4 +1366,13 @@ mod tests {
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(Value::Int(0)), aggregate);
     }
+
+    #[test]
+    fn test_evaluate_host_functions() {
+        let v = Value::Host(common::types::parse_host("192.168.131.39:2817").unwrap());
+        let name = evaluate_host_functions("host_name", &vec![v.clone()]).unwrap();
+        assert_eq!(name, Value::String("192.168.131.39".to_string()));
+        let port = evaluate_host_functions("host_port", &vec![v]).unwrap();
+        assert_eq!(port, Value::Int(2817));
+    }
 }
