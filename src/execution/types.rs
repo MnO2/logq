@@ -218,7 +218,7 @@ fn evaluate_url_functions(func_name: &str, arguments: &[Value]) -> ExpressionRes
             match &arguments[0] {
                 Value::HttpRequest(r) => {
                     if let Some(port) = r.url.port() {
-                        Ok(Value::String(port.to_string()))
+                        Ok(Value::Int(port as i32))
                     } else {
                         Ok(Value::Null)
                     }
@@ -1374,5 +1374,19 @@ mod tests {
         assert_eq!(name, Value::String("192.168.131.39".to_string()));
         let port = evaluate_host_functions("host_port", &vec![v]).unwrap();
         assert_eq!(port, Value::Int(2817));
+    }
+
+    #[test]
+    fn test_evaluate_url_functions() {
+        let v = Value::HttpRequest(
+            common::types::parse_http_request("GET http://example.com:8000/?mode=json&after=&iteration=1 HTTP/1.1")
+                .unwrap(),
+        );
+        let name = evaluate_url_functions("url_host", &vec![v.clone()]).unwrap();
+        assert_eq!(name, Value::String("example.com".to_string()));
+        let port = evaluate_url_functions("url_port", &vec![v.clone()]).unwrap();
+        assert_eq!(port, Value::Int(8000));
+        let path = evaluate_url_functions("url_path", &vec![v.clone()]).unwrap();
+        assert_eq!(path, Value::String("/".to_string()));
     }
 }
