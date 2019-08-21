@@ -790,7 +790,7 @@ mod tests {
     use std::io::BufReader;
 
     #[test]
-    fn test_reader() {
+    fn test_aws_elb_reader() {
         let content = r#"2015-11-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#;
         let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record().unwrap();
@@ -844,6 +844,47 @@ mod tests {
         let expected: Option<Record> = Some(Record::new(fields, data));
 
         assert_eq!(expected, record)
+    }
+
+    #[test]
+    fn test_aws_alb_reader() {
+        let content = r#"http 2018-07-02T22:23:00.186641Z app/my-loadbalancer/50dc6c495c0c9188 192.168.131.39:2817 10.0.0.1:80 0.000 0.001 0.000 200 200 34 366 "GET http://www.example.com:80/ HTTP/1.1" "curl/7.46.0" - - arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354" "-" "-" 0 2018-07-02T22:22:48.364000Z "forward" "-" "-""#;
+        let mut reader = ReaderBuilder::new("alb".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record().unwrap();
+        let fields = ApplicationLoadBalancerLogField::field_names();
+        let data = vec![
+            Value::String("http".to_string()),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2018-07-02T22:23:00.186641Z").unwrap()),
+            Value::String("app/my-loadbalancer/50dc6c495c0c9188".to_string()),
+            Value::Host(common::types::parse_host("192.168.131.39:2817").unwrap()),
+            Value::Host(common::types::parse_host("10.0.0.1:80").unwrap()),
+            Value::Float(OrderedFloat::from(0.000)),
+            Value::Float(OrderedFloat::from(0.001)),
+            Value::Float(OrderedFloat::from(0.000)),
+            Value::String("200".to_string()),
+            Value::String("200".to_string()),
+            Value::Int(34),
+            Value::Int(366),
+            Value::HttpRequest(common::types::parse_http_request("GET http://www.example.com:80/ HTTP/1.1").unwrap()),
+            Value::String("\"curl/7.46.0\"".to_string()),
+            Value::String("-".to_string()),
+            Value::String("-".to_string()),
+            Value::String(
+                "arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067"
+                    .to_string(),
+            ),
+            Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string()),
+            Value::String("\"-\"".to_string()),
+            Value::String("\"-\"".to_string()),
+            Value::String("0".to_string()),
+            Value::String("2018-07-02T22:22:48.364000Z".to_string()),
+            Value::String("\"forward\"".to_string()),
+            Value::String("\"-\"".to_string()),
+            Value::String("\"-\"".to_string()),
+        ];
+        let expected: Option<Record> = Some(Record::new(fields, data));
+
+        assert_eq!(expected, record);
     }
 
     #[test]
