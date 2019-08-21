@@ -87,6 +87,70 @@ lazy_static! {
 }
 
 lazy_static! {
+    static ref AWS_ALB_DATATYPES: Vec<DataType> = {
+        vec![
+            DataType::String,
+            DataType::DateTime,
+            DataType::String,
+            DataType::Host,
+            DataType::Host,
+            DataType::Float,
+            DataType::Float,
+            DataType::Float,
+            DataType::String,
+            DataType::String,
+            DataType::Integral,
+            DataType::Integral,
+            DataType::HttpRequest,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+            DataType::String,
+        ]
+    };
+}
+
+lazy_static! {
+    static ref AWS_ALB_FIELD_NAMES: Vec<String> = {
+        vec![
+            "type".to_string(),
+            "timestamp".to_string(),
+            "elb".to_string(),
+            "client_and_port".to_string(),
+            "target_and_port".to_string(),
+            "request_processing_time".to_string(),
+            "target_processing_time".to_string(),
+            "response_processing_time".to_string(),
+            "elb_status_code".to_string(),
+            "target_status_code".to_string(),
+            "received_bytes".to_string(),
+            "sent_bytes".to_string(),
+            "request".to_string(),
+            "user_agent".to_string(),
+            "ssl_cipher".to_string(),
+            "ssl_protocol".to_string(),
+            "target_group_arn".to_string(),
+            "trace_id".to_string(),
+            "domain_name".to_string(),
+            "chosen_cert_arn".to_string(),
+            "matched_rule_priority".to_string(),
+            "request_creation_time".to_string(),
+            "action_executed".to_string(),
+            "redirect_url".to_string(),
+            "error_reason".to_string(),
+        ]
+    };
+}
+
+lazy_static! {
     static ref AWS_S3_FIELD_NAMES: Vec<String> = {
         vec![
             "bucket_owner".to_string(),
@@ -271,6 +335,94 @@ impl ClassicLoadBalancerLogField {
 
     pub(crate) fn datatype(idx: usize) -> DataType {
         AWS_ELB_DATATYPES[idx].clone()
+    }
+
+    pub(crate) fn schema() -> Vec<(String, DataType)> {
+        let fields = Self::field_names();
+        let datatypes = Self::datatypes();
+        fields.into_iter().zip(datatypes.into_iter()).collect()
+    }
+}
+
+//Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+pub(crate) enum ApplicationLoadBalancerLogField {
+    Type = 0,
+    Timestamp = 1,
+    Elbname = 2,
+    ClientAndPort = 3,
+    TargetAndPort = 4,
+    RequestProcessingTime = 5,
+    TargetProcessingTime = 6,
+    ResponseProcessingTime = 7,
+    ELBStatusCode = 8,
+    TargetStatusCode = 9,
+    ReceivedBytes = 10,
+    SentBytes = 11,
+    Request = 12,
+    UserAgent = 13,
+    SSLCipher = 14,
+    SSLProtocol = 15,
+    TargetGroupArn = 16,
+    TraceID = 17,
+    DomainName = 18,
+    ChosenCertArn = 19,
+    MatchedRulePriority = 20,
+    RequestCreationTime = 21,
+    ActionExecuted = 22,
+    RedirectUrl = 23,
+    ErrorReason = 24,
+}
+
+impl FromStr for ApplicationLoadBalancerLogField {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "type" => Ok(ApplicationLoadBalancerLogField::Type),
+            "timestamp" => Ok(ApplicationLoadBalancerLogField::Timestamp),
+            "elbname" => Ok(ApplicationLoadBalancerLogField::Elbname),
+            "client_and_port" => Ok(ApplicationLoadBalancerLogField::ClientAndPort),
+            "backend_and_port" => Ok(ApplicationLoadBalancerLogField::TargetAndPort),
+            "request_processing_time" => Ok(ApplicationLoadBalancerLogField::RequestProcessingTime),
+            "backend_processing_time" => Ok(ApplicationLoadBalancerLogField::TargetProcessingTime),
+            "response_processing_time" => Ok(ApplicationLoadBalancerLogField::ResponseProcessingTime),
+            "elb_status_code" => Ok(ApplicationLoadBalancerLogField::ELBStatusCode),
+            "backend_status_code" => Ok(ApplicationLoadBalancerLogField::TargetStatusCode),
+            "received_bytes" => Ok(ApplicationLoadBalancerLogField::ReceivedBytes),
+            "sent_bytes" => Ok(ApplicationLoadBalancerLogField::SentBytes),
+            "request" => Ok(ApplicationLoadBalancerLogField::Request),
+            "user_agent" => Ok(ApplicationLoadBalancerLogField::UserAgent),
+            "ssl_cipher" => Ok(ApplicationLoadBalancerLogField::SSLCipher),
+            "ssl_protocol" => Ok(ApplicationLoadBalancerLogField::SSLProtocol),
+            "target_group_arn" => Ok(ApplicationLoadBalancerLogField::TargetGroupArn),
+            "trace_id" => Ok(ApplicationLoadBalancerLogField::TraceID),
+            "domain_name" => Ok(ApplicationLoadBalancerLogField::DomainName),
+            "chosen_cert_arn" => Ok(ApplicationLoadBalancerLogField::ChosenCertArn),
+            "matched_rule_priority" => Ok(ApplicationLoadBalancerLogField::MatchedRulePriority),
+            "request_creation_time" => Ok(ApplicationLoadBalancerLogField::RequestCreationTime),
+            "action_executed" => Ok(ApplicationLoadBalancerLogField::ActionExecuted),
+            "redirect_url" => Ok(ApplicationLoadBalancerLogField::RedirectUrl),
+            "error_reason" => Ok(ApplicationLoadBalancerLogField::ErrorReason),
+            _ => Err("unknown column name".to_string()),
+        }
+    }
+}
+
+impl ApplicationLoadBalancerLogField {
+    pub(crate) fn len() -> usize {
+        25
+    }
+
+    pub(crate) fn field_names() -> Vec<String> {
+        AWS_ALB_FIELD_NAMES.clone()
+    }
+
+    pub(crate) fn datatypes() -> Vec<DataType> {
+        AWS_ALB_DATATYPES.clone()
+    }
+
+    pub(crate) fn datatype(idx: usize) -> DataType {
+        AWS_ALB_DATATYPES[idx].clone()
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
@@ -540,6 +692,8 @@ impl<R: io::Read> RecordRead for Reader<R> {
         if more_data > 0 {
             let field_names = if self.table_name == "elb" {
                 ClassicLoadBalancerLogField::field_names()
+            } else if self.table_name == "alb" {
+                ApplicationLoadBalancerLogField::field_names()
             } else if self.table_name == "s3" {
                 S3Field::field_names()
             } else {
@@ -553,6 +707,10 @@ impl<R: io::Read> RecordRead for Reader<R> {
             for (i, m) in split_the_line_regex.find_iter(&buf).enumerate() {
                 if self.table_name == "elb" {
                     if i >= ClassicLoadBalancerLogField::len() {
+                        break;
+                    }
+                } else if self.table_name == "alb" {
+                    if i >= ApplicationLoadBalancerLogField::len() {
                         break;
                     }
                 } else if self.table_name == "squid" {
@@ -570,6 +728,8 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 let s = m.as_str();
                 let datatype = if self.table_name == "elb" {
                     ClassicLoadBalancerLogField::datatype(i)
+                } else if self.table_name == "alb" {
+                    ApplicationLoadBalancerLogField::datatype(i)
                 } else if self.table_name == "s3" {
                     S3Field::datatype(i)
                 } else {
@@ -593,8 +753,12 @@ impl<R: io::Read> RecordRead for Reader<R> {
                         values.push(Value::Float(OrderedFloat::from(f)));
                     }
                     DataType::Host => {
-                        let host = common::types::parse_host(s)?;
-                        values.push(Value::Host(host));
+                        if s == "-" {
+                            values.push(Value::Null)
+                        } else {
+                            let host = common::types::parse_host(s)?;
+                            values.push(Value::Host(host));
+                        }
                     }
                     DataType::HttpRequest => {
                         let s = s.trim_matches('"');

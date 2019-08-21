@@ -441,6 +441,11 @@ fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[ty
                     for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
                         b.push(field_name);
                     }
+                } else if table_name == "alb" {
+                    for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().into_iter()
+                    {
+                        b.push(field_name);
+                    }
                 } else if table_name == "squid" {
                     for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
                         b.push(field_name);

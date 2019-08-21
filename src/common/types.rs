@@ -121,7 +121,7 @@ pub(crate) fn parse_http_method(s: &str) -> ParseHttpRequestResult<HttpMethod> {
 }
 
 pub(crate) fn parse_http_version(s: &str) -> ParseHttpRequestResult<HttpVersion> {
-    if s == "HTTP/1.1" || s == "HTTP/1.0" {
+    if s == "HTTP/1.1" || s == "HTTP/1.0" || s == "HTTP/2.0" {
         Ok(s.to_string())
     } else {
         Err(ParseHttpRequestError::ParseHttpVersion)
