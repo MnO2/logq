@@ -10,8 +10,9 @@ logq is a command line tool for easily analyzing, querying, aggregating web-serv
 Right now the supported formats are
 
 1. AWS classic elastic load balancer
-2. AWS S3 Access Log (preliminary support)
-3. Squid native format (preliminary support)
+2. AWS application load balancer
+3. AWS S3 Access Log (preliminary support)
+4. Squid native format (preliminary support)
 
 More log formats would be supported in the future, and ideally it could be customized through configuration like what GoAccess does.
 
