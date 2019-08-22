@@ -1417,5 +1417,10 @@ mod tests {
 
         let v = evaluate("Divide", &vec![Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(1));
+
+        let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
+        let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:35.000000Z").unwrap());
+        let bucket_dt = evaluate("time_bucket", &vec![Value::String("5 seconds".to_string()), dt]).unwrap();
+        assert_eq!(expected_dt, bucket_dt);
     }
 }
