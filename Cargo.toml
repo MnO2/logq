@@ -2,8 +2,8 @@
 name = "logq"
 description = "A web-server log file command line toolkit with SQL interface"
 repository = "https://github.com/MnO2/logq"
-version = "0.1.8"
-license = "Apache-2.0 OR BSD-3"
+version = "0.1.9"
+license = "Apache-2.0 OR BSD-3-Clause"
 authors = ["Paul Meng <me@paulme.ng>"]
 readme = "README.md"
 keywords = ["log", "sql", "query", "search"]
