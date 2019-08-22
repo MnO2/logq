@@ -1403,4 +1403,19 @@ mod tests {
         .unwrap();
         assert_eq!(mapped_path, Value::String("/users/_".to_string()));
     }
+
+    #[test]
+    fn test_evaluate() {
+        let v = evaluate("Plus", &vec![Value::Int(1), Value::Int(2)]).unwrap();
+        assert_eq!(v, Value::Int(3));
+
+        let v = evaluate("Minus", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        assert_eq!(v, Value::Int(0));
+
+        let v = evaluate("Times", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        assert_eq!(v, Value::Int(4));
+
+        let v = evaluate("Divide", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        assert_eq!(v, Value::Int(1));
+    }
 }
