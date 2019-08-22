@@ -888,6 +888,43 @@ mod tests {
     }
 
     #[test]
+    fn test_aws_s3_reader() {
+        let content = r#"79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be awsexamplebucket [06/Feb/2019:00:00:38 +0000] 192.0.2.3 79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be 3E57427F3EXAMPLE REST.GET.VERSIONING - "GET /awsexamplebucket?versioning HTTP/1.1" 200 - 113 - 7 - "-" "S3Console/0.4" - s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234= SigV2 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader awsexamplebucket.s3.amazonaws.com TLSV1.1"#;
+        let mut reader = ReaderBuilder::new("s3".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record().unwrap();
+        let fields = S3Field::field_names();
+        let data = vec![
+            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string()),
+            Value::String("awsexamplebucket".to_string()),
+            Value::String("[06/Feb/2019:00:00:38 +0000]".to_string()),
+            Value::String("192.0.2.3".to_string()),
+            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string()),
+            Value::String("3E57427F3EXAMPLE".to_string()),
+            Value::String("REST.GET.VERSIONING".to_string()),
+            Value::String("-".to_string()),
+            Value::String("\"GET /awsexamplebucket?versioning HTTP/1.1\"".to_string()),
+            Value::String("200".to_string()),
+            Value::String("-".to_string()),
+            Value::String("113".to_string()),
+            Value::String("-".to_string()),
+            Value::String("7".to_string()),
+            Value::String("-".to_string()),
+            Value::String("\"-\"".to_string()),
+            Value::String("\"S3Console/0.4\"".to_string()),
+            Value::String("-".to_string()),
+            Value::String("s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234=".to_string()),
+            Value::String("SigV2".to_string()),
+            Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
+            Value::String("AuthHeader".to_string()),
+            Value::String("awsexamplebucket.s3.amazonaws.com".to_string()),
+            Value::String("TLSV1.1".to_string()),
+        ];
+        let expected: Option<Record> = Some(Record::new(fields, data));
+
+        assert_eq!(expected, record);
+    }
+
+    #[test]
     fn test_reader_on_empty_input() {
         let content = r#"                   \n          "#;
         let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
