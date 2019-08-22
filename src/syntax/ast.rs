@@ -9,6 +9,7 @@ pub(crate) struct SelectStatement {
     pub(crate) table_name: String,
     pub(crate) where_expr_opt: Option<WhereExpression>,
     pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
+    pub(crate) having_expr_opt: Option<WhereExpression>,
     pub(crate) order_by_expr_opt: Option<OrderByExpression>,
     pub(crate) limit_expr_opt: Option<LimitExpression>,
 }
@@ -19,6 +20,7 @@ impl SelectStatement {
         table_name: &str,
         where_expr_opt: Option<WhereExpression>,
         group_by_exprs_opt: Option<GroupByExpression>,
+        having_expr_opt: Option<WhereExpression>,
         order_by_expr_opt: Option<OrderByExpression>,
         limit_expr_opt: Option<LimitExpression>,
     ) -> Self {
@@ -27,6 +29,7 @@ impl SelectStatement {
             table_name: table_name.to_string(),
             where_expr_opt,
             group_by_exprs_opt,
+            having_expr_opt,
             order_by_expr_opt,
             limit_expr_opt,
         }

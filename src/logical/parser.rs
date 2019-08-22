@@ -20,6 +20,8 @@ pub enum ParseError {
     InvalidArguments(String),
     #[fail(display = "Invalid Arguments: {}", _0)]
     UnknownFunction(String),
+    #[fail(display = "Having clause but no Group By clause provided")]
+    HavingClauseWithoutGroupBy,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -386,14 +388,28 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
             }
 
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+
+            if let Some(having_expr) = query.having_expr_opt {
+                let filter_formula = parse_logic(&having_expr.expr)?;
+                root = types::Node::Filter(filter_formula, Box::new(root));
+            }
         } else {
             let fields = Vec::new();
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+
+            if let Some(having_expr) = query.having_expr_opt {
+                let filter_formula = parse_logic(&having_expr.expr)?;
+                root = types::Node::Filter(filter_formula, Box::new(root));
+            }
         }
     } else {
         //sanity check if there is a group by statement
         if query.group_by_exprs_opt.is_some() {
             return Err(ParseError::GroupByWithoutAggregateFunction);
+        }
+
+        if query.having_expr_opt.is_some() {
+            return Err(ParseError::HavingClauseWithoutGroupBy);
         }
     }
 
@@ -599,7 +615,7 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None);
+        let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None, None);
         let data_source = common::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
@@ -647,7 +663,15 @@ mod test {
         ));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None, None);
+        let before = ast::SelectStatement::new(
+            select_exprs,
+            "elb",
+            Some(where_expr),
+            Some(group_by_expr),
+            None,
+            None,
+            None,
+        );
         let data_source = common::DataSource::Stdin;
 
         let filtered_formula = Box::new(types::Formula::Predicate(
@@ -696,7 +720,15 @@ mod test {
         ));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), Some(group_by_expr), None, None);
+        let before = ast::SelectStatement::new(
+            select_exprs,
+            "elb",
+            Some(where_expr),
+            Some(group_by_expr),
+            None,
+            None,
+            None,
+        );
         let data_source = common::DataSource::Stdin;
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByWithoutAggregateFunction);
@@ -723,7 +755,7 @@ mod test {
 
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None);
+        let before = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None, None);
         let data_source = common::DataSource::Stdin;
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByFieldsMismatch);
@@ -743,7 +775,7 @@ mod test {
             ),
         ];
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None);
+        let before = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None, None);
         let data_source = common::DataSource::Stdin;
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::ConflictVariableNaming);
