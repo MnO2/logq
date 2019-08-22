@@ -925,6 +925,29 @@ mod tests {
     }
 
     #[test]
+    fn test_squid_reader() {
+        let content = r#"1515734740.494      1 [MASKEDIPADDRESS] TCP_DENIED/407 3922 CONNECT d.dropbox.com:443 - HIER_NONE/- text/html"#;
+        let mut reader = ReaderBuilder::new("squid".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let record = reader.read_record().unwrap();
+        let fields = SquidLogField::field_names();
+        let data = vec![
+            Value::String("1515734740.494".to_string()),
+            Value::String("1".to_string()),
+            Value::String("[MASKEDIPADDRESS]".to_string()),
+            Value::String("TCP_DENIED/407".to_string()),
+            Value::String("3922".to_string()),
+            Value::String("CONNECT".to_string()),
+            Value::String("d.dropbox.com:443".to_string()),
+            Value::String("-".to_string()),
+            Value::String("HIER_NONE/-".to_string()),
+            Value::String("text/html".to_string()),
+        ];
+        let expected: Option<Record> = Some(Record::new(fields, data));
+
+        assert_eq!(expected, record);
+    }
+
+    #[test]
     fn test_reader_on_empty_input() {
         let content = r#"                   \n          "#;
         let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
