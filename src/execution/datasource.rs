@@ -788,6 +788,7 @@ mod tests {
     use crate::common;
     use chrono;
     use std::io::BufReader;
+    use std::str::FromStr;
 
     #[test]
     fn test_aws_elb_reader() {
@@ -963,5 +964,14 @@ mod tests {
         let record = reader.read_record();
 
         assert_eq!(record.is_err(), true)
+    }
+
+    #[test]
+    fn test_idempotent_property() {
+        for field_name in ClassicLoadBalancerLogField::field_names().iter() {
+            let field_enum = ClassicLoadBalancerLogField::from_str(field_name).unwrap();
+            let format_field_name = format!("{}", field_enum);
+            assert_eq!(&format_field_name, field_name)
+        }
     }
 }
