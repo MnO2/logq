@@ -1423,6 +1423,14 @@ mod tests {
         let bucket_dt = evaluate("time_bucket", &vec![Value::String("5 seconds".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
+        let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:00.000000Z").unwrap());
+        let bucket_dt = evaluate("time_bucket", &vec![Value::String("5 minutes".to_string()), dt.clone()]).unwrap();
+        assert_eq!(expected_dt, bucket_dt);
+
+        let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:00:00.000000Z").unwrap());
+        let bucket_dt = evaluate("time_bucket", &vec![Value::String("1 hour".to_string()), dt.clone()]).unwrap();
+        assert_eq!(expected_dt, bucket_dt);
+
         let hour = evaluate("date_part", &vec![Value::String("second".to_string()), dt.clone()]).unwrap();
         assert_eq!(Value::Float(OrderedFloat::from(37.0)), hour);
     }
