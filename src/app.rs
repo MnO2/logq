@@ -33,6 +33,25 @@ pub(crate) enum AppError {
     WriteJson(#[cause] json::Error),
 }
 
+impl PartialEq for AppError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AppError::Syntax(_), AppError::Syntax(_)) => true,
+            (AppError::InputNotAllConsumed(_), AppError::InputNotAllConsumed(_)) => true,
+            (AppError::Parse(_), AppError::Parse(_)) => true,
+            (AppError::PhysicalPlan(_), AppError::PhysicalPlan(_)) => true,
+            (AppError::CreateStream(_), AppError::CreateStream(_)) => true,
+            (AppError::Stream(_), AppError::Stream(_)) => true,
+            (AppError::InvalidLogFileFormat, AppError::InvalidLogFileFormat) => true,
+            (AppError::WriteCsv(_), AppError::WriteCsv(_)) => true,
+            (AppError::WriteJson(_), AppError::WriteJson(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for AppError {}
+
 impl From<nom::Err<VerboseError<&str>>> for AppError {
     fn from(e: nom::Err<VerboseError<&str>>) -> AppError {
         match e {
@@ -196,5 +215,18 @@ pub(crate) fn run(
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run() {
+        let query_str = "select * from elb";
+        let data_source = common::types::DataSource::Stdin;
+        let result = run(&*query_str, data_source, true, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
     }
 }
