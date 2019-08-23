@@ -254,7 +254,7 @@ mod tests {
 
         let data_source = common::types::DataSource::File(file_path);
         let result = run(
-            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t limit 1"#,
+            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t order by t asc limit 1"#,
             data_source.clone(),
             false,
             OutputMode::Csv,
