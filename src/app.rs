@@ -245,8 +245,6 @@ mod tests {
 
     #[test]
     fn test_run_real_mode() {
-        let query_str =
-            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t limit 1"#;
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
         let mut file = File::create(file_path.clone()).unwrap();
@@ -255,8 +253,18 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path);
-        let result = run(&*query_str, data_source, false, OutputMode::Csv);
+        let result = run(
+            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t limit 1"#,
+            data_source.clone(),
+            false,
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
 
+        let result = run(r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#, data_source.clone(), false, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
+
+        let result = run(r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#, data_source.clone(), false, OutputMode::Csv);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
