@@ -33,6 +33,7 @@ tdigest = "0.2"
 [dev-dependencies]
 criterion = "0.2"
 rand = "0.7"
+tempfile = "3.1.0"
 
 [[bench]]
 name = "logq_benchmark"

@@ -221,12 +221,25 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
 
     #[test]
     fn test_run() {
-        let query_str = "select * from elb";
-        let data_source = common::types::DataSource::Stdin;
-        let result = run(&*query_str, data_source, true, OutputMode::Csv);
+        let query_str = "select * from squid";
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("log_for_test.log");
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"1515734740.494      1 [MASKEDIPADDRESS] TCP_DENIED/407 3922 CONNECT d.dropbox.com:443 - HIER_NONE/- text/html"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path);
+        let result = run(&*query_str, data_source, false, OutputMode::Csv);
+
         assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
     }
 }
