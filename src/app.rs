@@ -245,11 +245,12 @@ mod tests {
 
     #[test]
     fn test_run_real_mode() {
-        let query_str = "select * from squid";
+        let query_str =
+            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t limit 1"#;
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
         let mut file = File::create(file_path.clone()).unwrap();
-        writeln!(file, r#"1515734740.494      1 [MASKEDIPADDRESS] TCP_DENIED/407 3922 CONNECT d.dropbox.com:443 - HIER_NONE/- text/html"#).unwrap();
+        writeln!(file, r#"2019-06-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#).unwrap();
         file.sync_all().unwrap();
         drop(file);
 
