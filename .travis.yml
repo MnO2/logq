@@ -22,7 +22,7 @@ before_script:
 script:
   - sudo apt-get install  build-essential libc6-dev libc6-dev-i386
   - cargo fmt --all -- --check
-  - cargo build
+  - cargo build --verbose
   - cargo test
 
 after_success:
