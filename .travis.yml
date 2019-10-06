@@ -20,7 +20,6 @@ before_script:
     fi
 
 script:
-  - sudo apt-get install  build-essential libc6-dev libc6-dev-i386
   - cargo fmt --all -- --check
   - cargo build --verbose
   - cargo test
