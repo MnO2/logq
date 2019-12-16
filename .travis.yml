@@ -9,7 +9,6 @@ addons:
       - zlib1g-dev
 rust:
   - stable
-  - beta
 
 before_script:
   - rustup component add rustfmt
