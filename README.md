@@ -222,8 +222,8 @@ Also, in the use case of web-traffic analytics, the questions you would to be an
 * More supported functions
 * time_bucket with arbitrary interval (begin from epoch)
 * Window Function
-* Implementing approximate_percentile_disc with t-digest algorithm when the input is large.
 * Streaming mode to work with `tail -f`
 * Customizable Reader, to follow GoAccess's style
 * More supported log format
 * Plugin quickjs for user-defined functions
+* Implement APPROX_COUNT_DISTINCT with Hyperloglog
