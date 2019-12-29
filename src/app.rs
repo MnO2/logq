@@ -261,10 +261,20 @@ mod tests {
         );
         assert_eq!(result, Ok(()));
 
-        let result = run(r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#, data_source.clone(), false, OutputMode::Csv);
+        let result = run(
+            r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#,
+            data_source.clone(),
+            false,
+            OutputMode::Csv,
+        );
         assert_eq!(result, Ok(()));
 
-        let result = run(r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#, data_source.clone(), false, OutputMode::Csv);
+        let result = run(
+            r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#,
+            data_source.clone(),
+            false,
+            OutputMode::Csv,
+        );
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
