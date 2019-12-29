@@ -353,6 +353,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         named_list.push(named);
                     }
                     types::Aggregate::ApproxCountDistinct(named) => {
+                        if let types::Named::Star = named {
+                            return Err(ParseError::InvalidArguments("approx_count_distinct".to_string()));
+                        }
                         named_list.push(named);
                     }
                     types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(

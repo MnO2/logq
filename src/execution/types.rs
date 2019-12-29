@@ -5,6 +5,7 @@ use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use chrono::Timelike;
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
+use pdatastructs::hyperloglog::HyperLogLog;
 use std::collections::VecDeque;
 use std::io;
 use std::result;
@@ -1262,10 +1263,19 @@ impl LastAggregate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ApproxCountDistinctAggregate {
-    pub(crate) counts: HashMap<Option<Tuple>, i64>,
+    pub(crate) counts: HashMap<Option<Tuple>, HyperLogLog<Value>>,
 }
+
+impl PartialEq for ApproxCountDistinctAggregate {
+    fn eq(&self, _other: &Self) -> bool {
+        //Ignoring the detail since we only use Eq for unit test
+        true
+    }
+}
+
+impl Eq for ApproxCountDistinctAggregate {}
 
 impl ApproxCountDistinctAggregate {
     pub(crate) fn new() -> Self {
@@ -1273,39 +1283,24 @@ impl ApproxCountDistinctAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        //TODO: change from count() implementation to Hyperloglog
         if let Value::Null = value {
             //Null value doesn't contribute to the total count
             return Ok(());
         };
 
-        if let Some(&count) = self.counts.get(&key) {
-            let new_count = count + 1;
-            self.counts.insert(key.clone(), new_count);
+        if let Some(hll) = self.counts.get_mut(&key) {
+            hll.add(&value);
             Ok(())
         } else {
-            self.counts.insert(key.clone(), 1);
-
-            Ok(())
-        }
-    }
-
-    pub(crate) fn add_row(&mut self, key: Option<Tuple>) -> AggregateResult<()> {
-        //TODO: change from count() implementation to Hyperloglog
-        if let Some(&count) = self.counts.get(&key) {
-            let new_count = count + 1;
-            self.counts.insert(key.clone(), new_count);
-            Ok(())
-        } else {
-            self.counts.insert(key.clone(), 1);
+            self.counts.insert(key.clone(), HyperLogLog::new(8));
 
             Ok(())
         }
     }
 
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
-        if let Some(&counts) = self.counts.get(key) {
-            Ok(Value::Int(counts as i32))
+        if let Some(hll) = self.counts.get(key) {
+            Ok(Value::Int(hll.count() as i32))
         } else {
             Err(AggregateError::KeyNotFound)
         }

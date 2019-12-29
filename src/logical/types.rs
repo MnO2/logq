@@ -426,8 +426,9 @@ impl Aggregate {
                     Named::Star => execution::Named::Star,
                 };
 
-                let count_aggregate = execution::CountAggregate::new();
-                let aggregate = execution::Aggregate::Count(count_aggregate, physical_named);
+                let approx_count_distinct_aggregate = execution::ApproxCountDistinctAggregate::new();
+                let aggregate =
+                    execution::Aggregate::ApproxCountDistinct(approx_count_distinct_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
             Aggregate::PercentileDisc(percentile, column_name, ordering) => {

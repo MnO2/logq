@@ -5,6 +5,7 @@ extern crate nom;
 extern crate prettytable;
 #[macro_use]
 extern crate lazy_static;
+extern crate pdatastructs;
 
 mod app;
 mod common;
