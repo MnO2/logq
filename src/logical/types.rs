@@ -291,6 +291,7 @@ pub(crate) enum Aggregate {
     Max(Named),
     Min(Named),
     Sum(Named),
+    ApproxCountDistinct(Named),
     PercentileDisc(OrderedFloat<f32>, VariableName, Ordering),
     ApproxPercentile(OrderedFloat<f32>, VariableName, Ordering),
 }
@@ -411,6 +412,22 @@ impl Aggregate {
 
                 let max_aggregate = execution::MaxAggregate::new();
                 let aggregate = execution::Aggregate::Max(max_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
+            Aggregate::ApproxCountDistinct(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(variables, expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => execution::Named::Star,
+                };
+
+                let count_aggregate = execution::CountAggregate::new();
+                let aggregate = execution::Aggregate::Count(count_aggregate, physical_named);
                 Ok((aggregate, variables))
             }
             Aggregate::PercentileDisc(percentile, column_name, ordering) => {

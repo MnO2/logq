@@ -350,6 +350,17 @@ impl RecordStream for GroupByStream {
                                 }
                             };
                         }
+                        Aggregate::ApproxCountDistinct(ref mut inner, named) => {
+                            match named {
+                                Named::Expression(expr, _) => {
+                                    let val = expr.expression_value(variables.clone())?;
+                                    inner.add_record(key.clone(), val)?;
+                                }
+                                Named::Star => {
+                                    inner.add_row(key.clone())?;
+                                }
+                            };
+                        }
                         Aggregate::PercentileDisc(ref mut inner, column_name) => {
                             let val = variables.get(column_name).unwrap();
                             inner.add_record(key.clone(), val.clone())?;

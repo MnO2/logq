@@ -207,6 +207,7 @@ fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
         "max" => Ok(types::Aggregate::Max(named)),
         "min" => Ok(types::Aggregate::Min(named)),
         "sum" => Ok(types::Aggregate::Sum(named)),
+        "approx_count_distinct" => Ok(types::Aggregate::ApproxCountDistinct(named)),
         _ => Err(ParseError::NotAggregateFunction),
     }
 }
@@ -349,6 +350,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         if let types::Named::Star = named {
                             return Err(ParseError::InvalidArguments("min".to_string()));
                         }
+                        named_list.push(named);
+                    }
+                    types::Aggregate::ApproxCountDistinct(named) => {
                         named_list.push(named);
                     }
                     types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(

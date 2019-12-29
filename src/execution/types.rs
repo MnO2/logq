@@ -788,6 +788,7 @@ pub(crate) enum Aggregate {
     Max(MaxAggregate, Named),
     Min(MinAggregate, Named),
     Sum(SumAggregate, Named),
+    ApproxCountDistinct(ApproxCountDistinctAggregate, Named),
     PercentileDisc(PercentileDiscAggregate, String),
     ApproxPercentile(ApproxPercentileAggregate, String),
 }
@@ -803,6 +804,7 @@ impl Aggregate {
             Aggregate::Sum(agg, _) => agg.add_record(key, value),
             Aggregate::Max(agg, _) => agg.add_record(key, value),
             Aggregate::Min(agg, _) => agg.add_record(key, value),
+            Aggregate::ApproxCountDistinct(agg, _) => agg.add_record(key, value),
             Aggregate::PercentileDisc(agg, _) => agg.add_record(key, value),
             Aggregate::ApproxPercentile(agg, _) => agg.add_record(key, value),
         }
@@ -816,6 +818,7 @@ impl Aggregate {
             Aggregate::Sum(agg, _) => agg.get_aggregated(key),
             Aggregate::Max(agg, _) => agg.get_aggregated(key),
             Aggregate::Min(agg, _) => agg.get_aggregated(key),
+            Aggregate::ApproxCountDistinct(agg, _) => agg.get_aggregated(key),
             Aggregate::PercentileDisc(agg, _) => agg.get_aggregated(key),
             Aggregate::ApproxPercentile(agg, _) => agg.get_aggregated(key),
         }
@@ -1253,6 +1256,56 @@ impl LastAggregate {
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(last) = self.lasts.get(key) {
             Ok(last.clone())
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ApproxCountDistinctAggregate {
+    pub(crate) counts: HashMap<Option<Tuple>, i64>,
+}
+
+impl ApproxCountDistinctAggregate {
+    pub(crate) fn new() -> Self {
+        ApproxCountDistinctAggregate { counts: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+        //TODO: change from count() implementation to Hyperloglog
+        if let Value::Null = value {
+            //Null value doesn't contribute to the total count
+            return Ok(());
+        };
+
+        if let Some(&count) = self.counts.get(&key) {
+            let new_count = count + 1;
+            self.counts.insert(key.clone(), new_count);
+            Ok(())
+        } else {
+            self.counts.insert(key.clone(), 1);
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn add_row(&mut self, key: Option<Tuple>) -> AggregateResult<()> {
+        //TODO: change from count() implementation to Hyperloglog
+        if let Some(&count) = self.counts.get(&key) {
+            let new_count = count + 1;
+            self.counts.insert(key.clone(), new_count);
+            Ok(())
+        } else {
+            self.counts.insert(key.clone(), 1);
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
+        if let Some(&counts) = self.counts.get(key) {
+            Ok(Value::Int(counts as i32))
         } else {
             Err(AggregateError::KeyNotFound)
         }
