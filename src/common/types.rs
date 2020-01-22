@@ -113,7 +113,7 @@ impl fmt::Display for HttpRequest {
 }
 
 pub(crate) fn parse_http_method(s: &str) -> ParseHttpRequestResult<HttpMethod> {
-    if s == "GET" || s == "POST" || s == "DELETE" || s == "HEAD" {
+    if s == "GET" || s == "POST" || s == "DELETE" || s == "HEAD" || s == "PUT" || s == "PATCH" {
         Ok(s.to_string())
     } else {
         Err(ParseHttpRequestError::ParseHttpMethod)
