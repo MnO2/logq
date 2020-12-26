@@ -138,7 +138,7 @@ impl RecordStream for MapStream {
                         };
 
                         field_names.push(name);
-                        let v = expr.expression_value(variables.clone())?;
+                        let v = expr.expression_value(&variables)?;
                         data.push(v);
                     }
                     Named::Star => {
@@ -211,7 +211,7 @@ impl RecordStream for FilterStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         while let Some(record) = self.source.next()? {
             let variables = common::types::merge(self.variables.clone(), record.to_variables());
-            let predicate = self.formula.evaluate(variables)?;
+            let predicate = self.formula.evaluate(&variables)?;
 
             if predicate {
                 return Ok(Some(record));
@@ -290,7 +290,7 @@ impl RecordStream for GroupByStream {
                     match &mut named_agg.aggregate {
                         Aggregate::Avg(ref mut inner, named) => {
                             let val = match named {
-                                Named::Expression(expr, _) => expr.expression_value(variables.clone())?,
+                                Named::Expression(expr, _) => expr.expression_value(&variables)?,
                                 Named::Star => {
                                     unreachable!();
                                 }
@@ -301,7 +301,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Count(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
@@ -312,7 +312,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::First(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
@@ -323,7 +323,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Last(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
@@ -334,7 +334,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Max(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
@@ -345,7 +345,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Min(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
@@ -356,7 +356,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Sum(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {
@@ -367,7 +367,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::ApproxCountDistinct(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(variables.clone())?;
+                                    let val = expr.expression_value(&variables)?;
                                     inner.add_record(key.clone(), val)?;
                                 }
                                 Named::Star => {

@@ -159,7 +159,7 @@ pub(crate) enum Expression {
 }
 
 impl Expression {
-    pub(crate) fn expression_value(&self, variables: Variables) -> ExpressionResult<Value> {
+    pub(crate) fn expression_value(&self, variables: &Variables) -> ExpressionResult<Value> {
         match self {
             Expression::Logic(formula) => {
                 let out = formula.evaluate(variables)?;
@@ -177,7 +177,7 @@ impl Expression {
                 for arg in arguments.iter() {
                     match arg {
                         Named::Expression(expr, _) => {
-                            let value = expr.expression_value(variables.clone())?;
+                            let value = expr.expression_value(&variables)?;
                             values.push(value);
                         }
                         Named::Star => {
@@ -528,9 +528,9 @@ pub(crate) enum Relation {
 }
 
 impl Relation {
-    pub(crate) fn apply(&self, variables: Variables, left: &Expression, right: &Expression) -> ExpressionResult<bool> {
-        let left_result = left.expression_value(variables.clone())?;
-        let right_result = right.expression_value(variables.clone())?;
+    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression) -> ExpressionResult<bool> {
+        let left_result = left.expression_value(variables)?;
+        let right_result = right.expression_value(variables)?;
 
         match self {
             Relation::Equal => Ok(left_result == right_result),
@@ -575,20 +575,20 @@ pub(crate) enum Formula {
 }
 
 impl Formula {
-    pub(crate) fn evaluate(&self, variables: Variables) -> EvaluateResult<bool> {
+    pub(crate) fn evaluate(&self, variables: &Variables) -> EvaluateResult<bool> {
         match self {
             Formula::And(left_formula, right_formula) => {
-                let left = left_formula.evaluate(variables.clone())?;
-                let right = right_formula.evaluate(variables.clone())?;
+                let left = left_formula.evaluate(variables)?;
+                let right = right_formula.evaluate(variables)?;
                 Ok(left && right)
             }
             Formula::Or(left_formula, right_formula) => {
-                let left = left_formula.evaluate(variables.clone())?;
-                let right = right_formula.evaluate(variables.clone())?;
+                let left = left_formula.evaluate(variables)?;
+                let right = right_formula.evaluate(variables)?;
                 Ok(left || right)
             }
             Formula::Not(child_formula) => {
-                let child = child_formula.evaluate(variables.clone())?;
+                let child = child_formula.evaluate(variables)?;
                 Ok(!child)
             }
             Formula::Predicate(relation, left_formula, right_formula) => {
