@@ -5,24 +5,38 @@ use crate::common::types::{Tuple, Value, VariableName, Variables};
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
+use hashbrown::HashMap;
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
+    name2idx: HashMap<VariableName, usize>,
     field_names: Vec<VariableName>,
     data: Vec<Value>,
 }
 
 impl Record {
     pub(crate) fn new(field_names: Vec<VariableName>, data: Vec<Value>) -> Self {
-        Record { field_names, data }
+        let mut name2idx = HashMap::default();
+        for i in 0..field_names.len() {
+            name2idx.insert(field_names[i].clone(), i);
+        }
+
+        Record { name2idx, field_names, data }
     }
 
-    pub(crate) fn get(&self, field_names: &[VariableName]) -> Vec<Value> {
-        let variables = self.to_variables();
+    pub(crate) fn get(&self, field_name: &VariableName) -> Option<Value> {
+        if let Some(&idx) = self.name2idx.get(field_name) {
+            return Some(self.data[idx].clone());
+        }
 
-        let mut ret = Vec::new();
+        None
+    }
+
+    pub(crate) fn get_many(&self, field_names: &[VariableName]) -> Vec<Value> {
+        let mut ret = Vec::with_capacity(field_names.len());
         for name in field_names.iter() {
-            if let Some(var) = variables.get(name) {
-                ret.push(var.clone());
+            if let Some(&idx) = self.name2idx.get(name) {
+                ret.push(self.data[idx].clone());
             }
         }
 
@@ -268,7 +282,7 @@ impl RecordStream for GroupByStream {
                 let key = if self.keys.is_empty() {
                     None
                 } else {
-                    Some(record.get(&self.keys))
+                    Some(record.get_many(&self.keys))
                 };
 
                 groups.insert(key.clone());

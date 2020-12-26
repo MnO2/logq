@@ -662,55 +662,52 @@ impl Node {
                 }
 
                 records.sort_by(|a, b| {
-                    let a_variables = a.to_variables();
-                    let b_varialbes = b.to_variables();
-
                     for idx in 0..column_names.len() {
                         let column_name = &column_names[idx];
                         let curr_ordering = &orderings[idx];
 
-                        let a_value = a_variables.get(column_name).unwrap();
-                        let b_value = b_varialbes.get(column_name).unwrap();
+                        let a_value = a.get(column_name).unwrap();
+                        let b_value = b.get(column_name).unwrap();
 
                         match (a_value, b_value) {
                             (Value::Int(i1), Value::Int(i2)) => match curr_ordering {
                                 Ordering::Asc => {
-                                    return i1.cmp(i2);
+                                    return i1.cmp(&i2);
                                 }
                                 Ordering::Desc => {
-                                    return i2.cmp(i1);
+                                    return i2.cmp(&i1);
                                 }
                             },
                             (Value::Boolean(b1), Value::Boolean(b2)) => match curr_ordering {
                                 Ordering::Asc => {
-                                    return b1.cmp(b2);
+                                    return b1.cmp(&b2);
                                 }
                                 Ordering::Desc => {
-                                    return b2.cmp(b1);
+                                    return b2.cmp(&b1);
                                 }
                             },
                             (Value::Float(f1), Value::Float(f2)) => match curr_ordering {
                                 Ordering::Asc => {
-                                    return f1.cmp(f2);
+                                    return f1.cmp(&f2);
                                 }
                                 Ordering::Desc => {
-                                    return f2.cmp(f1);
+                                    return f2.cmp(&f1);
                                 }
                             },
                             (Value::String(s1), Value::String(s2)) => match curr_ordering {
                                 Ordering::Asc => {
-                                    return s1.cmp(s2);
+                                    return s1.cmp(&s2);
                                 }
                                 Ordering::Desc => {
-                                    return s2.cmp(s1);
+                                    return s2.cmp(&s1);
                                 }
                             },
                             (Value::DateTime(dt1), Value::DateTime(dt2)) => match curr_ordering {
                                 Ordering::Asc => {
-                                    return dt1.cmp(dt2);
+                                    return dt1.cmp(&dt2);
                                 }
                                 Ordering::Desc => {
-                                    return dt2.cmp(dt1);
+                                    return dt2.cmp(&dt1);
                                 }
                             },
                             (Value::Null, Value::Null) => {
