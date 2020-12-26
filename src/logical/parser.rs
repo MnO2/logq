@@ -462,20 +462,20 @@ fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[ty
             types::Named::Star => {
                 if table_name == "elb" {
                     for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
-                        b.push(field_name);
+                        b.push(field_name.clone());
                     }
                 } else if table_name == "alb" {
                     for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().into_iter()
                     {
-                        b.push(field_name);
+                        b.push(field_name.clone());
                     }
                 } else if table_name == "squid" {
                     for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
-                        b.push(field_name);
+                        b.push(field_name.clone());
                     }
                 } else if table_name == "s3" {
                     for field_name in execution::datasource::S3Field::field_names().into_iter() {
-                        b.push(field_name);
+                        b.push(field_name.clone());
                     }
                 } else {
                     unreachable!();

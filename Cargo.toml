@@ -30,6 +30,7 @@ lazy_static = "1.3.0"
 json = "0.11.15"
 tdigest = "0.2"
 pdatastructs = "0.6.0"
+linked-hash-map = "0.5.3"
 
 [dev-dependencies]
 criterion = "0.2"

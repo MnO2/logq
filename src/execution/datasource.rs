@@ -325,8 +325,8 @@ impl ClassicLoadBalancerLogField {
         17
     }
 
-    pub(crate) fn field_names() -> Vec<String> {
-        AWS_ELB_FIELD_NAMES.clone()
+    pub(crate) fn field_names<'a>() -> &'a Vec<String> {
+        &AWS_ELB_FIELD_NAMES
     }
 
     pub(crate) fn datatypes() -> Vec<DataType> {
@@ -338,7 +338,7 @@ impl ClassicLoadBalancerLogField {
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
-        let fields = Self::field_names();
+        let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
     }
@@ -413,8 +413,8 @@ impl ApplicationLoadBalancerLogField {
         25
     }
 
-    pub(crate) fn field_names() -> Vec<String> {
-        AWS_ALB_FIELD_NAMES.clone()
+    pub(crate) fn field_names<'a>() -> &'a Vec<String> {
+        &AWS_ALB_FIELD_NAMES
     }
 
     pub(crate) fn datatypes() -> Vec<DataType> {
@@ -426,7 +426,7 @@ impl ApplicationLoadBalancerLogField {
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
-        let fields = Self::field_names();
+        let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
     }
@@ -499,8 +499,8 @@ impl S3Field {
         24
     }
 
-    pub(crate) fn field_names() -> Vec<String> {
-        AWS_S3_FIELD_NAMES.clone()
+    pub(crate) fn field_names<'a>() -> &'a Vec<String> {
+        &AWS_S3_FIELD_NAMES
     }
 
     pub(crate) fn datatypes() -> Vec<DataType> {
@@ -512,7 +512,7 @@ impl S3Field {
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
-        let fields = Self::field_names();
+        let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
     }
@@ -557,8 +557,8 @@ impl SquidLogField {
         10
     }
 
-    pub(crate) fn field_names() -> Vec<String> {
-        SQUID_FIELD_NAMES.clone()
+    pub(crate) fn field_names<'a>() -> &'a Vec<String> {
+        &SQUID_FIELD_NAMES
     }
 
     pub(crate) fn datatypes() -> Vec<DataType> {
@@ -570,7 +570,7 @@ impl SquidLogField {
     }
 
     pub(crate) fn schema() -> Vec<(String, DataType)> {
-        let fields = Self::field_names();
+        let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
     }

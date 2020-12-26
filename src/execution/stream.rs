@@ -5,28 +5,26 @@ use crate::common::types::{Tuple, Value, VariableName, Variables};
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
-use hashbrown::HashMap;
+use linked_hash_map::LinkedHashMap;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
-    name2idx: HashMap<VariableName, usize>,
-    field_names: Vec<VariableName>,
-    data: Vec<Value>,
+    variables: LinkedHashMap<VariableName, Value>
 }
 
 impl Record {
-    pub(crate) fn new(field_names: Vec<VariableName>, data: Vec<Value>) -> Self {
-        let mut name2idx = HashMap::default();
-        for i in 0..field_names.len() {
-            name2idx.insert(field_names[i].clone(), i);
+    pub(crate) fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
+        let mut variables = LinkedHashMap::default();
+        for (i, v) in data.into_iter().enumerate() {
+            variables.insert(field_names[i].clone(), v);
         }
 
-        Record { name2idx, field_names, data }
+        Record { variables }
     }
 
     pub(crate) fn get(&self, field_name: &VariableName) -> Option<Value> {
-        if let Some(&idx) = self.name2idx.get(field_name) {
-            return Some(self.data[idx].clone());
+        if let Some(v) = self.variables.get(field_name) {
+            return Some(v.clone());
         }
 
         None
@@ -34,37 +32,25 @@ impl Record {
 
     pub(crate) fn get_many(&self, field_names: &[VariableName]) -> Vec<Value> {
         let mut ret = Vec::with_capacity(field_names.len());
-        for name in field_names.iter() {
-            if let Some(&idx) = self.name2idx.get(name) {
-                ret.push(self.data[idx].clone());
+        for name in field_names {
+            if let Some(v) = self.variables.get(name) {
+                ret.push(v.clone());
             }
         }
-
         ret
     }
 
     pub(crate) fn to_variables(&self) -> Variables {
-        let mut variables = Variables::default();
-
-        for i in 0..self.field_names.len() {
-            variables.insert(self.field_names[i].clone(), self.data[i].clone());
-        }
-
-        variables
+        self.variables.clone()
     }
 
     pub(crate) fn to_tuples(&self) -> Vec<(VariableName, Value)> {
-        let mut res = Vec::new();
-        for i in 0..self.field_names.len() {
-            res.push((self.field_names[i].clone(), self.data[i].clone()));
-        }
-
-        res
+        self.variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
     pub(crate) fn to_row(&self) -> Vec<Cell> {
-        self.data
-            .iter()
+        self.variables
+            .values()
             .map(|val| match val {
                 Value::String(s) => Cell::new(&*s),
                 Value::Int(i) => Cell::new(&*i.to_string()),
@@ -79,8 +65,8 @@ impl Record {
     }
 
     pub(crate) fn to_csv_record(&self) -> Vec<String> {
-        self.data
-            .iter()
+        self.variables
+            .values()
             .map(|val| match val {
                 Value::String(s) => s.to_string(),
                 Value::Int(i) => i.to_string(),
@@ -125,8 +111,9 @@ impl RecordStream for MapStream {
         if let Some(record) = self.source.next()? {
             let variables = common::types::merge(self.variables.clone(), record.to_variables());
 
-            let mut field_names = Vec::new();
-            let mut data = Vec::new();
+            let capacity = self.named_list.len();
+            let mut field_names = Vec::with_capacity(capacity);
+            let mut data = Vec::with_capacity(capacity);
             for (idx, named) in self.named_list.iter().enumerate() {
                 match named {
                     Named::Expression(expr, name_opt) => {
@@ -150,7 +137,7 @@ impl RecordStream for MapStream {
                 }
             }
 
-            let record = Record::new(field_names, data);
+            let record = Record::new(&field_names, data);
             Ok(Some(record))
         } else {
             Ok(None)
@@ -416,7 +403,7 @@ impl RecordStream for GroupByStream {
                 values.push(v);
             }
 
-            let record = Record::new(fields, values);
+            let record = Record::new(&fields, values);
             Ok(Some(record))
         } else {
             Ok(None)
@@ -459,15 +446,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -480,7 +467,7 @@ mod tests {
         }
 
         let expected = vec![Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8000)],
         )];
 
@@ -499,15 +486,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -520,7 +507,7 @@ mod tests {
         }
 
         let expected = vec![Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string()), Value::Int(8001)],
         )];
 
@@ -536,15 +523,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -558,15 +545,15 @@ mod tests {
 
         let expected = vec![
             Record::new(
-                vec!["host".to_string(), "port".to_string()],
+                &vec!["host".to_string(), "port".to_string()],
                 vec![Value::String("example01.com".to_string()), Value::Int(8000)],
             ),
             Record::new(
-                vec!["host".to_string(), "port".to_string()],
+                &vec!["host".to_string(), "port".to_string()],
                 vec![Value::String("example.com".to_string()), Value::Int(8001)],
             ),
             Record::new(
-                vec!["host".to_string(), "port".to_string()],
+                &vec!["host".to_string(), "port".to_string()],
                 vec![Value::String("example01.com".to_string()), Value::Int(8002)],
             ),
         ];
@@ -586,15 +573,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            vec!["host".to_string(), "port".to_string()],
+            &vec!["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -607,9 +594,9 @@ mod tests {
         }
 
         let expected = vec![
-            Record::new(vec!["port".to_string()], vec![Value::Int(8000)]),
-            Record::new(vec!["port".to_string()], vec![Value::Int(8001)]),
-            Record::new(vec!["port".to_string()], vec![Value::Int(8002)]),
+            Record::new(&vec!["port".to_string()], vec![Value::Int(8000)]),
+            Record::new(&vec!["port".to_string()], vec![Value::Int(8001)]),
+            Record::new(&vec!["port".to_string()], vec![Value::Int(8002)]),
         ];
 
         assert_eq!(expected, result);

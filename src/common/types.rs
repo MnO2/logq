@@ -1,12 +1,12 @@
 use crate::common;
 use chrono;
-use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use std::fmt;
 use std::path::PathBuf;
 use std::result;
 use url;
+use linked_hash_map::LinkedHashMap;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {
@@ -289,7 +289,7 @@ pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterv
 
 pub(crate) type Tuple = Vec<Value>;
 pub(crate) type VariableName = String;
-pub(crate) type Variables = HashMap<VariableName, Value>;
+pub(crate) type Variables = LinkedHashMap<VariableName, Value>;
 
 pub(crate) fn empty_variables() -> Variables {
     Variables::default()
