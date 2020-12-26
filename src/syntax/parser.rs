@@ -8,7 +8,7 @@ use nom::{
     character::complete::{char, digit1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
-    multi::separated_list,
+    multi::separated_list0,
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult, InputTakeAtPosition,
@@ -216,7 +216,7 @@ fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, 
 fn select_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::SelectExpression>, VerboseError<&'a str>> {
     context(
         "select_expression_list",
-        terminated(separated_list(preceded(space0, char(',')), select_expression), space0),
+        terminated(separated_list0(preceded(space0, char(',')), select_expression), space0),
     )(i)
 }
 
@@ -229,7 +229,7 @@ fn column_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::ColumnNam
         "column_expression_list",
         map(
             terminated(
-                separated_list(preceded(space0, char(',')), preceded(space0, column_name)),
+                separated_list0(preceded(space0, char(',')), preceded(space0, column_name)),
                 space0,
             ),
             |v| v.into_iter().map(|s| s.to_string()).collect(),
@@ -266,7 +266,7 @@ fn order_by_clause<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, V
     map(
         preceded(
             tuple((tag("order"), space1, tag("by"), space1)),
-            terminated(separated_list(preceded(space0, char(',')), ordering_term), space0),
+            terminated(separated_list0(preceded(space0, char(',')), ordering_term), space0),
         ),
         ast::OrderByExpression::new,
     )(i)
