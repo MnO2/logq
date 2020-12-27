@@ -1,12 +1,12 @@
 use crate::common;
 use chrono;
+use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use std::fmt;
 use std::path::PathBuf;
 use std::result;
 use url;
-use linked_hash_map::LinkedHashMap;
 
 lazy_static! {
     //FIXME: use different type for string hostname and Ipv4
@@ -14,7 +14,6 @@ lazy_static! {
     static ref SPLIT_HTTP_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
     static ref SPLIT_TIME_INTERVAL_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
 }
-
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {

@@ -2,14 +2,14 @@ use super::datasource::RecordRead;
 use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
+use linked_hash_map::LinkedHashMap;
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
-use linked_hash_map::LinkedHashMap;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
-    variables: LinkedHashMap<VariableName, Value>
+    variables: LinkedHashMap<VariableName, Value>,
 }
 
 impl Record {

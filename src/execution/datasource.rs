@@ -14,9 +14,9 @@ use std::result;
 use std::str::FromStr;
 
 lazy_static! {
-    static ref SPLIT_READER_LINE_REGEX: Regex = Regex::new(r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#).unwrap();
+    static ref SPLIT_READER_LINE_REGEX: Regex =
+        Regex::new(r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#).unwrap();
 }
-
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(crate) enum DataType {
