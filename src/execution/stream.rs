@@ -40,8 +40,8 @@ impl Record {
         ret
     }
 
-    pub(crate) fn to_variables(&self) -> Variables {
-        self.variables.clone()
+    pub(crate) fn to_variables<'a>(&'a self) -> &'a Variables {
+        &self.variables as &Variables
     }
 
     pub(crate) fn to_tuples(&self) -> Vec<(VariableName, Value)> {
@@ -109,7 +109,7 @@ impl RecordStream for MapStream {
 
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if let Some(record) = self.source.next()? {
-            let variables = common::types::merge(self.variables.clone(), record.to_variables());
+            let variables = common::types::merge(&self.variables, record.to_variables());
 
             let capacity = self.named_list.len();
             let mut field_names = Vec::with_capacity(capacity);
@@ -197,7 +197,7 @@ impl FilterStream {
 impl RecordStream for FilterStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         while let Some(record) = self.source.next()? {
-            let variables = common::types::merge(self.variables.clone(), record.to_variables());
+            let variables = common::types::merge(&self.variables, record.to_variables());
             let predicate = self.formula.evaluate(&variables)?;
 
             if predicate {
@@ -265,7 +265,7 @@ impl RecordStream for GroupByStream {
         if self.group_iterator.is_none() {
             let mut groups: hash_set::HashSet<Option<Tuple>> = hash_set::HashSet::new();
             while let Some(record) = self.source.next()? {
-                let variables = common::types::merge(self.variables.clone(), record.to_variables());
+                let variables = common::types::merge(&self.variables, record.to_variables());
                 let key = if self.keys.is_empty() {
                     None
                 } else {

@@ -295,8 +295,8 @@ pub(crate) fn empty_variables() -> Variables {
     Variables::default()
 }
 
-pub(crate) fn merge(left: Variables, right: Variables) -> Variables {
-    left.into_iter().chain(right).collect()
+pub(crate) fn merge(left: &Variables, right: &Variables) -> Variables {
+    left.iter().chain(right).map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

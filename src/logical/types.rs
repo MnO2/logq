@@ -39,7 +39,7 @@ impl Node {
                 let (physical_formula, formula_variables) = formula.physical(physical_plan_creator)?;
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
 
-                let return_variables = common::merge(formula_variables, child_variables);
+                let return_variables = common::merge(&formula_variables, &child_variables);
                 let filter = execution::Node::Filter(child, physical_formula);
                 Ok((Box::new(filter), return_variables))
             }
@@ -50,11 +50,11 @@ impl Node {
                 for expression in expressions.iter() {
                     let (physical_expression, expression_variables) = expression.physical(physical_plan_creator)?;
                     physical_expressions.push(*physical_expression);
-                    total_expression_variables = common::merge(total_expression_variables, expression_variables);
+                    total_expression_variables = common::merge(&total_expression_variables, &expression_variables);
                 }
 
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
-                let return_variables = common::merge(total_expression_variables, child_variables);
+                let return_variables = common::merge(&total_expression_variables, &child_variables);
 
                 let node = execution::Node::Map(physical_expressions, child);
 
@@ -66,11 +66,11 @@ impl Node {
                 let mut physical_aggregates = Vec::new();
                 for named_aggregate in named_aggergates.iter() {
                     let (physical_aggregate, aggregate_variables) = named_aggregate.physical(physical_plan_creator)?;
-                    variables = common::merge(variables, aggregate_variables);
+                    variables = common::merge(&variables, &aggregate_variables);
                     physical_aggregates.push(physical_aggregate);
                 }
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
-                let return_variables = common::merge(variables, child_variables);
+                let return_variables = common::merge(&variables, &child_variables);
 
                 let node = execution::Node::GroupBy(fields.clone(), physical_aggregates, child);
 
@@ -79,14 +79,14 @@ impl Node {
             Node::Limit(row_count, source) => {
                 let variables = common::empty_variables();
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
-                let return_variables = common::merge(variables, child_variables);
+                let return_variables = common::merge(&variables, &child_variables);
                 let node = execution::Node::Limit(*row_count, child);
                 Ok((Box::new(node), return_variables))
             }
             Node::OrderBy(column_names, orderings, source) => {
                 let variables = common::empty_variables();
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
-                let return_variables = common::merge(variables, child_variables);
+                let return_variables = common::merge(&variables, &child_variables);
 
                 let mut physical_orderings = Vec::new();
                 for ordering in orderings.iter() {
@@ -164,7 +164,7 @@ impl Expression {
                 for arg in arguments.iter() {
                     let (physical_arg, physical_variables) = arg.physical(physical_plan_creator)?;
                     physical_args.push(*physical_arg);
-                    variables = common::merge(variables, physical_variables);
+                    variables = common::merge(&variables, &physical_variables);
                 }
 
                 Ok((
@@ -204,7 +204,7 @@ impl Formula {
             Formula::InfixOperator(op, left_formula, right_formula) => {
                 let (left, left_variables) = left_formula.physical(physical_plan_creator)?;
                 let (right, right_variables) = right_formula.physical(physical_plan_creator)?;
-                let return_variables = common::merge(left_variables, right_variables);
+                let return_variables = common::merge(&left_variables, &right_variables);
 
                 match op {
                     LogicInfixOp::And => Ok((Box::new(execution::Formula::And(left, right)), return_variables)),
@@ -228,7 +228,7 @@ impl Formula {
                 let (right, right_variables) = right_expr.physical(physical_plan_creator)?;
                 let physical_relation = relation.physical()?;
 
-                let return_variables = common::merge(left_variables, right_variables);
+                let return_variables = common::merge(&left_variables, &right_variables);
                 Ok((
                     Box::new(execution::Formula::Predicate(physical_relation, left, right)),
                     return_variables,
@@ -308,7 +308,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -324,7 +324,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -340,7 +340,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -356,7 +356,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -372,7 +372,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -388,7 +388,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -404,7 +404,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
@@ -420,7 +420,7 @@ impl Aggregate {
                 let physical_named = match named {
                     Named::Expression(expr, name) => {
                         let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
-                        variables = common::merge(variables, expr_variables);
+                        variables = common::merge(&variables, &expr_variables);
                         execution::Named::Expression(*physical_expr, name.clone())
                     }
                     Named::Star => execution::Named::Star,
