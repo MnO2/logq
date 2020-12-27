@@ -16,25 +16,25 @@ travis-ci = { repository = "MnO2/logq" }
 codecov = { repository = "MnO2/logq" }
 
 [dependencies]
-clap = {version = "2.33.0", features = ["yaml"]}
-regex = "1.1.7"
-failure = "0.1.5"
+clap = {version = "2.33", features = ["yaml"]}
+regex = "1.4"
+failure = "0.1"
 hashbrown = "0.5"
-ordered-float = "1.0"
+ordered-float = "2.0"
 nom = "6.0.1"
 prettytable-rs = "^0.8"
 chrono = "0.4"
-url = "2.1.0"
+url = "2.2.0"
 csv = "1.1"
-lazy_static = "1.3.0"
-json = "0.11.15"
+lazy_static = "1.4.0"
+json = "0.12"
 tdigest = "0.2"
 pdatastructs = "0.6.0"
 linked-hash-map = "0.5.3"
 
 [dev-dependencies]
-criterion = "0.2"
-rand = "0.7"
+criterion = "0.3"
+rand = "0.8"
 tempfile = "3.1.0"
 
 [[bench]]
