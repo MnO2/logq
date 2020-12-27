@@ -283,13 +283,13 @@ impl RecordStream for GroupByStream {
                                 }
                             };
 
-                            inner.add_record(key.clone(), val)?;
+                            inner.add_record(&key, &val)?;
                         }
                         Aggregate::Count(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     inner.add_row(key.clone())?;
@@ -300,7 +300,7 @@ impl RecordStream for GroupByStream {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     unreachable!();
@@ -311,7 +311,7 @@ impl RecordStream for GroupByStream {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     unreachable!();
@@ -322,7 +322,7 @@ impl RecordStream for GroupByStream {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     unreachable!();
@@ -333,7 +333,7 @@ impl RecordStream for GroupByStream {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     unreachable!();
@@ -344,7 +344,7 @@ impl RecordStream for GroupByStream {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     unreachable!();
@@ -355,7 +355,7 @@ impl RecordStream for GroupByStream {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr.expression_value(&variables)?;
-                                    inner.add_record(key.clone(), val)?;
+                                    inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
                                     unreachable!();
@@ -364,11 +364,11 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::PercentileDisc(ref mut inner, column_name) => {
                             let val = variables.get(column_name).unwrap();
-                            inner.add_record(key.clone(), val.clone())?;
+                            inner.add_record(&key, val)?;
                         }
                         Aggregate::ApproxPercentile(ref mut inner, column_name) => {
                             let val = variables.get(column_name).unwrap();
-                            inner.add_record(key.clone(), val.clone())?;
+                            inner.add_record(&key, val)?;
                         }
                     }
                 }

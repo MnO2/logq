@@ -793,7 +793,7 @@ pub(crate) enum Aggregate {
 
 impl Aggregate {
     #[allow(dead_code)]
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         match self {
             Aggregate::Avg(agg, _) => agg.add_record(key, value),
             Aggregate::Count(agg, _) => agg.add_record(key, value),
@@ -839,9 +839,9 @@ impl PercentileDiscAggregate {
         }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        let v = self.partitions.entry(key).or_insert(Vec::new());
-        v.push(value);
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
+        let v = self.partitions.entry(key.clone()).or_insert(Vec::new());
+        v.push(value.clone());
 
         Ok(())
     }
@@ -919,9 +919,9 @@ impl ApproxPercentileAggregate {
         }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         let buf = self.buffer.entry(key.clone()).or_insert(Vec::new());
-        buf.push(value);
+        buf.push(value.clone());
 
         if buf.len() < 10000 {
             Ok(())
@@ -947,7 +947,7 @@ impl ApproxPercentileAggregate {
             }
 
             let new_digest = v.merge_unsorted(fvec);
-            self.partitions.insert(key, new_digest);
+            self.partitions.insert(key.clone(), new_digest);
             buf.clear();
 
             Ok(())
@@ -1004,16 +1004,16 @@ impl AvgAggregate {
         }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         let new_value: OrderedFloat<f32> = match value {
-            Value::Int(i) => OrderedFloat::from(i as f32),
-            Value::Float(f) => f,
+            &Value::Int(i) => OrderedFloat::from(i as f32),
+            &Value::Float(f) => f,
             _ => {
                 return Err(AggregateError::InvalidType);
             }
         };
 
-        if let (Some(&average), Some(&count)) = (self.averages.get(&key), self.counts.get(&key)) {
+        if let (Some(&average), Some(&count)) = (self.averages.get(key), self.counts.get(key)) {
             let new_count = count + 1;
             let f32_average: f32 = average.into();
             let f32_new_value: f32 = new_value.into();
@@ -1048,16 +1048,16 @@ impl SumAggregate {
         SumAggregate { sums: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         let new_value: OrderedFloat<f32> = match value {
-            Value::Int(i) => OrderedFloat::from(i as f32),
-            Value::Float(f) => f,
+            &Value::Int(i) => OrderedFloat::from(i as f32),
+            &Value::Float(f) => f,
             _ => {
                 return Err(AggregateError::InvalidType);
             }
         };
 
-        if let Some(&average) = self.sums.get(&key) {
+        if let Some(&average) = self.sums.get(key) {
             let f32_average: f32 = average.into();
             let f32_new_value: f32 = new_value.into();
             let new_average: f32 = f32_average + f32_new_value;
@@ -1089,13 +1089,13 @@ impl CountAggregate {
         CountAggregate { counts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        if let Value::Null = value {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
+        if let &Value::Null = value {
             //Null value doesn't contribute to the total count
             return Ok(());
         };
 
-        if let Some(&count) = self.counts.get(&key) {
+        if let Some(&count) = self.counts.get(key) {
             let new_count = count + 1;
             self.counts.insert(key.clone(), new_count);
             Ok(())
@@ -1137,23 +1137,23 @@ impl MaxAggregate {
         MaxAggregate { maxs: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        if let Some(candidate) = self.maxs.get(&key) {
-            let less_than = match (candidate, &value) {
-                (Value::Int(i1), Value::Int(i2)) => *i1 < *i2,
-                (Value::Float(f1), Value::Float(f2)) => *f1 < *f2,
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
+        if let Some(candidate) = self.maxs.get(key) {
+            let less_than = match (candidate, value) {
+                (&Value::Int(i1), &Value::Int(i2)) => i1 < i2,
+                (&Value::Float(f1), &Value::Float(f2)) => f1 < f2,
                 _ => {
                     return Err(AggregateError::InvalidType);
                 }
             };
 
             if less_than {
-                self.maxs.insert(key.clone(), value);
+                self.maxs.insert(key.clone(), value.clone());
             }
 
             Ok(())
         } else {
-            self.maxs.insert(key.clone(), value);
+            self.maxs.insert(key.clone(), value.clone());
             Ok(())
         }
     }
@@ -1177,23 +1177,23 @@ impl MinAggregate {
         MinAggregate { mins: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        if let Some(candidate) = self.mins.get(&key) {
-            let greater_than = match (candidate, &value) {
-                (Value::Int(i1), Value::Int(i2)) => *i1 > *i2,
-                (Value::Float(f1), Value::Float(f2)) => *f1 > *f2,
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
+        if let Some(candidate) = self.mins.get(key) {
+            let greater_than = match (candidate, value) {
+                (&Value::Int(i1), &Value::Int(i2)) => i1 > i2,
+                (&Value::Float(f1), &Value::Float(f2)) => f1 > f2,
                 _ => {
                     return Err(AggregateError::InvalidType);
                 }
             };
 
             if greater_than {
-                self.mins.insert(key.clone(), value);
+                self.mins.insert(key.clone(), value.clone());
             }
 
             Ok(())
         } else {
-            self.mins.insert(key.clone(), value);
+            self.mins.insert(key.clone(), value.clone());
             Ok(())
         }
     }
@@ -1217,12 +1217,12 @@ impl FirstAggregate {
         FirstAggregate { firsts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         if self.firsts.get(&key).is_some() {
             //do nothing
             Ok(())
         } else {
-            self.firsts.insert(key.clone(), value);
+            self.firsts.insert(key.clone(), value.clone());
             Ok(())
         }
     }
@@ -1246,8 +1246,8 @@ impl LastAggregate {
         LastAggregate { lasts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        self.lasts.insert(key.clone(), value);
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
+        self.lasts.insert(key.clone(), value.clone());
         Ok(())
     }
 
@@ -1279,14 +1279,14 @@ impl ApproxCountDistinctAggregate {
         ApproxCountDistinctAggregate { counts: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: Option<Tuple>, value: Value) -> AggregateResult<()> {
-        if let Value::Null = value {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
+        if let &Value::Null = value {
             //Null value doesn't contribute to the total count
             return Ok(());
         };
 
-        if let Some(hll) = self.counts.get_mut(&key) {
-            hll.add(&value);
+        if let Some(hll) = self.counts.get_mut(key) {
+            hll.add(value);
             Ok(())
         } else {
             self.counts.insert(key.clone(), HyperLogLog::new(8));
@@ -1314,7 +1314,7 @@ mod tests {
         let tuple = Some(vec![Value::String("key".to_string())]);
         let value = Value::Float(OrderedFloat::from(5.0));
 
-        let _ = iter.add_record(tuple.clone(), value.clone());
+        let _ = iter.add_record(&tuple, &value);
         let aggregate = iter.get_aggregated(&tuple);
         assert_eq!(Ok(value), aggregate);
     }
@@ -1326,7 +1326,7 @@ mod tests {
 
         for i in 1..=10 {
             let value = Value::Float(OrderedFloat::from(i as f32));
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
@@ -1339,7 +1339,7 @@ mod tests {
         let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
@@ -1352,7 +1352,7 @@ mod tests {
         let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
@@ -1365,7 +1365,7 @@ mod tests {
         let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
@@ -1379,7 +1379,7 @@ mod tests {
 
         for i in 1..=10 {
             let value = Value::Float(OrderedFloat::from(i as f32));
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
@@ -1392,7 +1392,7 @@ mod tests {
         let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
@@ -1405,7 +1405,7 @@ mod tests {
         let tuple = Some(vec![Value::String("key".to_string())]);
         for i in 0..13 {
             let value = Value::Int(i);
-            let _ = iter.add_record(tuple.clone(), value);
+            let _ = iter.add_record(&tuple, &value);
         }
 
         let aggregate = iter.get_aggregated(&tuple);
