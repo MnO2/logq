@@ -19,8 +19,7 @@ use hashbrown::hash_map::HashMap;
 lazy_static! {
     static ref KEYWORDS: Vec<&'static str> = {
         vec![
-            "select", "from", "where", "group", "by", "limit", "order", "true", "false",
-            "case", "when", "then"
+            "select", "from", "where", "group", "by", "limit", "order", "true", "false", "case", "when", "then",
         ]
     };
 }
@@ -31,11 +30,7 @@ fn case_when_expression<'a>(i: &'a str) -> IResult<&'a str, ast::CaseWhenExpress
         expression,
         tuple((multispace0, tag("then"), space1)),
         factor,
-        opt(delimited(
-            terminated(tag("else"), space1),
-            factor,
-            multispace0,
-        )),
+        opt(delimited(terminated(tag("else"), space1), factor, multispace0)),
         tag("end"),
     ))(i)?;
 
@@ -471,10 +466,10 @@ mod test {
     #[test]
     fn test_case_when_expression() {
         let ans = ast::CaseWhenExpression {
-                condition: Box::new(ast::Expression::Value(ast::Value::Boolean(true))),
-                then_expr: Box::new(ast::Expression::Value(ast::Value::Integral(1))),
-                else_expr: Some(Box::new(ast::Expression::Value(ast::Value::Integral(2)))),
-            };
+            condition: Box::new(ast::Expression::Value(ast::Value::Boolean(true))),
+            then_expr: Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+            else_expr: Some(Box::new(ast::Expression::Value(ast::Value::Integral(2)))),
+        };
 
         assert_eq!(case_when_expression("case when true then 1 else 2 end"), Ok(("", ans)));
     }
