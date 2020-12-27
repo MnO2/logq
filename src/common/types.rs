@@ -8,6 +8,14 @@ use std::result;
 use url;
 use linked_hash_map::LinkedHashMap;
 
+lazy_static! {
+    //FIXME: use different type for string hostname and Ipv4
+    static ref HOST_REGEX: Regex = Regex::new(r#"([\.0-9a-zA-Z]+):([0-9]+)"#).unwrap();
+    static ref SPLIT_HTTP_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
+    static ref SPLIT_TIME_INTERVAL_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
+}
+
+
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Value {
     Int(i32),
@@ -55,11 +63,7 @@ impl fmt::Display for Host {
 }
 
 pub(crate) fn parse_host(s: &str) -> ParseHostResult<Host> {
-    //FIXME: use different type for string hostname and Ipv4
-    let host_regex_literal = r#"([\.0-9a-zA-Z]+):([0-9]+)"#;
-    let host_regex: Regex = Regex::new(host_regex_literal).unwrap();
-
-    if let Some(cap) = host_regex.captures(s) {
+    if let Some(cap) = HOST_REGEX.captures(s) {
         //FIXME: very simplified parsing.
         let hostname = cap.get(1).map_or("", |m| m.as_str()).to_string();
         let port: u16 = cap.get(2).map_or("", |m| m.as_str()).parse::<u16>()?;
@@ -129,10 +133,7 @@ pub(crate) fn parse_http_version(s: &str) -> ParseHttpRequestResult<HttpVersion>
 }
 
 pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest> {
-    //FIXME: use different type for string hostname and Ipv4
-    let regex_literal = r#"[^\s"']+"#;
-    let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
-    let mut iter = split_the_line_regex.find_iter(&s);
+    let mut iter = SPLIT_HTTP_LINE_REGEX.find_iter(&s);
 
     let http_method_opt = if let Some(m) = iter.next() {
         let method = parse_http_method(m.as_str())?;
@@ -257,9 +258,7 @@ pub(crate) fn parse_time_interval_unit(s: &str, plural: bool) -> ParseTimeInterv
 }
 
 pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterval> {
-    let regex_literal = r#"[^\s"']+"#;
-    let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
-    let mut iter = split_the_line_regex.find_iter(&s);
+    let mut iter = SPLIT_TIME_INTERVAL_LINE_REGEX.find_iter(&s);
 
     let integral_opt = if let Some(m) = iter.next() {
         let integral = m.as_str().parse::<u32>()?;

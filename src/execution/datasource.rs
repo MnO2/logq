@@ -13,6 +13,11 @@ use std::path::Path;
 use std::result;
 use std::str::FromStr;
 
+lazy_static! {
+    static ref SPLIT_READER_LINE_REGEX: Regex = Regex::new(r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#).unwrap();
+}
+
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(crate) enum DataType {
     DateTime,
@@ -700,11 +705,9 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 SquidLogField::field_names()
             };
 
-            let regex_literal = r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#;
-            let split_the_line_regex: Regex = Regex::new(regex_literal).unwrap();
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
-            for (i, m) in split_the_line_regex.find_iter(&buf).enumerate() {
+            for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&buf).enumerate() {
                 if self.table_name == "elb" {
                     if i >= ClassicLoadBalancerLogField::len() {
                         break;
