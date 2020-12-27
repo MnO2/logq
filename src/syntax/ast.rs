@@ -56,12 +56,20 @@ pub(crate) enum SelectExpression {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct CaseWhenExpression {
+    pub(crate) condition: Box<Expression>,
+    pub(crate) then_expr: Box<Expression>,
+    pub(crate) else_expr: Option<Box<Expression>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Expression {
     Column(ColumnName),
     Value(Value),
     BinaryOperator(BinaryOperator, Box<Expression>, Box<Expression>),
     UnaryOperator(UnaryOperator, Box<Expression>),
     FuncCall(FuncName, Vec<SelectExpression>, Option<WithinGroupClause>),
+    CaseWhenExpression(CaseWhenExpression),
 }
 
 pub(crate) type FuncName = String;

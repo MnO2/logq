@@ -113,6 +113,8 @@ pub(crate) enum ExpressionError {
     UnknownFunction,
     #[fail(display = "Invalid Star")]
     InvalidStar,
+    #[fail(display = "Missing Else")]
+    MissingElse,
     #[fail(display = "Type Mismatch")]
     TypeMismatch,
     #[fail(display = "{}", _0)]
@@ -156,6 +158,7 @@ pub(crate) enum Expression {
     Logic(Box<Formula>),
     Variable(VariableName),
     Function(String, Vec<Named>),
+    Branch(Box<Formula>, Box<Expression>, Option<Box<Expression>>),
 }
 
 impl Expression {
@@ -188,6 +191,19 @@ impl Expression {
 
                 let return_value: Value = evaluate(&*name, &values)?;
                 Ok(return_value)
+            }
+            Expression::Branch(condition, then_expr, else_expr) => {
+                let choose_then_branch = condition.evaluate(variables)?;
+
+                if choose_then_branch {
+                    then_expr.expression_value(variables)
+                } else {
+                    if let Some(e) = else_expr {
+                        e.expression_value(variables)
+                    } else {
+                        Err(ExpressionError::MissingElse)
+                    }
+                }
             }
         }
     }

@@ -131,6 +131,7 @@ pub(crate) enum Expression {
     Variable(VariableName),
     Logic(Box<Formula>),
     Function(String, Vec<Named>),
+    Branch(Box<Formula>, Box<Expression>, Option<Box<Expression>>),
 }
 
 impl Expression {
@@ -171,6 +172,33 @@ impl Expression {
                     Box::new(execution::Expression::Function(name.clone(), physical_args)),
                     variables,
                 ))
+            }
+            Expression::Branch(condition, then_expr, else_expr) => {
+                let mut variables = common::empty_variables();
+
+                let (condition_expr, condition_ariables) = condition.physical(physical_plan_creator)?;
+                variables = common::merge(&variables, &condition_ariables);
+
+                let (then_expr, then_variables) = then_expr.physical(physical_plan_creator)?;
+                variables = common::merge(&variables, &then_variables);
+
+                if let Some(e) = else_expr {
+                    let (else_expr, else_ariables) = e.physical(physical_plan_creator)?;
+                    variables = common::merge(&variables, &else_ariables);
+                    Ok((
+                        Box::new(execution::Expression::Branch(
+                            condition_expr,
+                            then_expr,
+                            Some(else_expr),
+                        )),
+                        variables,
+                    ))
+                } else {
+                    Ok((
+                        Box::new(execution::Expression::Branch(condition_expr, then_expr, None)),
+                        variables,
+                    ))
+                }
             }
         }
     }

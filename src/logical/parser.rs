@@ -88,6 +88,25 @@ fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
     }
 }
 
+fn parse_case_when_expression(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+    match value_expr {
+        ast::Expression::CaseWhenExpression(case_when_expr) => {
+            let branch = parse_logic(&case_when_expr.condition)?;
+            let then_expr = parse_value_expression(&case_when_expr.then_expr)?;
+            let else_expr = if let Some(e) = &case_when_expr.else_expr {
+                Some(parse_value_expression(&e)?)
+            } else {
+                None
+            };
+
+            Ok(Box::new(types::Expression::Branch(branch, then_expr, else_expr)))
+        }
+        _ => {
+            unreachable!();
+        }
+    }
+}
+
 fn parse_binary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::Expression::BinaryOperator(op, left_expr, right_expr) => {
@@ -152,6 +171,7 @@ fn parse_value_expression(value_expr: &ast::Expression) -> ParseResult<Box<types
             }
             Ok(Box::new(types::Expression::Function(func_name.clone(), args)))
         }
+        ast::Expression::CaseWhenExpression(_) => parse_case_when_expression(value_expr),
     }
 }
 

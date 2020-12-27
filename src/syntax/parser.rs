@@ -4,8 +4,8 @@ use std::str::FromStr;
 
 use nom::{
     branch::alt,
-    bytes::complete::{escaped, tag},
-    character::complete::{char, digit1, none_of, one_of, space0, space1},
+    bytes::complete::{escaped, tag, tag_no_case},
+    character::complete::{char, digit1, multispace0, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
     multi::separated_list0,
@@ -20,8 +20,33 @@ lazy_static! {
     static ref KEYWORDS: Vec<&'static str> = {
         vec![
             "select", "from", "where", "group", "by", "limit", "order", "true", "false",
+            "case", "when", "then"
         ]
     };
+}
+
+fn case_when_expression<'a>(i: &'a str) -> IResult<&'a str, ast::CaseWhenExpression, VerboseError<&'a str>> {
+    let (remaining_input, (_, condition, _, then_expr, else_expr, _)) = tuple((
+        tuple((tag("case"), space1, tag("when"), space1)),
+        expression,
+        tuple((multispace0, tag("then"), space1)),
+        factor,
+        opt(delimited(
+            terminated(tag("else"), space1),
+            factor,
+            multispace0,
+        )),
+        tag("end"),
+    ))(i)?;
+
+    Ok((
+        remaining_input,
+        ast::CaseWhenExpression {
+            condition: Box::new(condition),
+            then_expr: Box::new(then_expr),
+            else_expr: else_expr.map(|n| Box::new(n)),
+        },
+    ))
 }
 
 fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
@@ -94,7 +119,7 @@ fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>
     ))(i)
 }
 
-fn float<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+fn float(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     map(complete::float, |f| ast::Value::Float(OrderedFloat::from(f)))(i)
 }
 
@@ -277,7 +302,10 @@ fn from_clause<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str
 }
 
 fn parse_expression_atom<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    expression_term_opt_not(i)
+    alt((
+        map(case_when_expression, |n| ast::Expression::CaseWhenExpression(n)),
+        expression_term_opt_not,
+    ))(i)
 }
 
 fn parse_expression_op<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
@@ -438,6 +466,17 @@ mod test {
             Ok(("", ast::Value::Float(OrderedFloat::from(-123.123))))
         );
         assert_eq!(float("0.9"), Ok(("", ast::Value::Float(OrderedFloat::from(0.9)))));
+    }
+
+    #[test]
+    fn test_case_when_expression() {
+        let ans = ast::CaseWhenExpression {
+                condition: Box::new(ast::Expression::Value(ast::Value::Boolean(true))),
+                then_expr: Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                else_expr: Some(Box::new(ast::Expression::Value(ast::Value::Integral(2)))),
+            };
+
+        assert_eq!(case_when_expression("case when true then 1 else 2 end"), Ok(("", ans)));
     }
 
     #[test]
