@@ -27,6 +27,8 @@ pub(crate) enum AppError {
     Stream(#[cause] execution::types::StreamError),
     #[fail(display = "Invalid Log File Format")]
     InvalidLogFileFormat,
+    #[fail(display = "Invalid Table Spec String")]
+    InvalidTableSpecString,
     #[fail(display = "{}", _0)]
     WriteCsv(#[cause] csv::Error),
     #[fail(display = "{}", _0)]
@@ -43,6 +45,7 @@ impl PartialEq for AppError {
             (AppError::CreateStream(_), AppError::CreateStream(_)) => true,
             (AppError::Stream(_), AppError::Stream(_)) => true,
             (AppError::InvalidLogFileFormat, AppError::InvalidLogFileFormat) => true,
+            (AppError::InvalidTableSpecString, AppError::InvalidTableSpecString) => true,
             (AppError::WriteCsv(_), AppError::WriteCsv(_)) => true,
             (AppError::WriteJson(_), AppError::WriteJson(_)) => true,
             _ => false,
@@ -133,10 +136,28 @@ impl FromStr for OutputMode {
     }
 }
 
+pub(crate) fn explain(
+    query_str: &str,
+    data_source: common::types::DataSource
+) -> AppResult<()> {
+    let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
+    if !rest_of_str.is_empty() {
+        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
+    }
+
+    let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
+
+    println!("Query Plan:");
+    println!("{:?}", physical_plan);
+    Ok(())
+}
+
 pub(crate) fn run(
     query_str: &str,
     data_source: common::types::DataSource,
-    explain_mode: bool,
+    _table_name: String,
     output_mode: OutputMode,
 ) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
@@ -144,78 +165,68 @@ pub(crate) fn run(
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
 
-    if !["elb", "alb", "squid", "s3"].contains(&&*select_stmt.table_name) {
-        return Err(AppError::InvalidLogFileFormat);
-    }
-
     let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    if explain_mode {
-        println!("Query Plan:");
-        println!("{:?}", physical_plan);
-        Ok(())
-    } else {
-        let mut stream = physical_plan.get(variables)?;
+    let mut stream = physical_plan.get(variables)?;
 
-        match output_mode {
-            OutputMode::Table => {
-                let mut table = Table::new();
-                while let Some(record) = stream.next()? {
-                    table.add_row(Row::new(record.to_row()));
-                }
-                table.printstd();
+    match output_mode {
+        OutputMode::Table => {
+            let mut table = Table::new();
+            while let Some(record) = stream.next()? {
+                table.add_row(Row::new(record.to_row()));
             }
-            OutputMode::Csv => {
-                let mut wtr = Writer::from_writer(std::io::stdout());
-                while let Some(record) = stream.next()? {
-                    let csv_record = record.to_csv_record();
-                    wtr.write_record(csv_record)?;
-                }
-            }
-            OutputMode::Json => {
-                let mut data = json::JsonValue::new_array();
-                while let Some(record) = stream.next()? {
-                    let mut obj = json::JsonValue::new_object();
-                    for (key, val) in record.to_tuples() {
-                        match val {
-                            common::types::Value::Boolean(b) => {
-                                obj[key] = b.into();
-                            }
-                            common::types::Value::DateTime(dt) => {
-                                obj[key] = dt.to_string().into();
-                            }
-                            common::types::Value::Float(f) => {
-                                obj[key] = f.into_inner().into();
-                            }
-                            common::types::Value::Host(h) => {
-                                obj[key] = h.to_string().into();
-                            }
-                            common::types::Value::HttpRequest(h) => {
-                                obj[key] = h.to_string().into();
-                            }
-                            common::types::Value::Int(i) => {
-                                obj[key] = i.into();
-                            }
-                            common::types::Value::Null => {
-                                obj[key] = json::Null;
-                            }
-                            common::types::Value::String(s) => {
-                                obj[key] = s.into();
-                            }
-                        }
-                    }
-
-                    data.push(obj)?;
-                }
-                let s = data.dump();
-                println!("{}", s);
+            table.printstd();
+        }
+        OutputMode::Csv => {
+            let mut wtr = Writer::from_writer(std::io::stdout());
+            while let Some(record) = stream.next()? {
+                let csv_record = record.to_csv_record();
+                wtr.write_record(csv_record)?;
             }
         }
+        OutputMode::Json => {
+            let mut data = json::JsonValue::new_array();
+            while let Some(record) = stream.next()? {
+                let mut obj = json::JsonValue::new_object();
+                for (key, val) in record.to_tuples() {
+                    match val {
+                        common::types::Value::Boolean(b) => {
+                            obj[key] = b.into();
+                        }
+                        common::types::Value::DateTime(dt) => {
+                            obj[key] = dt.to_string().into();
+                        }
+                        common::types::Value::Float(f) => {
+                            obj[key] = f.into_inner().into();
+                        }
+                        common::types::Value::Host(h) => {
+                            obj[key] = h.to_string().into();
+                        }
+                        common::types::Value::HttpRequest(h) => {
+                            obj[key] = h.to_string().into();
+                        }
+                        common::types::Value::Int(i) => {
+                            obj[key] = i.into();
+                        }
+                        common::types::Value::Null => {
+                            obj[key] = json::Null;
+                        }
+                        common::types::Value::String(s) => {
+                            obj[key] = s.into();
+                        }
+                    }
+                }
 
-        Ok(())
+                data.push(obj)?;
+            }
+            let s = data.dump();
+            println!("{}", s);
+        }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -227,16 +238,18 @@ mod tests {
 
     #[test]
     fn test_run_explain_mode() {
-        let query_str = "select * from squid";
+        let query_str = "select * from it";
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
+        let file_format= "squid".to_string();
+        let table_name = "it".to_string();
         let mut file = File::create(file_path.clone()).unwrap();
         writeln!(file, r#"1515734740.494      1 [MASKEDIPADDRESS] TCP_DENIED/407 3922 CONNECT d.dropbox.com:443 - HIER_NONE/- text/html"#).unwrap();
         file.sync_all().unwrap();
         drop(file);
 
-        let data_source = common::types::DataSource::File(file_path);
-        let result = run(&*query_str, data_source, true, OutputMode::Csv);
+        let data_source = common::types::DataSource::File(file_path, file_format.clone());
+        let result = run(&*query_str, data_source,  table_name, OutputMode::Csv);
 
         assert_eq!(result, Ok(()));
 
@@ -247,32 +260,34 @@ mod tests {
     fn test_run_real_mode() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
+        let file_format= "elb".to_string();
+        let table_name = "it".to_string();
         let mut file = File::create(file_path.clone()).unwrap();
         writeln!(file, r#"2019-06-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#).unwrap();
         file.sync_all().unwrap();
         drop(file);
 
-        let data_source = common::types::DataSource::File(file_path);
+        let data_source = common::types::DataSource::File(file_path, file_format.clone());
         let result = run(
-            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t order by t asc limit 1"#,
+            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t order by t asc limit 1"#,
             data_source.clone(),
-            false,
+            table_name.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
-            r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#,
+            r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_source.clone(),
-            false,
+            table_name.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
-            r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from elb group by t"#,
+            r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_source.clone(),
-            false,
+            table_name.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));

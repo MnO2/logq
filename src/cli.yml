@@ -10,12 +10,13 @@ subcommands:
               help: output format
               long: output
               takes_value: true
+          - table:
+              help: table to file mapping
+              long: table
+              takes_value: true
           - query:
               help: query string
               index: 1
-          - file_to_select:
-              help: file to select against
-              index: 2
     - explain:
         about: dump the query plan graph
         args:

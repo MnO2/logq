@@ -299,7 +299,7 @@ pub(crate) fn merge(left: &Variables, right: &Variables) -> Variables {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DataSource {
-    File(PathBuf),
+    File(PathBuf, String),
     Stdin,
 }
 

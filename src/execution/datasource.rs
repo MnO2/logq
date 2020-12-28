@@ -646,7 +646,7 @@ impl From<url::ParseError> for ReaderError {
 #[derive(Debug)]
 pub(crate) struct ReaderBuilder {
     capacity: usize,
-    table_name: String,
+    file_format: String,
 }
 
 pub(crate) trait RecordRead {
@@ -654,34 +654,34 @@ pub(crate) trait RecordRead {
 }
 
 impl ReaderBuilder {
-    pub(crate) fn new(table_name: String) -> Self {
+    pub(crate) fn new(file_format: String) -> Self {
         ReaderBuilder {
             capacity: 8 * (1 << 10),
-            table_name,
+            file_format: file_format,
         }
     }
 
     pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<File>> {
-        Ok(Reader::new(self, File::open(path)?, self.table_name.clone()))
+        Ok(Reader::new(self, File::open(path)?, self.file_format.clone()))
     }
 
     #[allow(dead_code)]
     pub(crate) fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
-        Reader::new(self, rdr, self.table_name.clone())
+        Reader::new(self, rdr, self.file_format.clone())
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct Reader<R> {
     rdr: io::BufReader<R>,
-    table_name: String,
+    file_format: String,
 }
 
 impl<R: io::Read> Reader<R> {
-    pub(crate) fn new(builder: &ReaderBuilder, rdr: R, table_name: String) -> Reader<R> {
+    pub(crate) fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> Reader<R> {
         Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
-            table_name,
+            file_format,
         }
     }
 
@@ -695,11 +695,11 @@ impl<R: io::Read> RecordRead for Reader<R> {
         let more_data = self.rdr.read_line(&mut buf)?;
 
         if more_data > 0 {
-            let field_names = if self.table_name == "elb" {
+            let field_names = if self.file_format == "elb" {
                 ClassicLoadBalancerLogField::field_names()
-            } else if self.table_name == "alb" {
+            } else if self.file_format == "alb" {
                 ApplicationLoadBalancerLogField::field_names()
-            } else if self.table_name == "s3" {
+            } else if self.file_format == "s3" {
                 S3Field::field_names()
             } else {
                 SquidLogField::field_names()
@@ -708,19 +708,19 @@ impl<R: io::Read> RecordRead for Reader<R> {
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
             for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&buf).enumerate() {
-                if self.table_name == "elb" {
+                if self.file_format == "elb" {
                     if i >= ClassicLoadBalancerLogField::len() {
                         break;
                     }
-                } else if self.table_name == "alb" {
+                } else if self.file_format == "alb" {
                     if i >= ApplicationLoadBalancerLogField::len() {
                         break;
                     }
-                } else if self.table_name == "squid" {
+                } else if self.file_format == "squid" {
                     if i >= SquidLogField::len() {
                         break;
                     }
-                } else if self.table_name == "s3" {
+                } else if self.file_format == "s3" {
                     if i >= S3Field::len() {
                         break;
                     }
@@ -729,11 +729,11 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 }
 
                 let s = m.as_str();
-                let datatype = if self.table_name == "elb" {
+                let datatype = if self.file_format == "elb" {
                     ClassicLoadBalancerLogField::datatype(i)
-                } else if self.table_name == "alb" {
+                } else if self.file_format == "alb" {
                     ApplicationLoadBalancerLogField::datatype(i)
-                } else if self.table_name == "s3" {
+                } else if self.file_format == "s3" {
                     S3Field::datatype(i)
                 } else {
                     SquidLogField::datatype(i)

@@ -27,7 +27,7 @@ cargo install logq
 Project the columns of `timestamp` and `backend_and_port` fields from the log file and print the first three records out.
 
 ```
-> logq query 'select timestamp, backend_processing_time from elb order by timestamp asc limit 3' data/AWSLogs.log
+> logq query 'select timestamp, backend_processing_time from it order by timestamp asc limit 3' --table it:elb=data/AWSLogs.log
 
 +-----------------------------------+----------+
 | 2015-11-07 18:45:33.007671 +00:00 | 0.618779 |
@@ -40,7 +40,7 @@ Project the columns of `timestamp` and `backend_and_port` fields from the log fi
 
 Summing up the total sent bytes in 5 seconds time frame.
 ```
-> logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+> logq query 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t' --table it:elb=data/AWSLogs.log
 +----------------------------+----------+
 | 2015-11-07 18:45:30 +00:00 | 12256229 |
 +----------------------------+----------+
@@ -50,7 +50,7 @@ Summing up the total sent bytes in 5 seconds time frame.
 
 Select the 90th percentile backend_processsing_time with 5 second as the time frame.
 ```
-> logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from elb group by t' data/AWSLogs.log
+> logq query 'select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by t' --table it:elb=data/AWSLogs.log
 +----------------------------+----------+
 | 2015-11-07 18:45:30 +00:00 | 0.112312 |
 +----------------------------+----------+
@@ -60,7 +60,7 @@ Select the 90th percentile backend_processsing_time with 5 second as the time fr
 
 To collapse the part of the url path so that they are mapping to the same Restful handler, you could use `url_path_bucket`
 ```
-> logq query 'select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from elb limit 10' data/AWSLogs.log
+> logq query 'select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from it limit 10' --table it:elb=data/AWSLogs.log
 +----------------------------+----------------------------------------------+
 | 2015-11-07 18:45:30 +00:00 | /                                            |
 +----------------------------+----------------------------------------------+
@@ -86,19 +86,19 @@ To collapse the part of the url path so that they are mapping to the same Restfu
 
 Output in different format, you can specify the format by `--output`, it supports `json` and `csv` at this moment.
 ```
-> logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+> logq query --output csv 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t' --table it:elb=data/AWSLogs.log
 2015-11-07 18:45:35 +00:00,33148328
 2015-11-07 18:45:30 +00:00,12256229
 ```
 
 ```
-> logq query --output json 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t' data/AWSLogs.log
+> logq query --output json 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t' --table it:elb=data/AWSLogs.log
 [{"t":"2015-11-07 18:45:30 +00:00","s":12256229},{"t":"2015-11-07 18:45:35 +00:00","s":33148328}]
 ```
 
 You can use graphing command-line tools to graph the data set in terminal. For example, [termgraph](https://github.com/mkaz/termgraph) would be a good choice for bar charts
 ```
-> logq query --output csv 'select backend_and_port, sum(sent_bytes) from elb group by backend_and_port' data/AWSLogs.log | termgraph
+> logq query --output csv 'select backend_and_port, sum(sent_bytes) from it group by backend_and_port' --table it:elb=data/AWSLogs.log | termgraph
 
 10.0.2.143:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 20014156.00
 10.0.0.215:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 25390392.00
@@ -106,13 +106,13 @@ You can use graphing command-line tools to graph the data set in terminal. For e
 
 Or you could use [spark](https://github.com/holman/spark) to draw the processing time over time
 ```
-> logq query --output csv 'select host_name(backend_and_port) as h, backend_processing_time from elb where h = "10.0.2.143"' data/AWSLogs.log | cut -d, -f2 | spark
+> logq query --output csv 'select host_name(backend_and_port) as h, backend_processing_time from it where h = "10.0.2.143"' --table it:elb=data/AWSLogs.log | cut -d, -f2 | spark
 ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁██▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
 If you are unclear how the execution was running, the query plan could be explained.
 ```
-> logq explain 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from elb group by t'
+> logq explain 'select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t'
 Query Plan:
 GroupBy(["t"], [NamedAggregate { aggregate: Sum(SumAggregate { sums: {} }, Expression(Variable("sent_bytes"), Some("sent_bytes"))), name_opt: Some("s") }], Map([Expression(Function("time_bucket", [Expression(Variable("const_000000000"), None), Expression(Variable("timestamp"), Some("timestamp"))]), Some("t")), Expression(Variable("sent_bytes"), Some("sent_bytes"))], DataSource(Stdin)))
 ```

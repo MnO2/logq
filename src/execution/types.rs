@@ -641,9 +641,9 @@ impl Node {
 
                 Ok(Box::new(stream))
             }
-            Node::DataSource(data_source, table_name) => match data_source {
-                DataSource::File(path) => {
-                    let reader = ReaderBuilder::new(table_name.clone()).with_path(path)?;
+            Node::DataSource(data_source, file_format) => match data_source {
+                DataSource::File(path, file_format) => {
+                    let reader = ReaderBuilder::new(file_format.clone()).with_path(path)?;
                     let stream = LogFileStream {
                         reader: Box::new(reader),
                     };
@@ -651,7 +651,7 @@ impl Node {
                     Ok(Box::new(stream))
                 }
                 DataSource::Stdin => {
-                    let reader = ReaderBuilder::new(table_name.clone()).with_reader(io::stdin());
+                    let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin());
                     let stream = LogFileStream {
                         reader: Box::new(reader),
                     };

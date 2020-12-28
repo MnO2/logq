@@ -16,9 +16,15 @@ mod syntax;
 use clap::load_yaml;
 use clap::App;
 use prettytable::{Cell, Row, Table};
-
+use regex::Regex;
 use std::path::Path;
 use std::str::FromStr;
+use crate::app::AppError;
+
+lazy_static! {
+    //FIXME: use different type for string hostname and Ipv4
+    static ref TABLE_SPEC_REGEX: Regex = Regex::new(r#"([0-9a-zA-Z]+):([a-zA-Z]+)=([^=\s"':]+)"#).unwrap();
+}
 
 fn main() {
     let yaml = load_yaml!("cli.yml");
@@ -40,13 +46,29 @@ fn main() {
                     app::OutputMode::Table
                 };
 
-                let result = if let Some(filename) = sub_m.value_of("file_to_select") {
-                    let path = Path::new(filename);
-                    let data_source = common::types::DataSource::File(path.to_path_buf());
-                    app::run(&*lower_case_query_str, data_source, false, output_mode)
+                let result = if let Some(table_spec_string) = sub_m.value_of("table") {
+                    if let Some(cap) = TABLE_SPEC_REGEX.captures(table_spec_string) {
+                        let table_name = cap.get(1).map_or("", |m| m.as_str()).to_string();
+                        let file_format = cap.get(2).map_or("", |m| m.as_str()).to_string();
+                        let file_path = cap.get(3).map_or("", |m| m.as_str()).to_string();
+
+                        if !["elb", "alb", "squid", "s3"].contains(&&*file_format) {
+                            Err(AppError::InvalidLogFileFormat)
+                        } else {
+                            if file_path == "stdin" {
+                                let data_source = common::types::DataSource::Stdin;
+                                app::run(&*lower_case_query_str, data_source, table_name, output_mode)
+                            } else {
+                                let path = Path::new(&file_path);
+                                let data_source = common::types::DataSource::File(path.to_path_buf(), file_format);
+                                app::run(&*lower_case_query_str, data_source, table_name, output_mode)
+                            }
+                        }
+                    } else {
+                        Err(AppError::InvalidTableSpecString)
+                    }
                 } else {
-                    let data_source = common::types::DataSource::Stdin;
-                    app::run(&*lower_case_query_str, data_source, false, output_mode)
+                    Err(AppError::InvalidTableSpecString)
                 };
 
                 if let Err(e) = result {
@@ -60,7 +82,7 @@ fn main() {
             if let Some(query_str) = sub_m.value_of("query") {
                 let lower_case_query_str = query_str.to_ascii_lowercase();
                 let data_source = common::types::DataSource::Stdin;
-                let result = app::run(&*lower_case_query_str, data_source, true, app::OutputMode::Table);
+                let result = app::explain(&*lower_case_query_str, data_source);
 
                 if let Err(e) = result {
                     println!("{}", e);
