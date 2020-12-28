@@ -13,13 +13,13 @@ mod execution;
 mod logical;
 mod syntax;
 
+use crate::app::AppError;
 use clap::load_yaml;
 use clap::App;
 use prettytable::{Cell, Row, Table};
 use regex::Regex;
 use std::path::Path;
 use std::str::FromStr;
-use crate::app::AppError;
 
 lazy_static! {
     //FIXME: use different type for string hostname and Ipv4

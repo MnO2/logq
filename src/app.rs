@@ -136,10 +136,7 @@ impl FromStr for OutputMode {
     }
 }
 
-pub(crate) fn explain(
-    query_str: &str,
-    data_source: common::types::DataSource
-) -> AppResult<()> {
+pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -241,7 +238,7 @@ mod tests {
         let query_str = "select * from it";
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
-        let file_format= "squid".to_string();
+        let file_format = "squid".to_string();
         let table_name = "it".to_string();
         let mut file = File::create(file_path.clone()).unwrap();
         writeln!(file, r#"1515734740.494      1 [MASKEDIPADDRESS] TCP_DENIED/407 3922 CONNECT d.dropbox.com:443 - HIER_NONE/- text/html"#).unwrap();
@@ -249,7 +246,7 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone());
-        let result = run(&*query_str, data_source,  table_name, OutputMode::Csv);
+        let result = run(&*query_str, data_source, table_name, OutputMode::Csv);
 
         assert_eq!(result, Ok(()));
 
@@ -260,7 +257,7 @@ mod tests {
     fn test_run_real_mode() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
-        let file_format= "elb".to_string();
+        let file_format = "elb".to_string();
         let table_name = "it".to_string();
         let mut file = File::create(file_path.clone()).unwrap();
         writeln!(file, r#"2019-06-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#).unwrap();
