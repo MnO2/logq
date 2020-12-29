@@ -25,6 +25,7 @@ pub(crate) enum Value {
     DateTime(chrono::DateTime<chrono::offset::FixedOffset>),
     HttpRequest(common::types::HttpRequest),
     Host(common::types::Host),
+    Missing,
 }
 
 pub(crate) type ParseHostResult<T> = result::Result<T, ParseHostError>;

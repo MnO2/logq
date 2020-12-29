@@ -52,7 +52,7 @@ fn main() {
                         let file_format = cap.get(2).map_or("", |m| m.as_str()).to_string();
                         let file_path = cap.get(3).map_or("", |m| m.as_str()).to_string();
 
-                        if !["elb", "alb", "squid", "s3"].contains(&&*file_format) {
+                        if !["elb", "alb", "squid", "s3", "jsonl"].contains(&&*file_format) {
                             Err(AppError::InvalidLogFileFormat)
                         } else {
                             if file_path == "stdin" {

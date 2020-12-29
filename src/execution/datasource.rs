@@ -1,9 +1,10 @@
 use super::stream::Record;
 use crate::common;
-use crate::common::types::Value;
+use crate::common::types::{Value, VariableName};
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use url;
+use json;
 
 use std::fmt;
 use std::fs::File;
@@ -599,6 +600,8 @@ pub(crate) enum ReaderError {
     ParseHost(#[cause] common::types::ParseHostError),
     #[fail(display = "{}", _0)]
     ParseHttpRequest(#[cause] common::types::ParseHttpRequestError),
+    #[fail(display = "{}", _0)]
+    ParseJson(#[cause] json::JsonError),
 }
 
 impl From<io::Error> for ReaderError {
@@ -640,6 +643,12 @@ impl From<common::types::ParseHttpRequestError> for ReaderError {
 impl From<url::ParseError> for ReaderError {
     fn from(err: url::ParseError) -> ReaderError {
         ReaderError::ParseUrl(err)
+    }
+}
+
+impl From<json::JsonError> for ReaderError {
+    fn from(err: json::JsonError) -> ReaderError {
+        ReaderError::ParseJson(err)
     }
 }
 
@@ -694,7 +703,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
         let mut buf = String::new();
         let more_data = self.rdr.read_line(&mut buf)?;
 
-        if more_data > 0 {
+        if more_data > 0 && self.file_format != "jsonl" {
             let field_names = if self.file_format == "elb" {
                 ClassicLoadBalancerLogField::field_names()
             } else if self.file_format == "alb" {
@@ -703,7 +712,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 S3Field::field_names()
             } else {
                 SquidLogField::field_names()
-            };
+            } ;
 
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
@@ -779,6 +788,52 @@ impl<R: io::Read> RecordRead for Reader<R> {
             let record = Record::new(field_names, values);
 
             Ok(Some(record))
+        } else if more_data > 0 && self.file_format == "jsonl" {
+            let parsed = json::parse(&buf)?;
+            match parsed {
+                json::JsonValue::Object(o) => {
+                    let field_names = o.iter().map(|(k, _)| k.to_string() as VariableName).collect();
+                    let values = o.iter().map(|(_, v)| {
+                        match v {
+                            json::JsonValue::Boolean(b) => {
+                                Value::Boolean(*b)
+                            },
+                            json::JsonValue::String(s) => {
+                                Value::String(s.clone())
+                            },
+                            json::JsonValue::Short(s) => {
+                                Value::String(s.as_str().to_string())
+                            },
+                            json::JsonValue::Number(n) => {
+                                //TODO: the float case
+                                if let Some(i) = n.as_fixed_point_i64(2) {
+                                    if i % 100 == 0 {
+                                        Value::Int((i as i32) / 100)
+                                    } else {
+                                        let f: f32 = (i as f32) / 100.0;
+                                        Value::Float(OrderedFloat::from(f))
+                                    }
+                                } else {
+                                    Value::Missing
+                                }
+                            },
+                            json::JsonValue::Null => {
+                                Value::Null
+                            },
+                            _ => {
+                                //TODO: handle the nested object when we're ready for partiQL
+                                Value::Missing
+                            }
+                        }
+                    }).collect();
+                    let record = Record::new(&field_names, values);
+                    Ok(Some(record))
+                }
+                _ => {
+                    //TODO: skip
+                    Ok(None)
+                }
+            }
         } else {
             Ok(None)
         }

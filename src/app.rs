@@ -212,6 +212,9 @@ pub(crate) fn run(
                         }
                         common::types::Value::String(s) => {
                             obj[key] = s.into();
+                        },
+                        common::types::Value::Missing => {
+                            obj[key] = json::Null
                         }
                     }
                 }
