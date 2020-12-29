@@ -245,15 +245,35 @@ fn where_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError
     map(preceded(tag("where"), expression), ast::WhereExpression::new)(i)
 }
 
-fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::ColumnName>, VerboseError<&str>> {
+fn qualified_column_name(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
+    map(terminated(separated_list0(char('.'), identifier), space0), |v| {
+        v.iter().map(|s| s.to_string()).collect()
+    })(i)
+}
+
+fn column_name_in_group_by(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
+    terminated(qualified_column_name, not(char('(')))(i)
+}
+
+fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, VerboseError<&str>> {
+    map(
+        tuple((
+            column_name_in_group_by,
+            opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
+        )),
+        |(column_name, as_clasue)| ast::GroupByReference::new(column_name, as_clasue.map(|s| s.to_string())),
+    )(i)
+}
+
+fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::GroupByReference>, VerboseError<&str>> {
     context(
         "column_expression_list",
         map(
             terminated(
-                separated_list0(preceded(space0, char(',')), preceded(space0, column_name)),
+                separated_list0(preceded(space0, char(',')), preceded(space0, column_reference)),
                 space0,
             ),
-            |v| v.into_iter().map(|s| s.to_string()).collect(),
+            |v| v.into_iter().collect(),
         ),
     )(i)
 }
@@ -301,8 +321,19 @@ fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseErro
 
 fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, VerboseError<&str>> {
     map(
-        preceded(tuple((tag("group"), space1, tag("by"), space1)), column_expression_list),
-        ast::GroupByExpression::new,
+        preceded(
+            tuple((tag("group"), space1, tag("by"), space1)),
+            pair(
+                column_expression_list,
+                opt(preceded(
+                    tuple((space0, tag("group"), space1, tag("as"), space1)),
+                    identifier,
+                )),
+            ),
+        ),
+        |(group_by_references, group_as_clause)| {
+            ast::GroupByExpression::new(group_by_references, group_as_clause.map(|s| s.to_string()))
+        },
     )(i)
 }
 
@@ -674,8 +705,9 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string(), "b".to_string()]);
-
+        let group_by_ref_a = ast::GroupByReference::new(vec!["a".to_string()], None);
+        let group_by_ref_b = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_b], None);
         let having_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::MoreThan,
             Box::new(ast::Expression::Column("c".to_string())),
@@ -853,7 +885,10 @@ mod test {
             ),
         ];
 
-        let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string(), "c".to_string()]);
+        let group_by_ref_a = ast::GroupByReference::new(vec!["a".to_string()], None);
+        let group_by_ref_c = ast::GroupByReference::new(vec!["c".to_string()], None);
+        let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_c], None);
+
         let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,

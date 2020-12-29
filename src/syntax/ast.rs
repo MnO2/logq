@@ -167,13 +167,26 @@ impl WhereExpression {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct GroupByReference {
+    pub(crate) column_name: Vec<String>,
+    pub(crate) as_clause: Option<String>,
+}
+
+impl GroupByReference {
+    pub fn new(column_name: Vec<String>, as_clause: Option<String>) -> Self {
+        GroupByReference { column_name, as_clause }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct GroupByExpression {
-    pub(crate) exprs: Vec<ColumnName>,
+    pub(crate) exprs: Vec<GroupByReference>,
+    pub(crate) group_as_clause: Option<String>,
 }
 
 impl GroupByExpression {
-    pub(crate) fn new(exprs: Vec<ColumnName>) -> Self {
-        GroupByExpression { exprs }
+    pub(crate) fn new(exprs: Vec<GroupByReference>, group_as_clause: Option<String>) -> Self {
+        GroupByExpression { exprs, group_as_clause }
     }
 }
 

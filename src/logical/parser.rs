@@ -1,5 +1,6 @@
 use super::types;
 use crate::common::types as common;
+use crate::common::types::VariableName;
 use crate::execution;
 use crate::syntax::ast;
 use std::collections::hash_set::HashSet;
@@ -417,7 +418,11 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     if !named_aggregates.is_empty() {
         if let Some(group_by) = query.group_by_exprs_opt {
-            let fields = group_by.exprs.clone();
+            let fields: Vec<VariableName> = group_by
+                .exprs
+                .iter()
+                .map(|r| r.column_name.last().unwrap().clone())
+                .collect();
 
             if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
@@ -713,7 +718,8 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+        let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
@@ -773,7 +779,9 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+
+        let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
@@ -808,7 +816,8 @@ mod test {
             ),
         ];
 
-        let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
+        let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
