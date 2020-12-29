@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use nom::{
     branch::alt,
-    bytes::complete::{escaped, tag, tag_no_case},
+    bytes::complete::{escaped, tag},
     character::complete::{char, digit1, multispace0, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
@@ -24,7 +24,7 @@ lazy_static! {
     };
 }
 
-fn case_when_expression<'a>(i: &'a str) -> IResult<&'a str, ast::CaseWhenExpression, VerboseError<&'a str>> {
+fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, VerboseError<&str>> {
     let (remaining_input, (_, condition, _, then_expr, else_expr, _)) = tuple((
         tuple((tag("case"), space1, tag("when"), space1)),
         expression,
@@ -44,11 +44,11 @@ fn case_when_expression<'a>(i: &'a str) -> IResult<&'a str, ast::CaseWhenExpress
     ))
 }
 
-fn string_literal_interior<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+fn string_literal_interior(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     escaped(none_of("\""), '\\', one_of("\"n\\"))(i)
 }
 
-fn string_literal<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+fn string_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     context(
         "string",
         map(
@@ -103,11 +103,11 @@ where
     }
 }
 
-fn column_name<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+fn column_name(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     terminated(identifier, not(char('(')))(i)
 }
 
-fn boolean<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+fn boolean(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     alt((
         map(tag("true"), |_| ast::Value::Boolean(true)),
         map(tag("false"), |_| ast::Value::Boolean(false)),
@@ -118,7 +118,7 @@ fn float(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     map(complete::float, |f| ast::Value::Float(OrderedFloat::from(f)))(i)
 }
 
-fn integral<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+fn integral(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     alt((
         map_res(terminated(digit1, not(char('.'))), |digit_str: &str| {
             digit_str.parse::<i32>().map(ast::Value::Integral)
@@ -130,22 +130,22 @@ fn integral<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str
     ))(i)
 }
 
-fn value<'a>(i: &'a str) -> IResult<&'a str, ast::Value, VerboseError<&'a str>> {
+fn value(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     alt((integral, float, boolean, string_literal))(i)
 }
 
-fn parens<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+fn parens(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     delimited(space0, delimited(tag("("), expression, tag(")")), space0)(i)
 }
 
-fn order_by_clause_for_within_group<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, VerboseError<&'a str>> {
+fn order_by_clause_for_within_group(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseError<&str>> {
     map(
         preceded(tuple((tag("order"), space1, tag("by"), space1)), ordering_term),
         |item| ast::OrderByExpression::new(vec![item]),
     )(i)
 }
 
-fn within_group_clause<'a>(i: &'a str) -> IResult<&'a str, ast::WithinGroupClause, VerboseError<&'a str>> {
+fn within_group_clause(i: &str) -> IResult<&str, ast::WithinGroupClause, VerboseError<&str>> {
     map(
         preceded(
             tuple((space1, tag("within"), space1, tag("group"), space1)),
@@ -155,7 +155,7 @@ fn within_group_clause<'a>(i: &'a str) -> IResult<&'a str, ast::WithinGroupClaus
     )(i)
 }
 
-fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+fn func_call(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     map(
         tuple((
             identifier,
@@ -172,7 +172,7 @@ fn func_call<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&
     )(i)
 }
 
-fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+fn factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     delimited(
         space0,
         alt((
@@ -185,7 +185,7 @@ fn factor<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a 
     )(i)
 }
 
-fn expression_term_opt_not<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+fn expression_term_opt_not(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     map(
         pair(opt(tuple((space1, tag("not"), space1))), factor),
         |(opt_not, factor)| {
@@ -198,7 +198,7 @@ fn expression_term_opt_not<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, 
     )(i)
 }
 
-fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+fn expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     let mut precedence_table: HashMap<String, (u32, bool)> = HashMap::new();
     precedence_table.insert("*".to_string(), (7, true));
     precedence_table.insert("/".to_string(), (7, true));
@@ -217,7 +217,7 @@ fn expression<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<
     Ok((i1, expr))
 }
 
-fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, VerboseError<&'a str>> {
+fn select_expression(i: &str) -> IResult<&str, ast::SelectExpression, VerboseError<&str>> {
     preceded(
         space0,
         alt((
@@ -233,18 +233,18 @@ fn select_expression<'a>(i: &'a str) -> IResult<&'a str, ast::SelectExpression, 
     )(i)
 }
 
-fn select_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::SelectExpression>, VerboseError<&'a str>> {
+fn select_expression_list(i: &str) -> IResult<&str, Vec<ast::SelectExpression>, VerboseError<&str>> {
     context(
         "select_expression_list",
         terminated(separated_list0(preceded(space0, char(',')), select_expression), space0),
     )(i)
 }
 
-fn where_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, VerboseError<&'a str>> {
+fn where_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
     map(preceded(tag("where"), expression), ast::WhereExpression::new)(i)
 }
 
-fn column_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::ColumnName>, VerboseError<&'a str>> {
+fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::ColumnName>, VerboseError<&str>> {
     context(
         "column_expression_list",
         map(
@@ -257,32 +257,32 @@ fn column_expression_list<'a>(i: &'a str) -> IResult<&'a str, Vec<ast::ColumnNam
     )(i)
 }
 
-fn having_expression<'a>(i: &'a str) -> IResult<&'a str, ast::WhereExpression, VerboseError<&'a str>> {
+fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
     map(preceded(tag("having"), expression), ast::WhereExpression::new)(i)
 }
 
-fn group_by_expression<'a>(i: &'a str) -> IResult<&'a str, ast::GroupByExpression, VerboseError<&'a str>> {
+fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, VerboseError<&str>> {
     map(
         preceded(tuple((tag("group"), space1, tag("by"), space1)), column_expression_list),
         ast::GroupByExpression::new,
     )(i)
 }
 
-fn limit_expression<'a>(i: &'a str) -> IResult<&'a str, ast::LimitExpression, VerboseError<&'a str>> {
+fn limit_expression(i: &str) -> IResult<&str, ast::LimitExpression, VerboseError<&str>> {
     map(preceded(tuple((tag("limit"), space1)), digit1), |s: &str| {
         let v = s.parse::<u32>().unwrap();
         ast::LimitExpression::new(v)
     })(i)
 }
 
-fn ordering_term<'a>(i: &'a str) -> IResult<&'a str, ast::OrderingTerm, VerboseError<&'a str>> {
+fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, VerboseError<&str>> {
     map(
         pair(column_name, preceded(space1, alt((tag("asc"), tag("desc"))))),
         |(column_name, ordering)| ast::OrderingTerm::new(column_name, ordering),
     )(i)
 }
 
-fn order_by_clause<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, VerboseError<&'a str>> {
+fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseError<&str>> {
     map(
         preceded(
             tuple((tag("order"), space1, tag("by"), space1)),
@@ -292,18 +292,18 @@ fn order_by_clause<'a>(i: &'a str) -> IResult<&'a str, ast::OrderByExpression, V
     )(i)
 }
 
-fn from_clause<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+fn from_clause(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     terminated(preceded(tuple((tag("from"), space1)), identifier), space0)(i)
 }
 
-fn parse_expression_atom<'a>(i: &'a str) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     alt((
         map(case_when_expression, |n| ast::Expression::CaseWhenExpression(n)),
         expression_term_opt_not,
     ))(i)
 }
 
-fn parse_expression_op<'a>(i: &'a str) -> IResult<&'a str, &'a str, VerboseError<&'a str>> {
+fn parse_expression_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     alt((
         tag("+"),
         tag("-"),
@@ -348,7 +348,7 @@ fn parse_expression_at_precedence<'a>(
     Ok((i1, expr))
 }
 
-pub(crate) fn select_query<'a>(i: &'a str) -> IResult<&'a str, ast::SelectStatement, VerboseError<&'a str>> {
+pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, VerboseError<&str>> {
     map(
         preceded(
             tag("select"),
