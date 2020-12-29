@@ -1,10 +1,10 @@
 use super::stream::Record;
 use crate::common;
 use crate::common::types::{Value, VariableName};
+use json;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use url;
-use json;
 
 use std::fmt;
 use std::fs::File;
@@ -712,7 +712,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 S3Field::field_names()
             } else {
                 SquidLogField::field_names()
-            } ;
+            };
 
             //FIXME: parse to the more specific
             let mut values: Vec<Value> = Vec::new();
@@ -793,39 +793,34 @@ impl<R: io::Read> RecordRead for Reader<R> {
             match parsed {
                 json::JsonValue::Object(o) => {
                     let field_names = o.iter().map(|(k, _)| k.to_string() as VariableName).collect();
-                    let values = o.iter().map(|(_, v)| {
-                        match v {
-                            json::JsonValue::Boolean(b) => {
-                                Value::Boolean(*b)
-                            },
-                            json::JsonValue::String(s) => {
-                                Value::String(s.clone())
-                            },
-                            json::JsonValue::Short(s) => {
-                                Value::String(s.as_str().to_string())
-                            },
-                            json::JsonValue::Number(n) => {
-                                //TODO: the float case
-                                if let Some(i) = n.as_fixed_point_i64(2) {
-                                    if i % 100 == 0 {
-                                        Value::Int((i as i32) / 100)
+                    let values = o
+                        .iter()
+                        .map(|(_, v)| {
+                            match v {
+                                json::JsonValue::Boolean(b) => Value::Boolean(*b),
+                                json::JsonValue::String(s) => Value::String(s.clone()),
+                                json::JsonValue::Short(s) => Value::String(s.as_str().to_string()),
+                                json::JsonValue::Number(n) => {
+                                    //TODO: the float case
+                                    if let Some(i) = n.as_fixed_point_i64(2) {
+                                        if i % 100 == 0 {
+                                            Value::Int((i as i32) / 100)
+                                        } else {
+                                            let f: f32 = (i as f32) / 100.0;
+                                            Value::Float(OrderedFloat::from(f))
+                                        }
                                     } else {
-                                        let f: f32 = (i as f32) / 100.0;
-                                        Value::Float(OrderedFloat::from(f))
+                                        Value::Missing
                                     }
-                                } else {
+                                }
+                                json::JsonValue::Null => Value::Null,
+                                _ => {
+                                    //TODO: handle the nested object when we're ready for partiQL
                                     Value::Missing
                                 }
-                            },
-                            json::JsonValue::Null => {
-                                Value::Null
-                            },
-                            _ => {
-                                //TODO: handle the nested object when we're ready for partiQL
-                                Value::Missing
                             }
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     let record = Record::new(&field_names, values);
                     Ok(Some(record))
                 }

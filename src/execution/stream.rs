@@ -60,7 +60,7 @@ impl Record {
                 Value::DateTime(dt) => Cell::new(&*dt.to_string()),
                 Value::HttpRequest(request) => Cell::new(&*request.to_string()),
                 Value::Host(host) => Cell::new(&*host.to_string()),
-                Value::Missing => Cell::new("<null>")
+                Value::Missing => Cell::new("<null>"),
             })
             .collect()
     }
@@ -77,7 +77,7 @@ impl Record {
                 Value::DateTime(dt) => dt.to_string(),
                 Value::HttpRequest(request) => request.to_string(),
                 Value::Host(host) => host.to_string(),
-                Value::Missing => "<null>".to_string()
+                Value::Missing => "<null>".to_string(),
             })
             .collect()
     }
