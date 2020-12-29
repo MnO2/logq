@@ -14,6 +14,7 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
+use crate::syntax::ast::TableReference;
 use hashbrown::hash_map::HashMap;
 
 lazy_static! {
@@ -257,6 +258,43 @@ fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::ColumnName>, Verbos
     )(i)
 }
 
+fn qualified_table_name(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
+    map(terminated(separated_list0(char('.'), identifier), space0), |v| {
+        v.iter().map(|s| s.to_string()).collect()
+    })(i)
+}
+
+fn table_name(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
+    terminated(qualified_table_name, not(char('(')))(i)
+}
+
+fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&str>> {
+    map(
+        tuple((
+            table_name,
+            opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
+            opt(preceded(tuple((space0, tag("at"), space1)), identifier)),
+        )),
+        |(table_name, as_clasue, at_clause)| {
+            ast::TableReference::new(
+                table_name,
+                as_clasue.map(|s| s.to_string()),
+                at_clause.map(|s| s.to_string()),
+            )
+        },
+    )(i)
+}
+
+fn table_reference_list(i: &str) -> IResult<&str, Vec<ast::TableReference>, VerboseError<&str>> {
+    context(
+        "table_reference_list",
+        terminated(
+            separated_list0(preceded(space0, char(',')), preceded(space0, table_reference)),
+            space0,
+        ),
+    )(i)
+}
+
 fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
     map(preceded(tag("having"), expression), ast::WhereExpression::new)(i)
 }
@@ -292,8 +330,8 @@ fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseErro
     )(i)
 }
 
-fn from_clause(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
-    terminated(preceded(tuple((tag("from"), space1)), identifier), space0)(i)
+fn from_clause(i: &str) -> IResult<&str, Vec<TableReference>, VerboseError<&str>> {
+    terminated(preceded(tuple((tag("from"), space1)), table_reference_list), space0)(i)
 }
 
 fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
@@ -362,10 +400,10 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
                 opt(limit_expression),
             )),
         ),
-        |(select_exprs, table_name, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)| {
+        |(select_exprs, table_references, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)| {
             ast::SelectStatement::new(
                 select_exprs,
-                table_name,
+                table_references,
                 where_expr,
                 group_by_expr,
                 having_expr,
@@ -612,9 +650,18 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None, None);
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let ans = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            Some(where_expr),
+            None,
+            None,
+            None,
+            None,
+        );
 
-        assert_eq!(select_query("select a, b, c from elb where a = 1"), Ok(("", ans)));
+        assert_eq!(select_query("select a, b, c from it where a = 1"), Ok(("", ans)));
         let select_exprs = vec![
             ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
@@ -635,9 +682,10 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
-            "elb",
+            vec![table_reference],
             Some(where_expr),
             Some(group_by_expr),
             Some(having_expr),
@@ -646,7 +694,7 @@ mod test {
         );
 
         assert_eq!(
-            select_query("select a, b, c from elb where a = 1 group by a, b having c > 1"),
+            select_query("select a, b, c from it where a = 1 group by a, b having c > 1"),
             Ok(("", ans))
         );
     }
@@ -722,10 +770,19 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let ans = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None, None);
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let ans = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            Some(where_expr),
+            None,
+            None,
+            None,
+            None,
+        );
 
         assert_eq!(
-            select_query("select a, avg(b)   , c from elb where a = 1"),
+            select_query("select a, avg(b)   , c from it where a = 1"),
             Ok(("", ans))
         );
     }
@@ -739,9 +796,18 @@ mod test {
         ];
 
         let limit_expr = ast::LimitExpression::new(1);
-        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None, Some(limit_expr));
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let ans = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            None,
+            None,
+            None,
+            None,
+            Some(limit_expr),
+        );
 
-        assert_eq!(select_query("select a, b, c from elb limit 1"), Ok(("", ans)));
+        assert_eq!(select_query("select a, b, c from it limit 1"), Ok(("", ans)));
     }
 
     #[test]
@@ -753,9 +819,18 @@ mod test {
         ];
 
         let order_by_clause = ast::OrderByExpression::new(vec![ast::OrderingTerm::new("a", "asc")]);
-        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, None, Some(order_by_clause), None);
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let ans = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            None,
+            None,
+            None,
+            Some(order_by_clause),
+            None,
+        );
 
-        assert_eq!(select_query("select a, b, c from elb order by a asc"), Ok(("", ans)));
+        assert_eq!(select_query("select a, b, c from it order by a asc"), Ok(("", ans)));
     }
 
     #[test]
@@ -779,10 +854,19 @@ mod test {
         ];
 
         let group_by_expr = ast::GroupByExpression::new(vec!["a".to_string(), "c".to_string()]);
-        let ans = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None, None);
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let ans = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            None,
+            Some(group_by_expr),
+            None,
+            None,
+            None,
+        );
 
         assert_eq!(
-            select_query("select a, c, percentile_disc(0.9) within group (order by b asc) from elb group by a, c "),
+            select_query("select a, c, percentile_disc(0.9) within group (order by b asc) from it group by a, c "),
             Ok(("", ans))
         );
     }
@@ -815,9 +899,10 @@ mod test {
             ),
         ];
 
-        let ans = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None, None);
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let ans = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
         assert_eq!(
-            select_query("select a as aa, foo( b ) as bb, 1+1 as cc from elb"),
+            select_query("select a as aa, foo( b ) as bb, 1+1 as cc from it"),
             Ok(("", ans))
         );
     }
@@ -825,15 +910,15 @@ mod test {
     #[test]
     fn test_select_stmt_error() {
         assert_eq!(
-            select_query("select select from elb"),
+            select_query("select select from it"),
             Err(nom::Err::Failure(VerboseError {
                 errors: vec![
                     (
-                        " from elb",
+                        " from it",
                         nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha)
                     ),
                     (
-                        " select from elb",
+                        " select from it",
                         nom::error::VerboseErrorKind::Context("select_expression_list")
                     )
                 ]
@@ -841,7 +926,7 @@ mod test {
         );
 
         assert_eq!(
-            select_query("select * from elb where limit 1"),
+            select_query("select * from it where limit 1"),
             Err(nom::Err::Failure(VerboseError {
                 errors: vec![(" 1", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
             }))

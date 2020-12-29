@@ -6,7 +6,7 @@ use std::str::FromStr;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
     pub(crate) select_exprs: Vec<SelectExpression>,
-    pub(crate) table_name: String,
+    pub(crate) table_references: Vec<TableReference>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
     pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
     pub(crate) having_expr_opt: Option<WhereExpression>,
@@ -17,7 +17,7 @@ pub(crate) struct SelectStatement {
 impl SelectStatement {
     pub fn new(
         select_exprs: Vec<SelectExpression>,
-        table_name: &str,
+        table_references: Vec<TableReference>,
         where_expr_opt: Option<WhereExpression>,
         group_by_exprs_opt: Option<GroupByExpression>,
         having_expr_opt: Option<WhereExpression>,
@@ -26,7 +26,7 @@ impl SelectStatement {
     ) -> Self {
         SelectStatement {
             select_exprs,
-            table_name: table_name.to_string(),
+            table_references: table_references,
             where_expr_opt,
             group_by_exprs_opt,
             having_expr_opt,
@@ -46,6 +46,23 @@ impl fmt::Display for SelectStatement {
             })
             .collect();
         write!(f, "{:?}", select_exprs_str)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct TableReference {
+    pub(crate) table_name: Vec<String>,
+    pub(crate) as_clause: Option<String>,
+    pub(crate) at_clause: Option<String>,
+}
+
+impl TableReference {
+    pub fn new(table_name: Vec<String>, as_clause: Option<String>, at_clause: Option<String>) -> Self {
+        TableReference {
+            table_name,
+            as_clause,
+            at_clause,
+        }
     }
 }
 

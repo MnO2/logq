@@ -321,7 +321,16 @@ fn check_conflict_naming(named_list: &[types::Named]) -> bool {
 }
 
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
-    let mut root = types::Node::DataSource(data_source, query.table_name.clone());
+    //TODO: support multiple tables
+    let table_reference = query.table_references.last().unwrap().clone();
+    let table_name: String = table_reference.table_name.last().unwrap().clone();
+
+    let file_format = match &data_source {
+        common::DataSource::File(_, file_format) => file_format.clone(),
+        common::DataSource::Stdin(file_format) => file_format.clone(),
+    };
+
+    let mut root = types::Node::DataSource(data_source, table_name);
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -410,7 +419,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         if let Some(group_by) = query.group_by_exprs_opt {
             let fields = group_by.exprs.clone();
 
-            if !is_match_group_by_fields(&fields, &non_aggregates, &query.table_name) {
+            if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
             }
 
@@ -459,7 +468,11 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     Ok(root)
 }
 
-fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[types::Named], table_name: &str) -> bool {
+fn is_match_group_by_fields(
+    variables: &[common::VariableName],
+    named_list: &[types::Named],
+    file_format: &str,
+) -> bool {
     let mut a: Vec<String> = variables.to_vec();
     let mut b: Vec<String> = Vec::new();
 
@@ -480,20 +493,20 @@ fn is_match_group_by_fields(variables: &[common::VariableName], named_list: &[ty
                 }
             }
             types::Named::Star => {
-                if table_name == "elb" {
+                if file_format == "elb" {
                     for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
                         b.push(field_name.clone());
                     }
-                } else if table_name == "alb" {
+                } else if file_format == "alb" {
                     for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().into_iter()
                     {
                         b.push(field_name.clone());
                     }
-                } else if table_name == "squid" {
+                } else if file_format == "squid" {
                     for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
                         b.push(field_name.clone());
                     }
-                } else if table_name == "s3" {
+                } else if file_format == "s3" {
                     for field_name in execution::datasource::S3Field::field_names().into_iter() {
                         b.push(field_name.clone());
                     }
@@ -642,8 +655,17 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", Some(where_expr), None, None, None, None);
-        let data_source = common::DataSource::Stdin;
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let before = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            Some(where_expr),
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string());
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
@@ -658,7 +680,10 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(types::Node::DataSource(common::DataSource::Stdin, "elb".to_string())),
+                Box::new(types::Node::DataSource(
+                    common::DataSource::Stdin("jsonl".to_string()),
+                    "it".to_string(),
+                )),
             )),
         );
 
@@ -689,17 +714,17 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
-
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
-            "elb",
+            vec![table_reference],
             Some(where_expr),
             Some(group_by_expr),
             None,
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin;
+        let data_source = common::DataSource::Stdin("jsonl".to_string());
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
@@ -714,7 +739,10 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(types::Node::DataSource(common::DataSource::Stdin, "elb".to_string())),
+                Box::new(types::Node::DataSource(
+                    common::DataSource::Stdin("jsonl".to_string()),
+                    "it".to_string(),
+                )),
             )),
         );
 
@@ -746,17 +774,17 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
-
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
-            "elb",
+            vec![table_reference],
             Some(where_expr),
             Some(group_by_expr),
             None,
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin;
+        let data_source = common::DataSource::Stdin("jsonl".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByWithoutAggregateFunction);
         assert_eq!(expected, ans);
@@ -781,9 +809,17 @@ mod test {
         ];
 
         let group_by_expr = ast::GroupByExpression::new(vec!["b".to_string()]);
-
-        let before = ast::SelectStatement::new(select_exprs, "elb", None, Some(group_by_expr), None, None, None);
-        let data_source = common::DataSource::Stdin;
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let before = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            None,
+            Some(group_by_expr),
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
@@ -802,8 +838,9 @@ mod test {
             ),
         ];
 
-        let before = ast::SelectStatement::new(select_exprs, "elb", None, None, None, None, None);
-        let data_source = common::DataSource::Stdin;
+        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let before = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
+        let data_source = common::DataSource::Stdin("jsonl".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::ConflictVariableNaming);
         assert_eq!(expected, ans);

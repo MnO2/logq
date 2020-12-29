@@ -539,7 +539,7 @@ mod test {
             Box::new(Formula::Constant(true)),
             Box::new(Formula::Constant(false)),
         );
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
         let (physical_formula, variables) = formula.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Formula::And(
             Box::new(execution::Formula::Constant(true)),
@@ -555,7 +555,7 @@ mod test {
     #[test]
     fn test_expression_gen_physical() {
         let expr = Expression::Constant(common::Value::Int(1));
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Expression::Variable("const_000000000".to_string());
 
@@ -580,11 +580,14 @@ mod test {
                     Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(Node::DataSource(DataSource::Stdin, "elb".to_string())),
+                Box::new(Node::DataSource(
+                    DataSource::Stdin("jsonl".to_string()),
+                    "elb".to_string(),
+                )),
             )),
         );
 
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
         let (physical_formula, variables) = filter.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -598,7 +601,10 @@ mod test {
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
-            Box::new(execution::Node::DataSource(DataSource::Stdin, "elb".to_string())),
+            Box::new(execution::Node::DataSource(
+                DataSource::Stdin("jsonl".to_string()),
+                "elb".to_string(),
+            )),
         );
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
@@ -625,7 +631,10 @@ mod test {
                     Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
-                Box::new(Node::DataSource(DataSource::Stdin, "elb".to_string())),
+                Box::new(Node::DataSource(
+                    DataSource::Stdin("jsonl".to_string()),
+                    "elb".to_string(),
+                )),
             )),
         );
 
@@ -649,7 +658,7 @@ mod test {
         let fields = vec!["b".to_string()];
         let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin);
+        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
         let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -663,7 +672,10 @@ mod test {
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
-            Box::new(execution::Node::DataSource(DataSource::Stdin, "elb".to_string())),
+            Box::new(execution::Node::DataSource(
+                DataSource::Stdin("jsonl".to_string()),
+                "elb".to_string(),
+            )),
         );
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));

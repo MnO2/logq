@@ -650,7 +650,7 @@ impl Node {
 
                     Ok(Box::new(stream))
                 }
-                DataSource::Stdin => {
+                DataSource::Stdin(_) => {
                     let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin());
                     let stream = LogFileStream {
                         reader: Box::new(reader),
