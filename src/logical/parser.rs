@@ -697,7 +697,68 @@ mod test {
     }
 
     #[test]
-    fn test_parse_query_with_simple_select_where() {
+    fn test_parse_query_with_simple_select_where_with_bindings() {
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+        ];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+        ));
+
+        let path_expr = PathExpr::new(vec![
+            PathSegment::AttrName("it".to_string()),
+            PathSegment::AttrName("a".to_string()),
+        ]);
+
+        let table_reference = ast::TableReference::new(path_expr, Some("e".to_string()), None);
+        let before = ast::SelectStatement::new(
+            select_exprs,
+            vec![table_reference],
+            Some(where_expr),
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+
+        let filtered_formula = Box::new(types::Formula::Predicate(
+            types::Relation::Equal,
+            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::Constant(common::Value::Int(1))),
+        ));
+
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
+
+        let expected = types::Node::Filter(
+            filtered_formula,
+            Box::new(types::Node::Map(
+                vec![
+                    types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
+                    types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
+                ],
+                Box::new(types::Node::DataSource(
+                    common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    Some(binding),
+                )),
+            )),
+        );
+
+        let ans = parse_query(before, data_source).unwrap();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query_with_simple_select_where_no_from_clause_bindings() {
         let select_exprs = vec![
             ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
             ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
@@ -727,12 +788,6 @@ mod test {
             Box::new(types::Expression::Variable("a".to_string())),
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
-
-        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
-        let _binding = common::Binding {
-            path_expr,
-            name: "e".to_string(),
-        };
 
         let expected = types::Node::Filter(
             filtered_formula,
