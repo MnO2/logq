@@ -63,9 +63,7 @@ pub(crate) struct PathExpr {
 
 impl PathExpr {
     pub fn new(path_segments: Vec<PathSegment>) -> Self {
-        PathExpr {
-            path_segments,
-        }
+        PathExpr { path_segments }
     }
 }
 

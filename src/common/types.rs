@@ -1,4 +1,5 @@
 use crate::common;
+use crate::syntax::ast;
 use chrono;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
@@ -299,9 +300,21 @@ pub(crate) fn merge(left: &Variables, right: &Variables) -> Variables {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Binding {
+    pub(crate) path_expr: ast::PathExpr,
+    pub(crate) name: String,
+}
+
+impl Binding {
+    fn new(path_expr: ast::PathExpr, name: String) -> Binding {
+        Binding { path_expr, name }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DataSource {
-    File(PathBuf, String),
-    Stdin(String),
+    File(PathBuf, String, String),
+    Stdin(String, String),
 }
 
 #[cfg(test)]

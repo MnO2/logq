@@ -56,12 +56,13 @@ fn main() {
                             Err(AppError::InvalidLogFileFormat)
                         } else {
                             if file_path == "stdin" {
-                                let data_source = common::types::DataSource::Stdin(file_format);
-                                app::run(&*lower_case_query_str, data_source, table_name, output_mode)
+                                let data_source = common::types::DataSource::Stdin(file_format, table_name);
+                                app::run(&*lower_case_query_str, data_source, output_mode)
                             } else {
                                 let path = Path::new(&file_path);
-                                let data_source = common::types::DataSource::File(path.to_path_buf(), file_format);
-                                app::run(&*lower_case_query_str, data_source, table_name, output_mode)
+                                let data_source =
+                                    common::types::DataSource::File(path.to_path_buf(), file_format, table_name);
+                                app::run(&*lower_case_query_str, data_source, output_mode)
                             }
                         }
                     } else {
@@ -81,7 +82,7 @@ fn main() {
         ("explain", Some(sub_m)) => {
             if let Some(query_str) = sub_m.value_of("query") {
                 let lower_case_query_str = query_str.to_ascii_lowercase();
-                let data_source = common::types::DataSource::Stdin("jsonl".to_string());
+                let data_source = common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string());
                 let result = app::explain(&*lower_case_query_str, data_source);
 
                 if let Err(e) = result {

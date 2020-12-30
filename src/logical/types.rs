@@ -1,9 +1,9 @@
 use crate::common::types as common;
 use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
+use crate::syntax::ast::{PathExpr, PathSegment};
 use ordered_float::OrderedFloat;
 use std::result;
-use crate::syntax::ast::{PathSegment, PathExpr};
 
 pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
 
@@ -16,7 +16,7 @@ pub enum PhysicalPlanError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(DataSource, PathExpr),
+    DataSource(DataSource, Option<common::Binding>),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
@@ -30,8 +30,8 @@ impl Node {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
         match self {
-            Node::DataSource(data_source, path_expr) => {
-                let node = execution::Node::DataSource(data_source.clone(), path_expr.clone());
+            Node::DataSource(data_source, binding) => {
+                let node = execution::Node::DataSource(data_source.clone(), binding.clone());
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
@@ -540,7 +540,8 @@ mod test {
             Box::new(Formula::Constant(true)),
             Box::new(Formula::Constant(false)),
         );
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
+        let mut physical_plan_creator =
+            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
         let (physical_formula, variables) = formula.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Formula::And(
             Box::new(execution::Formula::Constant(true)),
@@ -556,7 +557,8 @@ mod test {
     #[test]
     fn test_expression_gen_physical() {
         let expr = Expression::Constant(common::Value::Int(1));
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
+        let mut physical_plan_creator =
+            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Expression::Variable("const_000000000".to_string());
 
@@ -575,6 +577,11 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
+
         let filter = Node::Filter(
             Box::new(filtered_formula),
             Box::new(Node::Map(
@@ -583,13 +590,14 @@ mod test {
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(Node::DataSource(
-                    DataSource::Stdin("jsonl".to_string()),
-                    path_expr,
+                    DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    None,
                 )),
             )),
         );
 
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
+        let mut physical_plan_creator =
+            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
         let (physical_formula, variables) = filter.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -599,14 +607,18 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
         let expected_source = execution::Node::Map(
             vec![
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
             Box::new(execution::Node::DataSource(
-                DataSource::Stdin("jsonl".to_string()),
-                path_expr,
+                DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                None,
             )),
         );
 
@@ -628,6 +640,10 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
         let filter = Node::Filter(
             Box::new(filtered_formula),
             Box::new(Node::Map(
@@ -636,8 +652,8 @@ mod test {
                     Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(Node::DataSource(
-                    DataSource::Stdin("jsonl".to_string()),
-                    path_expr,
+                    DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    None,
                 )),
             )),
         );
@@ -662,7 +678,8 @@ mod test {
         let fields = vec!["b".to_string()];
         let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
-        let mut physical_plan_creator = PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string()));
+        let mut physical_plan_creator =
+            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
         let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -672,14 +689,19 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
+
         let expected_source = execution::Node::Map(
             vec![
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
                 execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
             ],
             Box::new(execution::Node::DataSource(
-                DataSource::Stdin("jsonl".to_string()),
-                path_expr,
+                DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                None,
             )),
         );
 

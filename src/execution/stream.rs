@@ -30,6 +30,10 @@ impl Record {
         None
     }
 
+    pub(crate) fn project(&self, binding: &common::types::Binding) -> Record {
+        unimplemented!()
+    }
+
     pub(crate) fn get_many(&self, field_names: &[VariableName]) -> Vec<Value> {
         let mut ret = Vec::with_capacity(field_names.len());
         for name in field_names {
@@ -415,6 +419,24 @@ impl RecordStream for GroupByStream {
     fn close(&self) {
         self.source.close();
     }
+}
+
+pub(crate) struct ProjectionStream {
+    pub(crate) source: Box<dyn RecordStream>,
+    pub(crate) binding: common::types::Binding,
+}
+
+impl RecordStream for ProjectionStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        // if let Some(record) = self.source.read_record()? {
+        //     let variables: Variables = record.to_variables();
+        //
+        // } else {
+        Ok(None)
+        //}
+    }
+
+    fn close(&self) {}
 }
 
 pub(crate) struct LogFileStream {

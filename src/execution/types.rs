@@ -2,6 +2,7 @@ use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
+use crate::execution::stream::ProjectionStream;
 use chrono::Timelike;
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
@@ -10,7 +11,6 @@ use std::collections::VecDeque;
 use std::io;
 use std::result;
 use tdigest::TDigest;
-use crate::syntax::ast;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
@@ -619,7 +619,7 @@ impl Formula {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(DataSource, ast::PathExpr),
+    DataSource(DataSource, Option<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
@@ -642,16 +642,25 @@ impl Node {
 
                 Ok(Box::new(stream))
             }
-            Node::DataSource(data_source, path_expr) => match data_source {
-                DataSource::File(path, file_format) => {
+            Node::DataSource(data_source, opt_binding) => match data_source {
+                DataSource::File(path, file_format, _table_name) => {
                     let reader = ReaderBuilder::new(file_format.clone()).with_path(path)?;
-                    let stream = LogFileStream {
+                    let file_stream = LogFileStream {
                         reader: Box::new(reader),
                     };
 
-                    Ok(Box::new(stream))
+                    if let Some(binding) = opt_binding {
+                        let stream = ProjectionStream {
+                            source: Box::new(file_stream),
+                            binding: binding.clone(),
+                        };
+
+                        return Ok(Box::new(stream));
+                    } else {
+                        Ok(Box::new(file_stream))
+                    }
                 }
-                DataSource::Stdin(file_format) => {
+                DataSource::Stdin(file_format, table_name) => {
                     let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin());
                     let stream = LogFileStream {
                         reader: Box::new(reader),

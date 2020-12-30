@@ -3,8 +3,8 @@ use crate::common::types as common;
 use crate::common::types::VariableName;
 use crate::execution;
 use crate::syntax::ast;
+use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
 use std::collections::hash_set::HashSet;
-use crate::syntax::ast::{PathExpr};
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -24,6 +24,8 @@ pub enum ParseError {
     UnknownFunction(String),
     #[fail(display = "Having clause but no Group By clause provided")]
     HavingClauseWithoutGroupBy,
+    #[fail(display = "Invalid table reference in From Clause")]
+    FromClausePathInvalidTableReference,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -322,17 +324,60 @@ fn check_conflict_naming(named_list: &[types::Named]) -> bool {
     false
 }
 
+fn check_env(table_name: String, table_reference: &TableReference) -> bool {
+    let path_expr = &table_reference.path_expr;
+
+    if path_expr.path_segments.is_empty() {
+        return false;
+    }
+
+    if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
+        return false;
+    }
+
+    match path_expr.path_segments[0] {
+        PathSegment::AttrName(ref s) => {
+            return s.eq(&table_name);
+        }
+        _ => {
+            return false;
+        }
+    }
+}
+
+fn to_binding(table_reference: &TableReference) -> Option<common::Binding> {
+    let path_expr = PathExpr::new(
+        table_reference
+            .path_expr
+            .path_segments
+            .iter()
+            .skip(1)
+            .cloned()
+            .collect(),
+    );
+    if let Some(name) = table_reference.as_clause.clone() {
+        Some(common::Binding { path_expr, name })
+    } else {
+        None
+    }
+}
+
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     //TODO: support multiple tables
-    let table_reference = query.table_references.last().unwrap().clone();
-    let path_expr: PathExpr = table_reference.path_expr.clone();
+    let table_reference = query.table_references.last().unwrap();
 
-    let file_format = match &data_source {
-        common::DataSource::File(_, file_format) => file_format.clone(),
-        common::DataSource::Stdin(file_format) => file_format.clone(),
+    let (file_format, table_name) = match &data_source {
+        common::DataSource::File(_, file_format, table_name) => (file_format.clone(), table_name.clone()),
+        common::DataSource::Stdin(file_format, table_name) => (file_format.clone(), table_name.clone()),
     };
 
-    let mut root = types::Node::DataSource(data_source, path_expr);
+    if !check_env(table_name, table_reference) {
+        return Err(ParseError::FromClausePathInvalidTableReference);
+    }
+
+    let binding = to_binding(table_reference);
+
+    let mut root = types::Node::DataSource(data_source, binding);
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -673,7 +718,7 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin("jsonl".to_string());
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
@@ -682,6 +727,11 @@ mod test {
         ));
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
+
         let expected = types::Node::Filter(
             filtered_formula,
             Box::new(types::Node::Map(
@@ -690,8 +740,8 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(
-                    common::DataSource::Stdin("jsonl".to_string()),
-                    path_expr,
+                    common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    None,
                 )),
             )),
         );
@@ -735,7 +785,7 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin("jsonl".to_string());
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
@@ -744,6 +794,11 @@ mod test {
         ));
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let binding = common::Binding {
+            path_expr,
+            name: "e".to_string(),
+        };
+
         let filter = types::Node::Filter(
             filtered_formula,
             Box::new(types::Node::Map(
@@ -752,8 +807,8 @@ mod test {
                     types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(
-                    common::DataSource::Stdin("jsonl".to_string()),
-                    path_expr,
+                    common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    None,
                 )),
             )),
         );
@@ -799,7 +854,7 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin("jsonl".to_string());
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByWithoutAggregateFunction);
         assert_eq!(expected, ans);
@@ -836,7 +891,7 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin("jsonl".to_string());
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
@@ -858,7 +913,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
-        let data_source = common::DataSource::Stdin("jsonl".to_string());
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::ConflictVariableNaming);
         assert_eq!(expected, ans);

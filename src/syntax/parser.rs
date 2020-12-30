@@ -14,7 +14,7 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
-use crate::syntax::ast::{TableReference, PathExpr, PathSegment};
+use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
 use hashbrown::hash_map::HashMap;
 
 lazy_static! {
@@ -283,20 +283,26 @@ fn path_bracket(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
 }
 
 fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
-    map(terminated(separated_list0(char('.'), pair(identifier, opt(path_bracket))), space0),
-        |v| { let segments = v.iter().map(|(attr_name, opt_array_idx)| {
-            if let Some(array_idx) = opt_array_idx {
-                match array_idx {
-                    ast::Value::Integral(i) => {
-                        PathSegment::ArrayIndex(attr_name.to_string(), *i)
-                    },
-                    _ => { unreachable!() }
-                }
-            } else {
-                PathSegment::AttrName(attr_name.to_string())
-            }
-        }).collect();
-        PathExpr::new(segments) }
+    map(
+        terminated(separated_list0(char('.'), pair(identifier, opt(path_bracket))), space0),
+        |v| {
+            let segments = v
+                .iter()
+                .map(|(attr_name, opt_array_idx)| {
+                    if let Some(array_idx) = opt_array_idx {
+                        match array_idx {
+                            ast::Value::Integral(i) => PathSegment::ArrayIndex(attr_name.to_string(), *i),
+                            _ => {
+                                unreachable!()
+                            }
+                        }
+                    } else {
+                        PathSegment::AttrName(attr_name.to_string())
+                    }
+                })
+                .collect();
+            PathExpr::new(segments)
+        },
     )(i)
 }
 
@@ -1042,13 +1048,12 @@ mod test {
     #[test]
     fn test_path_expr() {
         let (_, ans) = path_expr("a.b.c[0].d").unwrap();
-        let path_segments =
-            vec![
-                ast::PathSegment::AttrName("a".to_string()),
-                ast::PathSegment::AttrName("b".to_string()),
-                ast::PathSegment::ArrayIndex("c".to_string(), 0),
-                ast::PathSegment::AttrName("d".to_string()),
-            ];
+        let path_segments = vec![
+            ast::PathSegment::AttrName("a".to_string()),
+            ast::PathSegment::AttrName("b".to_string()),
+            ast::PathSegment::ArrayIndex("c".to_string(), 0),
+            ast::PathSegment::AttrName("d".to_string()),
+        ];
         let expected = ast::PathExpr::new(path_segments);
         assert_eq!(expected, ans);
     }

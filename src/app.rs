@@ -151,12 +151,7 @@ pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -
     Ok(())
 }
 
-pub(crate) fn run(
-    query_str: &str,
-    data_source: common::types::DataSource,
-    _table_name: String,
-    output_mode: OutputMode,
-) -> AppResult<()> {
+pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, output_mode: OutputMode) -> AppResult<()> {
     let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -246,8 +241,8 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
 
-        let data_source = common::types::DataSource::File(file_path, file_format.clone());
-        let result = run(&*query_str, data_source, table_name, OutputMode::Csv);
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let result = run(&*query_str, data_source, OutputMode::Csv);
 
         assert_eq!(result, Ok(()));
 
@@ -265,11 +260,10 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
 
-        let data_source = common::types::DataSource::File(file_path, file_format.clone());
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t order by t asc limit 1"#,
             data_source.clone(),
-            table_name.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -277,7 +271,6 @@ mod tests {
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_source.clone(),
-            table_name.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -285,7 +278,6 @@ mod tests {
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_source.clone(),
-            table_name.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
