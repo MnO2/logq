@@ -53,7 +53,7 @@ impl fmt::Display for SelectStatement {
 pub(crate) enum PathSegment {
     Wildcard,
     AttrName(String),
-    ArrayIndex(String, i32),
+    ArrayIndex(String, usize),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

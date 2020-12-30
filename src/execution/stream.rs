@@ -2,23 +2,75 @@ use super::datasource::RecordRead;
 use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
+use crate::syntax::ast;
+use json;
 use linked_hash_map::LinkedHashMap;
+use nom::lib::std::collections::BTreeMap;
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
+use std::env::var;
+
+fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Variables) -> Value {
+    if i >= path_expr.path_segments.len() {
+        return Value::Missing;
+    }
+
+    match &path_expr.path_segments[i] {
+        ast::PathSegment::AttrName(attr_name) => {
+            if let Some(val) = variables.get(attr_name) {
+                if i + 1 == path_expr.path_segments.len() {
+                    return val.clone();
+                } else {
+                    match val {
+                        Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
+                        _ => Value::Missing,
+                    }
+                }
+            } else {
+                Value::Missing
+            }
+        }
+        ast::PathSegment::ArrayIndex(attr_name, idx) => {
+            if let Some(val) = variables.get(attr_name) {
+                if i + 1 == path_expr.path_segments.len() {
+                    return val.clone();
+                } else {
+                    match val {
+                        Value::Array(a) => {
+                            let a = &a[*idx];
+                            match a {
+                                Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
+                                _ => Value::Missing,
+                            }
+                        }
+                        _ => Value::Missing,
+                    }
+                }
+            } else {
+                Value::Missing
+            }
+        }
+        _ => Value::Missing,
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Record {
-    variables: LinkedHashMap<VariableName, Value>,
+    variables: BTreeMap<String, Value>,
 }
 
 impl Record {
     pub(crate) fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
-        let mut variables = LinkedHashMap::default();
+        let mut variables = BTreeMap::default();
         for (i, v) in data.into_iter().enumerate() {
             variables.insert(field_names[i].clone(), v);
         }
 
+        Record { variables }
+    }
+
+    pub(crate) fn new_with_variables(variables: Variables) -> Self {
         Record { variables }
     }
 
@@ -31,7 +83,10 @@ impl Record {
     }
 
     pub(crate) fn project(&self, binding: &common::types::Binding) -> Record {
-        unimplemented!()
+        let val = get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
+        let mut variables = BTreeMap::default();
+        variables.insert(binding.name.clone(), val);
+        Record::new_with_variables(variables)
     }
 
     pub(crate) fn get_many(&self, field_names: &[VariableName]) -> Vec<Value> {
@@ -65,6 +120,8 @@ impl Record {
                 Value::HttpRequest(request) => Cell::new(&*request.to_string()),
                 Value::Host(host) => Cell::new(&*host.to_string()),
                 Value::Missing => Cell::new("<null>"),
+                Value::Object(_) => Cell::new("{...}"),
+                Value::Array(_) => Cell::new("[...]"),
             })
             .collect()
     }
@@ -82,6 +139,8 @@ impl Record {
                 Value::HttpRequest(request) => request.to_string(),
                 Value::Host(host) => host.to_string(),
                 Value::Missing => "<null>".to_string(),
+                Value::Object(_) => "{...}".to_string(),
+                Value::Array(_) => "[...]".to_string(),
             })
             .collect()
     }
@@ -428,12 +487,12 @@ pub(crate) struct ProjectionStream {
 
 impl RecordStream for ProjectionStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        // if let Some(record) = self.source.read_record()? {
-        //     let variables: Variables = record.to_variables();
-        //
-        // } else {
-        Ok(None)
-        //}
+        if let Some(record) = self.source.next()? {
+            let projected_record = record.project(&self.binding);
+            Ok(Some(projected_record))
+        } else {
+            Ok(None)
+        }
     }
 
     fn close(&self) {}

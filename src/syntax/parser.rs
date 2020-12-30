@@ -291,7 +291,7 @@ fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
                 .map(|(attr_name, opt_array_idx)| {
                     if let Some(array_idx) = opt_array_idx {
                         match array_idx {
-                            ast::Value::Integral(i) => PathSegment::ArrayIndex(attr_name.to_string(), *i),
+                            ast::Value::Integral(i) => PathSegment::ArrayIndex(attr_name.to_string(), *i as usize),
                             _ => {
                                 unreachable!()
                             }
