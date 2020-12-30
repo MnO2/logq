@@ -31,7 +31,13 @@ fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Varia
         ast::PathSegment::ArrayIndex(attr_name, idx) => {
             if let Some(val) = variables.get(attr_name) {
                 if i + 1 == path_expr.path_segments.len() {
-                    return val.clone();
+                    match val {
+                        Value::Array(a) => {
+                            let a = &a[*idx];
+                            return a.clone();
+                        }
+                        _ => Value::Missing,
+                    }
                 } else {
                     match val {
                         Value::Array(a) => {
@@ -117,7 +123,10 @@ impl Record {
                 Value::Host(host) => Cell::new(&*host.to_string()),
                 Value::Missing => Cell::new("<null>"),
                 Value::Object(_) => Cell::new("{...}"),
-                Value::Array(_) => Cell::new("[...]"),
+                Value::Array(a) => {
+                    println!("{:?}", &a);
+                    Cell::new("[...]")
+                }
             })
             .collect()
     }
