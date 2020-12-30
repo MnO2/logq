@@ -26,6 +26,8 @@ pub enum ParseError {
     HavingClauseWithoutGroupBy,
     #[fail(display = "Invalid table reference in From Clause")]
     FromClausePathInvalidTableReference,
+    #[fail(display = "Using 'as' to define an alias is required in From Clause for nested path expr")]
+    FromClauseMissingAsForPathExpr,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -324,25 +326,27 @@ fn check_conflict_naming(named_list: &[types::Named]) -> bool {
     false
 }
 
-fn check_env(table_name: String, table_reference: &TableReference) -> bool {
+fn check_env(table_name: String, table_reference: &TableReference) -> ParseResult<()> {
     let path_expr = &table_reference.path_expr;
 
     if path_expr.path_segments.is_empty() {
-        return false;
+        return Err(ParseError::FromClausePathInvalidTableReference);
     }
 
     if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
-        return false;
+        return Err(ParseError::FromClauseMissingAsForPathExpr);
     }
 
-    match path_expr.path_segments[0] {
+    return match path_expr.path_segments[0] {
         PathSegment::AttrName(ref s) => {
-            return s.eq(&table_name);
+            if s.eq(&table_name) {
+                Ok(())
+            } else {
+                Err(ParseError::FromClausePathInvalidTableReference)
+            }
         }
-        _ => {
-            return false;
-        }
-    }
+        _ => Err(ParseError::FromClausePathInvalidTableReference),
+    };
 }
 
 fn to_binding(table_reference: &TableReference) -> Option<common::Binding> {
@@ -371,9 +375,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         common::DataSource::Stdin(file_format, table_name) => (file_format.clone(), table_name.clone()),
     };
 
-    if !check_env(table_name, table_reference) {
-        return Err(ParseError::FromClausePathInvalidTableReference);
-    }
+    check_env(table_name, table_reference)?;
 
     let binding = to_binding(table_reference);
 
