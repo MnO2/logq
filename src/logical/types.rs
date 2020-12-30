@@ -1,7 +1,6 @@
 use crate::common::types as common;
 use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
-use crate::syntax::ast::{PathExpr, PathSegment};
 use ordered_float::OrderedFloat;
 use std::result;
 
@@ -523,6 +522,7 @@ impl Ordering {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::syntax::ast::{PathExpr, PathSegment};
 
     #[test]
     fn test_relation_gen_physical() {
