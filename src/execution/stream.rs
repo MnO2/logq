@@ -3,13 +3,10 @@ use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::syntax::ast;
-use json;
-use linked_hash_map::LinkedHashMap;
 use nom::lib::std::collections::BTreeMap;
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
-use std::env::var;
 
 fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Variables) -> Value {
     if i >= path_expr.path_segments.len() {
@@ -51,7 +48,6 @@ fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Varia
                 Value::Missing
             }
         }
-        _ => Value::Missing,
     }
 }
 
@@ -99,7 +95,7 @@ impl Record {
         ret
     }
 
-    pub(crate) fn to_variables<'a>(&'a self) -> &'a Variables {
+    pub(crate) fn to_variables(&self) -> &Variables {
         &self.variables as &Variables
     }
 

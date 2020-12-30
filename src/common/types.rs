@@ -1,8 +1,6 @@
 use crate::common;
 use crate::syntax::ast;
 use chrono;
-use json::JsonValue;
-use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -307,12 +305,6 @@ pub(crate) fn merge(left: &Variables, right: &Variables) -> Variables {
 pub(crate) struct Binding {
     pub(crate) path_expr: ast::PathExpr,
     pub(crate) name: String,
-}
-
-impl Binding {
-    fn new(path_expr: ast::PathExpr, name: String) -> Binding {
-        Binding { path_expr, name }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

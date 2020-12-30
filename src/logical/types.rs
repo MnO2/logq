@@ -577,7 +577,7 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
-        let binding = common::Binding {
+        let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
         };
@@ -607,7 +607,7 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
-        let binding = common::Binding {
+        let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
         };
@@ -640,7 +640,7 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
-        let binding = common::Binding {
+        let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
         };
@@ -689,7 +689,7 @@ mod test {
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
-        let binding = common::Binding {
+        let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
         };

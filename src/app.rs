@@ -209,11 +209,11 @@ pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, outpu
                             obj[key] = s.into();
                         }
                         common::types::Value::Missing => obj[key] = json::Null,
-                        common::types::Value::Object(o) => {
+                        common::types::Value::Object(_) => {
                             //
                             obj[key] = json::JsonValue::String("{ ... }".to_string());
                         }
-                        common::types::Value::Array(a) => {
+                        common::types::Value::Array(_) => {
                             obj[key] = json::JsonValue::String("[ ... ]".to_string());
                         }
                     }
