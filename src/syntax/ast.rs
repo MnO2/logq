@@ -50,16 +50,36 @@ impl fmt::Display for SelectStatement {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum PathSegment {
+    Wildcard,
+    AttrName(String),
+    ArrayIndex(String, i32),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct PathExpr {
+    pub(crate) path_segments: Vec<PathSegment>,
+}
+
+impl PathExpr {
+    pub fn new(path_segments: Vec<PathSegment>) -> Self {
+        PathExpr {
+            path_segments,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct TableReference {
-    pub(crate) table_name: Vec<String>,
+    pub(crate) path_expr: PathExpr,
     pub(crate) as_clause: Option<String>,
     pub(crate) at_clause: Option<String>,
 }
 
 impl TableReference {
-    pub fn new(table_name: Vec<String>, as_clause: Option<String>, at_clause: Option<String>) -> Self {
+    pub fn new(path_expr: PathExpr, as_clause: Option<String>, at_clause: Option<String>) -> Self {
         TableReference {
-            table_name,
+            path_expr,
             as_clause,
             at_clause,
         }

@@ -14,7 +14,7 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
-use crate::syntax::ast::TableReference;
+use crate::syntax::ast::{TableReference, PathExpr, PathSegment};
 use hashbrown::hash_map::HashMap;
 
 lazy_static! {
@@ -278,26 +278,38 @@ fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::GroupByReference>, 
     )(i)
 }
 
-fn qualified_table_name(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
-    map(terminated(separated_list0(char('.'), identifier), space0), |v| {
-        v.iter().map(|s| s.to_string()).collect()
-    })(i)
+fn path_bracket(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+    delimited(tag("["), integral, tag("]"))(i)
 }
 
-fn table_name(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
-    terminated(qualified_table_name, not(char('(')))(i)
+fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
+    map(terminated(separated_list0(char('.'), pair(identifier, opt(path_bracket))), space0),
+        |v| { let segments = v.iter().map(|(attr_name, opt_array_idx)| {
+            if let Some(array_idx) = opt_array_idx {
+                match array_idx {
+                    ast::Value::Integral(i) => {
+                        PathSegment::ArrayIndex(attr_name.to_string(), *i)
+                    },
+                    _ => { unreachable!() }
+                }
+            } else {
+                PathSegment::AttrName(attr_name.to_string())
+            }
+        }).collect();
+        PathExpr::new(segments) }
+    )(i)
 }
 
 fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&str>> {
     map(
         tuple((
-            table_name,
+            path_expr,
             opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
             opt(preceded(tuple((space0, tag("at"), space1)), identifier)),
         )),
-        |(table_name, as_clasue, at_clause)| {
+        |(path_expr, as_clasue, at_clause)| {
             ast::TableReference::new(
-                table_name,
+                path_expr,
                 as_clasue.map(|s| s.to_string()),
                 at_clause.map(|s| s.to_string()),
             )
@@ -681,7 +693,8 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -714,7 +727,8 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -802,7 +816,8 @@ mod test {
             Box::new(ast::Expression::Column("a".to_string())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -828,7 +843,8 @@ mod test {
         ];
 
         let limit_expr = ast::LimitExpression::new(1);
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -851,7 +867,8 @@ mod test {
         ];
 
         let order_by_clause = ast::OrderByExpression::new(vec![ast::OrderingTerm::new("a", "asc")]);
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -889,7 +906,8 @@ mod test {
         let group_by_ref_c = ast::GroupByReference::new(vec!["c".to_string()], None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_c], None);
 
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -934,7 +952,8 @@ mod test {
             ),
         ];
 
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
         assert_eq!(
             select_query("select a as aa, foo( b ) as bb, 1+1 as cc from it"),
@@ -1017,6 +1036,20 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(3))),
         );
 
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_path_expr() {
+        let (_, ans) = path_expr("a.b.c[0].d").unwrap();
+        let path_segments =
+            vec![
+                ast::PathSegment::AttrName("a".to_string()),
+                ast::PathSegment::AttrName("b".to_string()),
+                ast::PathSegment::ArrayIndex("c".to_string(), 0),
+                ast::PathSegment::AttrName("d".to_string()),
+            ];
+        let expected = ast::PathExpr::new(path_segments);
         assert_eq!(expected, ans);
     }
 }

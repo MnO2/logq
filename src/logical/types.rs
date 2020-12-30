@@ -3,6 +3,7 @@ use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
 use ordered_float::OrderedFloat;
 use std::result;
+use crate::syntax::ast::{PathSegment, PathExpr};
 
 pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
 
@@ -15,7 +16,7 @@ pub enum PhysicalPlanError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(DataSource, String),
+    DataSource(DataSource, PathExpr),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
@@ -29,8 +30,8 @@ impl Node {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
         match self {
-            Node::DataSource(data_source, table_name) => {
-                let node = execution::Node::DataSource(data_source.clone(), table_name.clone());
+            Node::DataSource(data_source, path_expr) => {
+                let node = execution::Node::DataSource(data_source.clone(), path_expr.clone());
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
@@ -573,6 +574,7 @@ mod test {
             Box::new(Expression::Constant(common::Value::Int(1))),
         );
 
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let filter = Node::Filter(
             Box::new(filtered_formula),
             Box::new(Node::Map(
@@ -582,7 +584,7 @@ mod test {
                 ],
                 Box::new(Node::DataSource(
                     DataSource::Stdin("jsonl".to_string()),
-                    "elb".to_string(),
+                    path_expr,
                 )),
             )),
         );
@@ -596,6 +598,7 @@ mod test {
             Box::new(execution::Expression::Variable("const_000000000".to_string())),
         );
 
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let expected_source = execution::Node::Map(
             vec![
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
@@ -603,7 +606,7 @@ mod test {
             ],
             Box::new(execution::Node::DataSource(
                 DataSource::Stdin("jsonl".to_string()),
-                "elb".to_string(),
+                path_expr,
             )),
         );
 
@@ -624,6 +627,7 @@ mod test {
             Box::new(Expression::Constant(common::Value::Int(1))),
         );
 
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let filter = Node::Filter(
             Box::new(filtered_formula),
             Box::new(Node::Map(
@@ -633,7 +637,7 @@ mod test {
                 ],
                 Box::new(Node::DataSource(
                     DataSource::Stdin("jsonl".to_string()),
-                    "elb".to_string(),
+                    path_expr,
                 )),
             )),
         );
@@ -667,6 +671,7 @@ mod test {
             Box::new(execution::Expression::Variable("const_000000000".to_string())),
         );
 
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let expected_source = execution::Node::Map(
             vec![
                 execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
@@ -674,7 +679,7 @@ mod test {
             ],
             Box::new(execution::Node::DataSource(
                 DataSource::Stdin("jsonl".to_string()),
-                "elb".to_string(),
+                path_expr,
             )),
         );
 

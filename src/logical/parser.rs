@@ -4,6 +4,7 @@ use crate::common::types::VariableName;
 use crate::execution;
 use crate::syntax::ast;
 use std::collections::hash_set::HashSet;
+use crate::syntax::ast::{PathExpr};
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -324,14 +325,14 @@ fn check_conflict_naming(named_list: &[types::Named]) -> bool {
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     //TODO: support multiple tables
     let table_reference = query.table_references.last().unwrap().clone();
-    let table_name: String = table_reference.table_name.last().unwrap().clone();
+    let path_expr: PathExpr = table_reference.path_expr.clone();
 
     let file_format = match &data_source {
         common::DataSource::File(_, file_format) => file_format.clone(),
         common::DataSource::Stdin(file_format) => file_format.clone(),
     };
 
-    let mut root = types::Node::DataSource(data_source, table_name);
+    let mut root = types::Node::DataSource(data_source, path_expr);
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -543,6 +544,7 @@ fn is_match_group_by_fields(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::syntax::ast::PathSegment;
 
     #[test]
     fn test_parse_logic_expression() {
@@ -660,7 +662,8 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -678,6 +681,7 @@ mod test {
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let expected = types::Node::Filter(
             filtered_formula,
             Box::new(types::Node::Map(
@@ -687,7 +691,7 @@ mod test {
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string()),
-                    "it".to_string(),
+                    path_expr,
                 )),
             )),
         );
@@ -720,7 +724,8 @@ mod test {
         ));
         let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -738,6 +743,7 @@ mod test {
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let filter = types::Node::Filter(
             filtered_formula,
             Box::new(types::Node::Map(
@@ -747,7 +753,7 @@ mod test {
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string()),
-                    "it".to_string(),
+                    path_expr,
                 )),
             )),
         );
@@ -782,7 +788,8 @@ mod test {
 
         let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -818,7 +825,8 @@ mod test {
 
         let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
             select_exprs,
             vec![table_reference],
@@ -847,7 +855,8 @@ mod test {
             ),
         ];
 
-        let table_reference = ast::TableReference::new(vec!["it".to_string()], None, None);
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
         let data_source = common::DataSource::Stdin("jsonl".to_string());
         let ans = parse_query(before, data_source);
