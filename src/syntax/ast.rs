@@ -5,8 +5,7 @@ use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
-    pub(crate) is_select_value: bool,
-    pub(crate) select_exprs: Vec<SelectExpression>,
+    pub(crate) select_clause: SelectClause,
     pub(crate) table_references: Vec<TableReference>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
     pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
@@ -17,8 +16,7 @@ pub(crate) struct SelectStatement {
 
 impl SelectStatement {
     pub fn new(
-        is_select_value: bool,
-        select_exprs: Vec<SelectExpression>,
+        select_clause: SelectClause,
         table_references: Vec<TableReference>,
         where_expr_opt: Option<WhereExpression>,
         group_by_exprs_opt: Option<GroupByExpression>,
@@ -27,8 +25,7 @@ impl SelectStatement {
         limit_expr_opt: Option<LimitExpression>,
     ) -> Self {
         SelectStatement {
-            is_select_value,
-            select_exprs,
+            select_clause,
             table_references: table_references,
             where_expr_opt,
             group_by_exprs_opt,
@@ -41,14 +38,21 @@ impl SelectStatement {
 
 impl fmt::Display for SelectStatement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let select_exprs_str: Vec<String> = (&self.select_exprs)
-            .iter()
-            .map(|field| match field {
-                SelectExpression::Star => "<star>".to_string(),
-                SelectExpression::Expression(e, name_opt) => format!("{:?} as {:?}", e, name_opt),
-            })
-            .collect();
-        write!(f, "{:?}", select_exprs_str)
+        match &self.select_clause {
+            SelectClause::SelectExpressions(select_exprs) => {
+                let select_exprs_str: Vec<String> = select_exprs
+                    .iter()
+                    .map(|field| match field {
+                        SelectExpression::Star => "<star>".to_string(),
+                        SelectExpression::Expression(e, name_opt) => format!("{:?} as {:?}", e, name_opt),
+                    })
+                    .collect();
+                write!(f, "{:?}", select_exprs_str)
+            }
+            SelectClause::ValueConstructor(_vc) => {
+                unimplemented!()
+            }
+        }
     }
 }
 
@@ -94,6 +98,19 @@ pub(crate) struct TupleConstructor {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct ArrayConstructor {
     pub(crate) values: Vec<Expression>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum SelectClause {
+    ValueConstructor(ValueConstructor),
+    SelectExpressions(Vec<SelectExpression>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum ValueConstructor {
+    Expression(Expression),
+    TupleConstructor(TupleConstructor),
+    ArrayConstructor(ArrayConstructor),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

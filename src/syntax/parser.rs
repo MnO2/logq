@@ -14,7 +14,9 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
-use crate::syntax::ast::{ArrayConstructor, PathExpr, PathSegment, TableReference, TupleConstructor};
+use crate::syntax::ast::{
+    ArrayConstructor, PathExpr, PathSegment, SelectClause, SelectExpression, TableReference, TupleConstructor,
+};
 use hashbrown::hash_map::HashMap;
 
 lazy_static! {
@@ -259,7 +261,7 @@ fn select_expression(i: &str) -> IResult<&str, ast::SelectExpression, VerboseErr
     )(i)
 }
 
-fn select_expression_list(i: &str) -> IResult<&str, Vec<ast::SelectExpression>, VerboseError<&str>> {
+fn select_expression_list(i: &str) -> IResult<&str, Vec<SelectExpression>, VerboseError<&str>> {
     context(
         "select_expression_list",
         terminated(separated_list0(preceded(space0, char(',')), select_expression), space0),
@@ -513,13 +515,37 @@ fn array_constructor(i: &str) -> IResult<&str, ast::ArrayConstructor, VerboseErr
     )(i)
 }
 
+fn value_constructor(i: &str) -> IResult<&str, ast::SelectClause, VerboseError<&str>> {
+    delimited(
+        space0,
+        preceded(
+            pair(tag("value"), space1),
+            alt((
+                map(tuple_constructor, |v| {
+                    ast::SelectClause::ValueConstructor(ast::ValueConstructor::TupleConstructor(v))
+                }),
+                map(array_constructor, |v| {
+                    ast::SelectClause::ValueConstructor(ast::ValueConstructor::ArrayConstructor(v))
+                }),
+                map(expression, |v| {
+                    ast::SelectClause::ValueConstructor(ast::ValueConstructor::Expression(v))
+                }),
+            )),
+        ),
+        space0,
+    )(i)
+}
+
+fn select_clause_expression_list(i: &str) -> IResult<&str, ast::SelectClause, VerboseError<&str>> {
+    map(select_expression_list, |v| SelectClause::SelectExpressions(v))(i)
+}
+
 pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, VerboseError<&str>> {
     map(
         preceded(
             tag("select"),
             tuple((
-                map(opt(delimited(space1, tag("value"), space1)), |x| x.is_some()),
-                select_expression_list,
+                alt((value_constructor, select_clause_expression_list)),
                 from_clause,
                 opt(where_expression),
                 opt(group_by_expression),
@@ -528,19 +554,9 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
                 opt(limit_expression),
             )),
         ),
-        |(
-            is_select_value,
-            select_exprs,
-            table_references,
-            where_expr,
-            group_by_expr,
-            having_expr,
-            order_by_expr,
-            limit_expr,
-        )| {
+        |(select_clause, table_references, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)| {
             ast::SelectStatement::new(
-                is_select_value,
-                select_exprs,
+                select_clause,
                 table_references,
                 where_expr,
                 group_by_expr,
@@ -789,11 +805,7 @@ mod test {
     fn test_select_value_statement() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
 
-        let select_exprs = vec![ast::SelectExpression::Expression(
-            Box::new(ast::Expression::Column(path_expr_a.clone())),
-            None,
-        )];
-
+        let select_expr = ast::Expression::Column(path_expr_a.clone());
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
             Box::new(ast::Expression::Column(path_expr_a.clone())),
@@ -802,8 +814,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            true,
-            select_exprs,
+            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(select_expr)),
             vec![table_reference],
             Some(where_expr),
             None,
@@ -835,8 +846,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             None,
@@ -870,8 +880,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             Some(group_by_expr),
@@ -967,8 +976,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             None,
@@ -999,8 +1007,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
             None,
@@ -1028,8 +1035,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
             None,
@@ -1071,8 +1077,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
             Some(group_by_expr),
@@ -1120,7 +1125,15 @@ mod test {
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
-        let ans = ast::SelectStatement::new(false, select_exprs, vec![table_reference], None, None, None, None, None);
+        let ans = ast::SelectStatement::new(
+            SelectClause::SelectExpressions(select_exprs),
+            vec![table_reference],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             select_query("select a as aa, foo( b ) as bb, 1+1 as cc from it"),
             Ok(("", ans))
@@ -1252,6 +1265,26 @@ mod test {
         ];
 
         let expected = ast::ArrayConstructor { values };
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_value_constructor() {
+        let (_, ans) = value_constructor(" value [a, b]").unwrap();
+        let values = vec![
+            ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())])),
+            ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("b".to_string())])),
+        ];
+
+        let expected =
+            ast::SelectClause::ValueConstructor(ast::ValueConstructor::ArrayConstructor(ast::ArrayConstructor {
+                values,
+            }));
+        assert_eq!(expected, ans);
+
+        let (_, ans) = value_constructor(" value a").unwrap();
+        let expr = ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())]));
+        let expected = ast::SelectClause::ValueConstructor(ast::ValueConstructor::Expression(expr));
         assert_eq!(expected, ans);
     }
 }

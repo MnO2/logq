@@ -426,79 +426,94 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
 
-    if !query.select_exprs.is_empty() {
-        for select_expr in query.select_exprs.iter() {
-            if let Ok(named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
-                named_aggregates.push(named_aggregate.clone());
+    match query.select_clause {
+        ast::SelectClause::SelectExpressions(select_exprs) => {
+            if !select_exprs.is_empty() {
+                for select_expr in select_exprs.iter() {
+                    if let Ok(named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
+                        named_aggregates.push(named_aggregate.clone());
 
-                match named_aggregate.aggregate {
-                    types::Aggregate::Avg(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("avg".to_string()));
-                        }
+                        match named_aggregate.aggregate {
+                            types::Aggregate::Avg(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("avg".to_string()));
+                                }
 
-                        named_list.push(named);
-                    }
-                    types::Aggregate::Count(named) => {
-                        named_list.push(named);
-                    }
-                    types::Aggregate::First(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("first".to_string()));
+                                named_list.push(named);
+                            }
+                            types::Aggregate::Count(named) => {
+                                named_list.push(named);
+                            }
+                            types::Aggregate::First(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("first".to_string()));
+                                }
+                                named_list.push(named);
+                            }
+                            types::Aggregate::Last(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("last".to_string()));
+                                }
+                                named_list.push(named);
+                            }
+                            types::Aggregate::Sum(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("sum".to_string()));
+                                }
+                                named_list.push(named);
+                            }
+                            types::Aggregate::Max(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("max".to_string()));
+                                }
+                                named_list.push(named);
+                            }
+                            types::Aggregate::Min(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("min".to_string()));
+                                }
+                                named_list.push(named);
+                            }
+                            types::Aggregate::ApproxCountDistinct(named) => {
+                                if let types::Named::Star = named {
+                                    return Err(ParseError::InvalidArguments("approx_count_distinct".to_string()));
+                                }
+                                named_list.push(named);
+                            }
+                            types::Aggregate::PercentileDisc(_, column_name, _) => {
+                                named_list.push(types::Named::Expression(
+                                    types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                                        column_name.clone(),
+                                    )])),
+                                    Some(column_name.clone()),
+                                ))
+                            }
+                            types::Aggregate::ApproxPercentile(_, column_name, _) => {
+                                named_list.push(types::Named::Expression(
+                                    types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                                        column_name.clone(),
+                                    )])),
+                                    Some(column_name.clone()),
+                                ))
+                            }
                         }
+                    } else {
+                        let named = *parse_expression(&parsing_context, select_expr)?;
+                        non_aggregates.push(named.clone());
                         named_list.push(named);
                     }
-                    types::Aggregate::Last(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("last".to_string()));
-                        }
-                        named_list.push(named);
-                    }
-                    types::Aggregate::Sum(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("sum".to_string()));
-                        }
-                        named_list.push(named);
-                    }
-                    types::Aggregate::Max(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("max".to_string()));
-                        }
-                        named_list.push(named);
-                    }
-                    types::Aggregate::Min(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("min".to_string()));
-                        }
-                        named_list.push(named);
-                    }
-                    types::Aggregate::ApproxCountDistinct(named) => {
-                        if let types::Named::Star = named {
-                            return Err(ParseError::InvalidArguments("approx_count_distinct".to_string()));
-                        }
-                        named_list.push(named);
-                    }
-                    types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(
-                        types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(column_name.clone())])),
-                        Some(column_name.clone()),
-                    )),
-                    types::Aggregate::ApproxPercentile(_, column_name, _) => named_list.push(types::Named::Expression(
-                        types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(column_name.clone())])),
-                        Some(column_name.clone()),
-                    )),
                 }
-            } else {
-                let named = *parse_expression(&parsing_context, select_expr)?;
-                non_aggregates.push(named.clone());
-                named_list.push(named);
+
+                if check_conflict_naming(&named_list) {
+                    return Err(ParseError::ConflictVariableNaming);
+                }
+
+                root = types::Node::Map(named_list, Box::new(root));
             }
         }
-
-        if check_conflict_naming(&named_list) {
-            return Err(ParseError::ConflictVariableNaming);
+        ast::SelectClause::ValueConstructor(_vc) => {
+            unimplemented!()
         }
-
-        root = types::Node::Map(named_list, Box::new(root));
     }
 
     if let Some(where_expr) = query.where_expr_opt {
@@ -636,7 +651,7 @@ fn is_match_group_by_fields(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::syntax::ast::PathSegment;
+    use crate::syntax::ast::{PathSegment, SelectClause};
 
     #[test]
     fn test_parse_logic_expression() {
@@ -782,8 +797,7 @@ mod test {
 
         let table_reference = ast::TableReference::new(path_expr, Some("e".to_string()), None);
         let before = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             None,
@@ -843,8 +857,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             None,
@@ -907,8 +920,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             Some(group_by_expr),
@@ -980,8 +992,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
             Some(group_by_expr),
@@ -1022,8 +1033,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
-            false,
-            select_exprs,
+            SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
             Some(group_by_expr),
@@ -1056,8 +1066,15 @@ mod test {
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
-        let before =
-            ast::SelectStatement::new(false, select_exprs, vec![table_reference], None, None, None, None, None);
+        let before = ast::SelectStatement::new(
+            SelectClause::SelectExpressions(select_exprs),
+            vec![table_reference],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::ConflictVariableNaming);
