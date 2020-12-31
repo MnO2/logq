@@ -14,7 +14,7 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
-use crate::syntax::ast::{PathExpr, PathSegment, TableReference, TupleConstructor};
+use crate::syntax::ast::{ArrayConstructor, PathExpr, PathSegment, TableReference, TupleConstructor};
 use hashbrown::hash_map::HashMap;
 
 lazy_static! {
@@ -492,6 +492,24 @@ fn tuple_constructor(i: &str) -> IResult<&str, ast::TupleConstructor, VerboseErr
             space0,
         ),
         |v| TupleConstructor { key_values: v },
+    )(i)
+}
+
+fn array_constructor_expression_list(i: &str) -> IResult<&str, Vec<ast::Expression>, VerboseError<&str>> {
+    context(
+        "array_constructor_expression_list",
+        terminated(separated_list0(preceded(space0, char(',')), expression), space0),
+    )(i)
+}
+
+fn array_constructor(i: &str) -> IResult<&str, ast::ArrayConstructor, VerboseError<&str>> {
+    map(
+        delimited(
+            space0,
+            delimited(tag("["), array_constructor_expression_list, tag("]")),
+            space0,
+        ),
+        |v| ArrayConstructor { values: v },
     )(i)
 }
 
@@ -1222,6 +1240,18 @@ mod test {
         ];
 
         let expected = ast::TupleConstructor { key_values };
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_array_constructor() {
+        let (_, ans) = array_constructor("[a, b]").unwrap();
+        let values = vec![
+            ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())])),
+            ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("b".to_string())])),
+        ];
+
+        let expected = ast::ArrayConstructor { values };
         assert_eq!(expected, ans);
     }
 }
