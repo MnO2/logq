@@ -87,6 +87,16 @@ impl TableReference {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct TupleConstructor {
+    pub(crate) key_values: Vec<(String, Expression)>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct ArrayConstructor {
+    pub(crate) values: Vec<Expression>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum SelectExpression {
     Star,
     Expression(Box<Expression>, Option<String>),

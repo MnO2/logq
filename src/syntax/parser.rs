@@ -14,7 +14,7 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
 };
 
-use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
+use crate::syntax::ast::{PathExpr, PathSegment, TableReference, TupleConstructor};
 use hashbrown::hash_map::HashMap;
 
 lazy_static! {
@@ -46,16 +46,36 @@ fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, Verbo
     ))
 }
 
-fn string_literal_interior(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
+fn double_quote_string_literal_interior(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     escaped(none_of("\""), '\\', one_of("\"n\\"))(i)
 }
 
-fn string_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn double_quote_string_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     context(
         "string",
         map(
-            preceded(char('\"'), cut(terminated(string_literal_interior, char('\"')))),
+            preceded(
+                char('\"'),
+                cut(terminated(double_quote_string_literal_interior, char('\"'))),
+            ),
             |s| ast::Value::StringLiteral(s.to_string()),
+        ),
+    )(i)
+}
+
+fn single_quote_string_literal_interior(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
+    escaped(none_of("'"), '\\', one_of("\"n\\"))(i)
+}
+
+fn single_quote_string_literal(i: &str) -> IResult<&str, String, VerboseError<&str>> {
+    context(
+        "single_quote_string_literal",
+        map(
+            preceded(
+                char('\''),
+                cut(terminated(single_quote_string_literal_interior, char('\''))),
+            ),
+            |s| s.to_string(),
         ),
     )(i)
 }
@@ -133,7 +153,7 @@ fn integral(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
 }
 
 fn value(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
-    alt((integral, float, boolean, string_literal))(i)
+    alt((integral, float, boolean, double_quote_string_literal))(i)
 }
 
 fn parens(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
@@ -440,6 +460,41 @@ fn parse_expression_at_precedence<'a>(
     Ok((i1, expr))
 }
 
+fn tuple_constructor_expression_term(i: &str) -> IResult<&str, (String, ast::Expression), VerboseError<&str>> {
+    context(
+        "tuple_constructor_expression_term",
+        map(
+            delimited(
+                space0,
+                tuple((single_quote_string_literal, tag(":"), expression)),
+                space0,
+            ),
+            |(first, _, second)| (first, second),
+        ),
+    )(i)
+}
+
+fn tuple_constructor_expression_list(i: &str) -> IResult<&str, Vec<(String, ast::Expression)>, VerboseError<&str>> {
+    context(
+        "tuple_constructor_expression_list",
+        terminated(
+            separated_list0(preceded(space0, char(',')), tuple_constructor_expression_term),
+            space0,
+        ),
+    )(i)
+}
+
+fn tuple_constructor(i: &str) -> IResult<&str, ast::TupleConstructor, VerboseError<&str>> {
+    map(
+        delimited(
+            space0,
+            delimited(tag("{"), tuple_constructor_expression_list, tag("}")),
+            space0,
+        ),
+        |v| TupleConstructor { key_values: v },
+    )(i)
+}
+
 pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, VerboseError<&str>> {
     map(
         preceded(
@@ -533,19 +588,19 @@ mod test {
     #[test]
     fn test_string_literal() {
         assert_eq!(
-            string_literal("\"abc\""),
+            double_quote_string_literal("\"abc\""),
             Ok(("", ast::Value::StringLiteral("abc".to_string())))
         );
         assert_eq!(
-            string_literal("\"def\""),
+            double_quote_string_literal("\"def\""),
             Ok(("", ast::Value::StringLiteral("def".to_string())))
         );
         assert_eq!(
-            string_literal("\"10.0.2.143:80\""),
+            double_quote_string_literal("\"10.0.2.143:80\""),
             Ok(("", ast::Value::StringLiteral("10.0.2.143:80".to_string())))
         );
         assert_eq!(
-            string_literal("\"10.0\n5,3|\""),
+            double_quote_string_literal("\"10.0\n5,3|\""),
             Ok(("", ast::Value::StringLiteral("10.0\n5,3|".to_string())))
         );
     }
@@ -1142,6 +1197,31 @@ mod test {
             ast::PathSegment::AttrName("d".to_string()),
         ];
         let expected = ast::PathExpr::new(path_segments);
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_single_quote_literal_string() {
+        let (_, ans) = single_quote_string_literal("'a'").unwrap();
+        let expected = "a".to_string();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_tuple_constructor() {
+        let (_, ans) = tuple_constructor("{'a':a, 'b':b}").unwrap();
+        let key_values = vec![
+            (
+                "a".to_string(),
+                ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())])),
+            ),
+            (
+                "b".to_string(),
+                ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("b".to_string())])),
+            ),
+        ];
+
+        let expected = ast::TupleConstructor { key_values };
         assert_eq!(expected, ans);
     }
 }
