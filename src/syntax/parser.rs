@@ -20,7 +20,8 @@ use hashbrown::hash_map::HashMap;
 lazy_static! {
     static ref KEYWORDS: Vec<&'static str> = {
         vec![
-            "select", "from", "where", "group", "by", "limit", "order", "true", "false", "case", "when", "then",
+            "select", "value", "from", "where", "group", "by", "limit", "order", "true", "false", "case", "when",
+            "then",
         ]
     };
 }
@@ -444,6 +445,7 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
         preceded(
             tag("select"),
             tuple((
+                map(opt(delimited(space1, tag("value"), space1)), |x| x.is_some()),
                 select_expression_list,
                 from_clause,
                 opt(where_expression),
@@ -453,8 +455,18 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
                 opt(limit_expression),
             )),
         ),
-        |(select_exprs, table_references, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)| {
+        |(
+            is_select_value,
+            select_exprs,
+            table_references,
+            where_expr,
+            group_by_expr,
+            having_expr,
+            order_by_expr,
+            limit_expr,
+        )| {
             ast::SelectStatement::new(
+                is_select_value,
                 select_exprs,
                 table_references,
                 where_expr,
@@ -701,6 +713,36 @@ mod test {
     }
 
     #[test]
+    fn test_select_value_statement() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+
+        let select_exprs = vec![ast::SelectExpression::Expression(
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
+            None,
+        )];
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+        ));
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
+        let ans = ast::SelectStatement::new(
+            true,
+            select_exprs,
+            vec![table_reference],
+            Some(where_expr),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(select_query("select value a from it where a = 1"), Ok(("", ans)));
+    }
+
+    #[test]
     fn test_select_statement() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
@@ -720,6 +762,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -754,6 +797,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -850,6 +894,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -881,6 +926,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             None,
@@ -909,6 +955,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             None,
@@ -951,6 +998,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             None,
@@ -999,7 +1047,7 @@ mod test {
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
-        let ans = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
+        let ans = ast::SelectStatement::new(false, select_exprs, vec![table_reference], None, None, None, None, None);
         assert_eq!(
             select_query("select a as aa, foo( b ) as bb, 1+1 as cc from it"),
             Ok(("", ans))

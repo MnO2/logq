@@ -782,6 +782,7 @@ mod test {
 
         let table_reference = ast::TableReference::new(path_expr, Some("e".to_string()), None);
         let before = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -842,6 +843,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -905,6 +907,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -977,6 +980,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             Some(where_expr),
@@ -1018,6 +1022,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             select_exprs,
             vec![table_reference],
             None,
@@ -1051,7 +1056,8 @@ mod test {
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
-        let before = ast::SelectStatement::new(select_exprs, vec![table_reference], None, None, None, None, None);
+        let before =
+            ast::SelectStatement::new(false, select_exprs, vec![table_reference], None, None, None, None, None);
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::ConflictVariableNaming);

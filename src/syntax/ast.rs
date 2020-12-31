@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
+    pub(crate) is_select_value: bool,
     pub(crate) select_exprs: Vec<SelectExpression>,
     pub(crate) table_references: Vec<TableReference>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
@@ -16,6 +17,7 @@ pub(crate) struct SelectStatement {
 
 impl SelectStatement {
     pub fn new(
+        is_select_value: bool,
         select_exprs: Vec<SelectExpression>,
         table_references: Vec<TableReference>,
         where_expr_opt: Option<WhereExpression>,
@@ -25,6 +27,7 @@ impl SelectStatement {
         limit_expr_opt: Option<LimitExpression>,
     ) -> Self {
         SelectStatement {
+            is_select_value,
             select_exprs,
             table_references: table_references,
             where_expr_opt,
