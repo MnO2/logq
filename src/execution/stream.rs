@@ -57,7 +57,7 @@ fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Varia
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Record {
     variables: BTreeMap<String, Value>,
 }
@@ -84,10 +84,20 @@ impl Record {
         None
     }
 
-    pub(crate) fn project(&self, binding: &common::types::Binding) -> Record {
-        let val = get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
-        let mut variables = BTreeMap::default();
-        variables.insert(binding.name.clone(), val);
+    pub(crate) fn alias(&mut self, bindings: &Vec<common::types::Binding>) {
+        for binding in bindings.iter() {
+            let val = get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
+            self.variables.insert(binding.name.clone(), val);
+        }
+    }
+
+    pub(crate) fn project(&self, field_names: &[VariableName]) -> Record {
+        let mut variables = Variables::default();
+        for name in field_names {
+            if let Some(v) = self.variables.get(name) {
+                variables.insert(name.clone(), v.clone());
+            }
+        }
         Record::new_with_variables(variables)
     }
 
@@ -487,16 +497,103 @@ impl RecordStream for GroupByStream {
 
 pub(crate) struct ProjectionStream {
     pub(crate) source: Box<dyn RecordStream>,
-    pub(crate) binding: common::types::Binding,
+    pub(crate) bindings: Vec<common::types::Binding>,
+    produced_records: Option<Vec<Record>>,
+    idx: usize,
+}
+
+impl ProjectionStream {
+    pub(crate) fn new(source: Box<dyn RecordStream>, bindings: Vec<common::types::Binding>) -> Self {
+        ProjectionStream {
+            source,
+            bindings,
+            produced_records: None,
+            idx: 0,
+        }
+    }
 }
 
 impl RecordStream for ProjectionStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        if let Some(record) = self.source.next()? {
-            let projected_record = record.project(&self.binding);
-            Ok(Some(projected_record))
-        } else {
-            Ok(None)
+        loop {
+            if self.produced_records.is_none() {
+                if let Some(mut record) = self.source.next()? {
+                    record.alias(&self.bindings);
+                    let binding_names: Vec<VariableName> = self.bindings.iter().map(|b| b.name.clone()).collect();
+                    let projected_record = record.project(&binding_names);
+
+                    let mut produced_records: Vec<Record> = vec![];
+                    let mut results: Vec<Vec<Value>> = vec![];
+                    let mut keys: Vec<String> = vec![];
+
+                    let key_value_pairs: Vec<(String, Value)> = projected_record
+                        .to_variables()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+
+                    for (k, v) in key_value_pairs.iter() {
+                        keys.push(k.clone());
+
+                        match v {
+                            Value::Array(a) => {
+                                let mut new_results = vec![];
+                                for e in a.iter() {
+                                    let mut replica = results.clone();
+                                    if replica.is_empty() {
+                                        replica.push(vec![e.clone()]);
+                                    } else {
+                                        for row in replica.iter_mut() {
+                                            row.push(e.clone());
+                                        }
+                                    }
+
+                                    new_results.extend(replica.into_iter());
+                                }
+
+                                results = new_results;
+                            }
+                            _ => {
+                                if results.is_empty() {
+                                    results.push(vec![v.clone()]);
+                                } else {
+                                    for row in results.iter_mut() {
+                                        row.push(v.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    for result in results.iter() {
+                        let r = Record::new(&keys, result.clone());
+                        produced_records.push(r);
+                    }
+
+                    if produced_records.is_empty() {
+                        return Ok(None);
+                    } else {
+                        let r: Record = produced_records[0].clone();
+                        self.produced_records = Some(produced_records);
+                        self.idx = 1;
+
+                        return Ok(Some(r));
+                    }
+                } else {
+                    return Ok(None);
+                }
+            } else {
+                let idx = self.idx;
+                let records = self.produced_records.as_ref().unwrap();
+
+                if idx < records.len() {
+                    let record = records[idx].clone();
+                    self.idx += 1;
+                    return Ok(Some(record));
+                } else {
+                    self.produced_records = None;
+                }
+            }
         }
     }
 

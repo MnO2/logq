@@ -15,7 +15,7 @@ pub enum PhysicalPlanError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(DataSource, Option<common::Binding>),
+    DataSource(DataSource, Vec<common::Binding>),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
@@ -29,8 +29,8 @@ impl Node {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(Box<execution::Node>, common::Variables)> {
         match self {
-            Node::DataSource(data_source, binding) => {
-                let node = execution::Node::DataSource(data_source.clone(), binding.clone());
+            Node::DataSource(data_source, bindings) => {
+                let node = execution::Node::DataSource(data_source.clone(), bindings.clone());
                 let variables = common::empty_variables();
 
                 Ok((Box::new(node), variables))
@@ -591,7 +591,7 @@ mod test {
                 ],
                 Box::new(Node::DataSource(
                     DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                    None,
+                    vec![],
                 )),
             )),
         );
@@ -618,7 +618,7 @@ mod test {
             ],
             Box::new(execution::Node::DataSource(
                 DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                None,
+                vec![],
             )),
         );
 
@@ -653,7 +653,7 @@ mod test {
                 ],
                 Box::new(Node::DataSource(
                     DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                    None,
+                    vec![],
                 )),
             )),
         );
@@ -701,7 +701,7 @@ mod test {
             ],
             Box::new(execution::Node::DataSource(
                 DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                None,
+                vec![],
             )),
         );
 

@@ -619,7 +619,7 @@ impl Formula {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    DataSource(DataSource, Option<common::types::Binding>),
+    DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
@@ -642,18 +642,15 @@ impl Node {
 
                 Ok(Box::new(stream))
             }
-            Node::DataSource(data_source, opt_binding) => match data_source {
+            Node::DataSource(data_source, bindings) => match data_source {
                 DataSource::File(path, file_format, _table_name) => {
                     let reader = ReaderBuilder::new(file_format.clone()).with_path(path)?;
                     let file_stream = LogFileStream {
                         reader: Box::new(reader),
                     };
 
-                    if let Some(binding) = opt_binding {
-                        let stream = ProjectionStream {
-                            source: Box::new(file_stream),
-                            binding: binding.clone(),
-                        };
+                    if !bindings.is_empty() {
+                        let stream = ProjectionStream::new(Box::new(file_stream), bindings.clone());
 
                         return Ok(Box::new(stream));
                     } else {

@@ -326,60 +326,78 @@ fn check_conflict_naming(named_list: &[types::Named]) -> bool {
     false
 }
 
-fn check_env(table_name: String, table_reference: &TableReference) -> ParseResult<()> {
-    let path_expr = &table_reference.path_expr;
-
-    if path_expr.path_segments.is_empty() {
-        return Err(ParseError::FromClausePathInvalidTableReference);
-    }
-
-    if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
-        return Err(ParseError::FromClauseMissingAsForPathExpr);
-    }
-
-    return match path_expr.path_segments[0] {
-        PathSegment::AttrName(ref s) => {
-            if s.eq(&table_name) {
-                Ok(())
-            } else {
-                Err(ParseError::FromClausePathInvalidTableReference)
+fn check_env(table_name: &String, table_references: &Vec<TableReference>) -> ParseResult<()> {
+    for (i, table_reference) in table_references.iter().enumerate() {
+        if i == 0 {
+            match &table_reference.path_expr.path_segments[0] {
+                PathSegment::AttrName(s) => {
+                    if !s.eq(table_name) {
+                        return Err(ParseError::FromClausePathInvalidTableReference);
+                    }
+                }
+                _ => return Err(ParseError::FromClausePathInvalidTableReference),
             }
         }
-        _ => Err(ParseError::FromClausePathInvalidTableReference),
-    };
+        let path_expr = &table_reference.path_expr;
+
+        if path_expr.path_segments.is_empty() {
+            return Err(ParseError::FromClausePathInvalidTableReference);
+        }
+
+        if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
+            return Err(ParseError::FromClauseMissingAsForPathExpr);
+        }
+    }
+
+    Ok(())
 }
 
-fn to_binding(table_reference: &TableReference) -> Option<common::Binding> {
-    let path_expr = PathExpr::new(
-        table_reference
-            .path_expr
-            .path_segments
-            .iter()
-            .skip(1)
-            .cloned()
-            .collect(),
-    );
-    if let Some(name) = table_reference.as_clause.clone() {
-        Some(common::Binding { path_expr, name })
-    } else {
-        None
-    }
+fn to_bindings(table_name: &String, table_references: &Vec<TableReference>) -> Vec<common::Binding> {
+    table_references
+        .iter()
+        .map(|table_reference| {
+            let path_expr = match &table_reference.path_expr.path_segments[0] {
+                PathSegment::AttrName(s) => {
+                    if s.eq(table_name) {
+                        PathExpr::new(
+                            table_reference
+                                .path_expr
+                                .path_segments
+                                .iter()
+                                .skip(1)
+                                .cloned()
+                                .collect(),
+                        )
+                    } else {
+                        table_reference.path_expr.clone()
+                    }
+                }
+                _ => table_reference.path_expr.clone(),
+            };
+
+            if let Some(name) = table_reference.as_clause.clone() {
+                Some(common::Binding { path_expr, name })
+            } else {
+                None
+            }
+        })
+        .filter_map(|x| x)
+        .collect()
 }
 
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
-    //TODO: support multiple tables
-    let table_reference = query.table_references.last().unwrap();
+    let table_references = &query.table_references;
 
     let (file_format, table_name) = match &data_source {
         common::DataSource::File(_, file_format, table_name) => (file_format.clone(), table_name.clone()),
         common::DataSource::Stdin(file_format, table_name) => (file_format.clone(), table_name.clone()),
     };
 
-    check_env(table_name, table_reference)?;
+    check_env(&table_name, table_references)?;
 
-    let binding = to_binding(table_reference);
+    let bindings = to_bindings(&table_name, table_references);
 
-    let mut root = types::Node::DataSource(data_source, binding);
+    let mut root = types::Node::DataSource(data_source, bindings);
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -734,10 +752,10 @@ mod test {
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
 
-        let binding = common::Binding {
+        let bindings = vec![common::Binding {
             path_expr,
             name: "e".to_string(),
-        };
+        }];
 
         let expected = types::Node::Filter(
             filtered_formula,
@@ -748,7 +766,7 @@ mod test {
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                    Some(binding),
+                    bindings,
                 )),
             )),
         );
@@ -798,7 +816,7 @@ mod test {
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                    None,
+                    vec![],
                 )),
             )),
         );
@@ -865,7 +883,7 @@ mod test {
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
-                    None,
+                    vec![],
                 )),
             )),
         );
