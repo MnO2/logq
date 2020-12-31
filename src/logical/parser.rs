@@ -1,6 +1,6 @@
 use super::types;
 use crate::common::types as common;
-use crate::common::types::VariableName;
+use crate::common::types::{ParsingContext, VariableName};
 use crate::execution;
 use crate::syntax::ast;
 use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
@@ -32,41 +32,46 @@ pub enum ParseError {
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
-fn parse_prefix_operator(op: types::LogicPrefixOp, child: &ast::Expression) -> ParseResult<Box<types::Formula>> {
-    let child_parsed = parse_logic(child)?;
+fn parse_prefix_operator(
+    ctx: &common::ParsingContext,
+    op: types::LogicPrefixOp,
+    child: &ast::Expression,
+) -> ParseResult<Box<types::Formula>> {
+    let child_parsed = parse_logic(ctx, child)?;
 
     let prefix_op = types::Formula::PrefixOperator(op, child_parsed);
     Ok(Box::new(prefix_op))
 }
 
 fn parse_infix_operator(
+    ctx: &common::ParsingContext,
     op: types::LogicInfixOp,
     left: &ast::Expression,
     right: &ast::Expression,
 ) -> ParseResult<Box<types::Formula>> {
-    let left_parsed = parse_logic(left)?;
-    let right_parsed = parse_logic(right)?;
+    let left_parsed = parse_logic(ctx, left)?;
+    let right_parsed = parse_logic(ctx, right)?;
 
     let infix_op = types::Formula::InfixOperator(op, left_parsed, right_parsed);
     Ok(Box::new(infix_op))
 }
 
-fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
+fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match expr {
         ast::Expression::BinaryOperator(op, l, r) => {
             if op == &ast::BinaryOperator::And {
-                let formula = parse_infix_operator(types::LogicInfixOp::And, l, r)?;
+                let formula = parse_infix_operator(ctx, types::LogicInfixOp::And, l, r)?;
                 Ok(formula)
             } else if op == &ast::BinaryOperator::Or {
-                let formula = parse_infix_operator(types::LogicInfixOp::Or, l, r)?;
+                let formula = parse_infix_operator(ctx, types::LogicInfixOp::Or, l, r)?;
                 Ok(formula)
             } else {
-                parse_condition(expr)
+                parse_condition(ctx, expr)
             }
         }
         ast::Expression::UnaryOperator(op, c) => {
             if op == &ast::UnaryOperator::Not {
-                let formula = parse_prefix_operator(types::LogicPrefixOp::Not, c)?;
+                let formula = parse_prefix_operator(ctx, types::LogicPrefixOp::Not, c)?;
                 Ok(formula)
             } else {
                 unreachable!()
@@ -80,8 +85,8 @@ fn parse_logic(expr: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     }
 }
 
-fn parse_logic_expression(expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
-    let formula = parse_logic(expr)?;
+fn parse_logic_expression(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+    let formula = parse_logic(ctx, expr)?;
     Ok(Box::new(types::Expression::Logic(formula)))
 }
 
@@ -94,13 +99,16 @@ fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
     }
 }
 
-fn parse_case_when_expression(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+fn parse_case_when_expression(
+    ctx: &common::ParsingContext,
+    value_expr: &ast::Expression,
+) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::Expression::CaseWhenExpression(case_when_expr) => {
-            let branch = parse_logic(&case_when_expr.condition)?;
-            let then_expr = parse_value_expression(&case_when_expr.then_expr)?;
+            let branch = parse_logic(ctx, &case_when_expr.condition)?;
+            let then_expr = parse_value_expression(ctx, &case_when_expr.then_expr)?;
             let else_expr = if let Some(e) = &case_when_expr.else_expr {
-                Some(parse_value_expression(&e)?)
+                Some(parse_value_expression(ctx, &e)?)
             } else {
                 None
             };
@@ -113,11 +121,14 @@ fn parse_case_when_expression(value_expr: &ast::Expression) -> ParseResult<Box<t
     }
 }
 
-fn parse_binary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+fn parse_binary_operator(
+    ctx: &common::ParsingContext,
+    value_expr: &ast::Expression,
+) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::Expression::BinaryOperator(op, left_expr, right_expr) => {
             if op == &ast::BinaryOperator::And || op == &ast::BinaryOperator::Or {
-                parse_logic_expression(value_expr)
+                parse_logic_expression(ctx, value_expr)
             } else if op == &ast::BinaryOperator::Equal
                 || op == &ast::BinaryOperator::NotEqual
                 || op == &ast::BinaryOperator::MoreThan
@@ -125,12 +136,12 @@ fn parse_binary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types:
                 || op == &ast::BinaryOperator::GreaterEqual
                 || op == &ast::BinaryOperator::LessEqual
             {
-                let formula = parse_condition(value_expr)?;
+                let formula = parse_condition(ctx, value_expr)?;
                 Ok(Box::new(types::Expression::Logic(formula)))
             } else {
                 let func_name = (*op).to_string();
-                let left = parse_value_expression(left_expr)?;
-                let right = parse_value_expression(right_expr)?;
+                let left = parse_value_expression(ctx, left_expr)?;
+                let right = parse_value_expression(ctx, right_expr)?;
                 let args = vec![
                     types::Named::Expression(*left, None),
                     types::Named::Expression(*right, None),
@@ -144,11 +155,11 @@ fn parse_binary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types:
     }
 }
 
-fn parse_unary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+fn parse_unary_operator(ctx: &ParsingContext, value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::Expression::UnaryOperator(op, expr) => {
             if op == &ast::UnaryOperator::Not {
-                let formula = parse_prefix_operator(types::LogicPrefixOp::Not, expr)?;
+                let formula = parse_prefix_operator(ctx, types::LogicPrefixOp::Not, expr)?;
                 Ok(Box::new(types::Expression::Logic(formula)))
             } else {
                 unreachable!();
@@ -160,24 +171,27 @@ fn parse_unary_operator(value_expr: &ast::Expression) -> ParseResult<Box<types::
     }
 }
 
-fn parse_value_expression(value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
+fn parse_value_expression(
+    ctx: &common::ParsingContext,
+    value_expr: &ast::Expression,
+) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::Expression::Value(v) => {
             let expr = parse_value(v)?;
             Ok(expr)
         }
-        ast::Expression::Column(column_name) => Ok(Box::new(types::Expression::Variable(column_name.clone()))),
-        ast::Expression::BinaryOperator(_, _, _) => parse_binary_operator(value_expr),
-        ast::Expression::UnaryOperator(_, _) => parse_unary_operator(value_expr),
+        ast::Expression::Column(path_expr) => Ok(Box::new(types::Expression::Variable(path_expr.clone()))),
+        ast::Expression::BinaryOperator(_, _, _) => parse_binary_operator(ctx, value_expr),
+        ast::Expression::UnaryOperator(_, _) => parse_unary_operator(ctx, value_expr),
         ast::Expression::FuncCall(func_name, select_exprs, _) => {
             let mut args = Vec::new();
             for select_expr in select_exprs.iter() {
-                let arg = parse_expression(select_expr)?;
+                let arg = parse_expression(ctx, select_expr)?;
                 args.push(*arg);
             }
             Ok(Box::new(types::Expression::Function(func_name.clone(), args)))
         }
-        ast::Expression::CaseWhenExpression(_) => parse_case_when_expression(value_expr),
+        ast::Expression::CaseWhenExpression(_) => parse_case_when_expression(ctx, value_expr),
     }
 }
 
@@ -193,11 +207,11 @@ fn parse_relation(op: &ast::BinaryOperator) -> ParseResult<types::Relation> {
     }
 }
 
-fn parse_condition(condition: &ast::Expression) -> ParseResult<Box<types::Formula>> {
+fn parse_condition(ctx: &common::ParsingContext, condition: &ast::Expression) -> ParseResult<Box<types::Formula>> {
     match condition {
         ast::Expression::BinaryOperator(op, left_expr, right_expr) => {
-            let left = parse_value_expression(left_expr)?;
-            let right = parse_value_expression(right_expr)?;
+            let left = parse_value_expression(ctx, left_expr)?;
+            let right = parse_value_expression(ctx, right_expr)?;
             let rel_op = parse_relation(op)?;
             Ok(Box::new(types::Formula::Predicate(rel_op, left, right)))
         }
@@ -205,17 +219,24 @@ fn parse_condition(condition: &ast::Expression) -> ParseResult<Box<types::Formul
     }
 }
 
-fn parse_expression(select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Named>> {
+fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -> ParseResult<Box<types::Named>> {
     match select_expr {
         ast::SelectExpression::Star => Ok(Box::new(types::Named::Star)),
         ast::SelectExpression::Expression(expr, name_opt) => {
-            let e = parse_value_expression(expr)?;
+            let e = parse_value_expression(ctx, expr)?;
             match &*e {
-                types::Expression::Variable(name) => {
+                types::Expression::Variable(path_expr) => {
                     if let Some(rename) = name_opt {
                         Ok(Box::new(types::Named::Expression(*e.clone(), Some(rename.clone()))))
                     } else {
-                        Ok(Box::new(types::Named::Expression(*e.clone(), Some(name.clone()))))
+                        match &path_expr.path_segments.last().unwrap() {
+                            PathSegment::AttrName(s) => {
+                                Ok(Box::new(types::Named::Expression(*e.clone(), Some(s.clone()))))
+                            }
+                            PathSegment::ArrayIndex(a, _idx) => {
+                                Ok(Box::new(types::Named::Expression(*e.clone(), Some(a.clone()))))
+                            }
+                        }
                     }
                 }
                 _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
@@ -245,11 +266,11 @@ fn parse_ordering(ordering: ast::Ordering) -> ParseResult<types::Ordering> {
     }
 }
 
-fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::NamedAggregate> {
+fn parse_aggregate(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -> ParseResult<types::NamedAggregate> {
     match select_expr {
         ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
             ast::Expression::FuncCall(func_name, args, within_group_opt) => {
-                let named = *parse_expression(&args[0])?;
+                let named = *parse_expression(ctx, &args[0])?;
 
                 let aggregate = if let Some(within_group_clause) = within_group_opt {
                     match named {
@@ -301,15 +322,15 @@ fn parse_aggregate(select_expr: &ast::SelectExpression) -> ParseResult<types::Na
 }
 
 fn check_conflict_naming(named_list: &[types::Named]) -> bool {
-    let mut name_set: HashSet<String> = HashSet::new();
+    let mut name_set: HashSet<PathExpr> = HashSet::new();
     for named in named_list {
         match named {
             types::Named::Expression(expr, var_name_opt) => {
                 if let Some(var_name) = var_name_opt {
-                    if name_set.contains(var_name) {
+                    if name_set.contains(&PathExpr::new(vec![PathSegment::AttrName(var_name.clone())])) {
                         return true;
                     } else {
-                        name_set.insert(var_name.clone());
+                        name_set.insert(PathExpr::new(vec![PathSegment::AttrName(var_name.clone())]));
                     }
                 } else if let types::Expression::Variable(var_name) = expr {
                     if name_set.contains(var_name) {
@@ -395,6 +416,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     check_env(&table_name, table_references)?;
 
+    let parsing_context = ParsingContext {
+        table_name: table_name.clone(),
+    };
     let bindings = to_bindings(&table_name, table_references);
 
     let mut root = types::Node::DataSource(data_source, bindings);
@@ -404,7 +428,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     if !query.select_exprs.is_empty() {
         for select_expr in query.select_exprs.iter() {
-            if let Ok(named_aggregate) = parse_aggregate(select_expr) {
+            if let Ok(named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
                 named_aggregates.push(named_aggregate.clone());
 
                 match named_aggregate.aggregate {
@@ -455,16 +479,16 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         named_list.push(named);
                     }
                     types::Aggregate::PercentileDisc(_, column_name, _) => named_list.push(types::Named::Expression(
-                        types::Expression::Variable(column_name.clone()),
+                        types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(column_name.clone())])),
                         Some(column_name.clone()),
                     )),
                     types::Aggregate::ApproxPercentile(_, column_name, _) => named_list.push(types::Named::Expression(
-                        types::Expression::Variable(column_name.clone()),
+                        types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(column_name.clone())])),
                         Some(column_name.clone()),
                     )),
                 }
             } else {
-                let named = *parse_expression(select_expr)?;
+                let named = *parse_expression(&parsing_context, select_expr)?;
                 non_aggregates.push(named.clone());
                 named_list.push(named);
             }
@@ -478,7 +502,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     }
 
     if let Some(where_expr) = query.where_expr_opt {
-        let filter_formula = parse_logic(&where_expr.expr)?;
+        let filter_formula = parse_logic(&parsing_context, &where_expr.expr)?;
         root = types::Node::Filter(filter_formula, Box::new(root));
     }
 
@@ -497,7 +521,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
 
             if let Some(having_expr) = query.having_expr_opt {
-                let filter_formula = parse_logic(&having_expr.expr)?;
+                let filter_formula = parse_logic(&parsing_context, &having_expr.expr)?;
                 root = types::Node::Filter(filter_formula, Box::new(root));
             }
         } else {
@@ -505,7 +529,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
 
             if let Some(having_expr) = query.having_expr_opt {
-                let filter_formula = parse_logic(&having_expr.expr)?;
+                let filter_formula = parse_logic(&parsing_context, &having_expr.expr)?;
                 root = types::Node::Filter(filter_formula, Box::new(root));
             }
         }
@@ -544,18 +568,21 @@ fn is_match_group_by_fields(
     named_list: &[types::Named],
     file_format: &str,
 ) -> bool {
-    let mut a: Vec<String> = variables.to_vec();
-    let mut b: Vec<String> = Vec::new();
+    let mut a: Vec<PathExpr> = variables
+        .iter()
+        .map(|s| PathExpr::new(vec![PathSegment::AttrName(s.to_string())]))
+        .collect();
+    let mut b: Vec<PathExpr> = Vec::new();
 
     for named in named_list.iter() {
         match named {
             types::Named::Expression(expr, name_opt) => {
                 if let Some(name) = name_opt {
-                    b.push(name.clone());
+                    b.push(PathExpr::new(vec![PathSegment::AttrName(name.clone())]));
                 } else {
                     match expr {
-                        types::Expression::Variable(var_name) => {
-                            b.push(var_name.clone());
+                        types::Expression::Variable(path_expr) => {
+                            b.push(path_expr.clone());
                         }
                         _ => {
                             return false;
@@ -566,20 +593,20 @@ fn is_match_group_by_fields(
             types::Named::Star => {
                 if file_format == "elb" {
                     for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
-                        b.push(field_name.clone());
+                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "alb" {
                     for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().into_iter()
                     {
-                        b.push(field_name.clone());
+                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "squid" {
                     for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
-                        b.push(field_name.clone());
+                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "s3" {
                     for field_name in execution::datasource::S3Field::field_names().into_iter() {
-                        b.push(field_name.clone());
+                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else {
                     unreachable!();
@@ -619,13 +646,16 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Boolean(false))),
         );
 
+        let parsing_context = ParsingContext {
+            table_name: "a".to_string(),
+        };
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
             types::LogicInfixOp::And,
             Box::new(types::Formula::Constant(true)),
             Box::new(types::Formula::Constant(false)),
         ))));
 
-        let ans = parse_logic_expression(&before).unwrap();
+        let ans = parse_logic_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
 
         let before = ast::Expression::UnaryOperator(
@@ -638,7 +668,10 @@ mod test {
             Box::new(types::Formula::Constant(false)),
         ))));
 
-        let ans = parse_logic_expression(&before).unwrap();
+        let parsing_context = ParsingContext {
+            table_name: "a".to_string(),
+        };
+        let ans = parse_logic_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
     }
 
@@ -671,17 +704,22 @@ mod test {
             ],
         ));
 
-        let ans = parse_value_expression(&before).unwrap();
+        let parsing_context = ParsingContext {
+            table_name: "a".to_string(),
+        };
+        let ans = parse_value_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
     }
 
     #[test]
     fn test_parse_aggregate() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+
         let before = ast::SelectExpression::Expression(
             Box::new(ast::Expression::FuncCall(
                 "avg".to_string(),
                 vec![ast::SelectExpression::Expression(
-                    Box::new(ast::Expression::Column("a".to_string())),
+                    Box::new(ast::Expression::Column(path_expr_a.clone())),
                     None,
                 )],
                 None,
@@ -689,41 +727,51 @@ mod test {
             None,
         );
 
-        let named = types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string()));
+        let named = types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string()));
         let expected = types::NamedAggregate::new(types::Aggregate::Avg(named), None);
 
-        let ans = parse_aggregate(&before).unwrap();
+        let parsing_context = ParsingContext {
+            table_name: "a".to_string(),
+        };
+        let ans = parse_aggregate(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
     }
 
     #[test]
     fn test_parse_condition() {
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let before = ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         );
 
         let expected = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
-            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::Variable(path_expr.clone())),
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
-        let ans = parse_condition(&before).unwrap();
+        let parsing_context = ParsingContext {
+            table_name: "a".to_string(),
+        };
+        let ans = parse_condition(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
     }
 
     #[test]
     fn test_parse_query_with_simple_select_where_with_bindings() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
@@ -746,7 +794,7 @@ mod test {
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
-            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::Variable(path_expr_a.clone())),
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
@@ -761,8 +809,8 @@ mod test {
             filtered_formula,
             Box::new(types::Node::Map(
                 vec![
-                    types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
-                    types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -777,14 +825,17 @@ mod test {
 
     #[test]
     fn test_parse_query_with_simple_select_where_no_from_clause_bindings() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
@@ -803,7 +854,7 @@ mod test {
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
-            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::Variable(path_expr_a.clone())),
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
@@ -811,8 +862,8 @@ mod test {
             filtered_formula,
             Box::new(types::Node::Map(
                 vec![
-                    types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
-                    types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -827,24 +878,26 @@ mod test {
 
     #[test]
     fn test_parse_query_with_group_by() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
         let select_exprs = vec![
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::FuncCall(
                     "avg".to_string(),
                     vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Column("a".to_string())),
+                        Box::new(ast::Expression::Column(path_expr_a.clone())),
                         None,
                     )],
                     None,
                 )),
                 None,
             ),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
         let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
@@ -864,7 +917,7 @@ mod test {
 
         let filtered_formula = Box::new(types::Formula::Predicate(
             types::Relation::Equal,
-            Box::new(types::Expression::Variable("a".to_string())),
+            Box::new(types::Expression::Variable(path_expr_a.clone())),
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
@@ -878,8 +931,8 @@ mod test {
             filtered_formula,
             Box::new(types::Node::Map(
                 vec![
-                    types::Named::Expression(types::Expression::Variable("a".to_string()), Some("a".to_string())),
-                    types::Named::Expression(types::Expression::Variable("b".to_string()), Some("b".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -890,7 +943,7 @@ mod test {
 
         let named_aggregates = vec![types::NamedAggregate::new(
             types::Aggregate::Avg(types::Named::Expression(
-                types::Expression::Variable("a".to_string()),
+                types::Expression::Variable(path_expr_a),
                 Some("a".to_string()),
             )),
             None,
@@ -905,14 +958,17 @@ mod test {
 
     #[test]
     fn test_parse_query_group_by_without_aggregate() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
@@ -937,14 +993,18 @@ mod test {
 
     #[test]
     fn test_parse_query_group_by_mismatch_fields() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::FuncCall(
                     "count".to_string(),
                     vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Column("c".to_string())),
+                        Box::new(ast::Expression::Column(path_expr_c.clone())),
                         None,
                     )],
                     None,
@@ -976,11 +1036,15 @@ mod test {
     fn test_parse_query_group_by_conflict_naming() {
         let select_exprs = vec![
             ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Column("a".to_string())),
+                Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                    ast::PathSegment::AttrName("a".to_string()),
+                ]))),
                 Some("t".to_string()),
             ),
             ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Column("b".to_string())),
+                Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                    ast::PathSegment::AttrName("b".to_string()),
+                ]))),
                 Some("t".to_string()),
             ),
         ];

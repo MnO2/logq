@@ -173,14 +173,18 @@ fn func_call(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     )(i)
 }
 
+fn select_column_reference(i: &str) -> IResult<&str, ast::PathExpr, VerboseError<&str>> {
+    terminated(path_expr, not(char('(')))(i)
+}
+
 fn factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     delimited(
         space0,
         alt((
             parens,
             map(value, ast::Expression::Value),
-            map(column_name, |n| ast::Expression::Column(n.to_string())),
             func_call,
+            map(select_column_reference, |path_expr| ast::Expression::Column(path_expr)),
         )),
         space0,
     )(i)
@@ -563,12 +567,15 @@ mod test {
 
     #[test]
     fn test_condition_expression() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+
         let ans = ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
             Box::new(ast::Expression::BinaryOperator(
                 ast::BinaryOperator::Plus,
-                Box::new(ast::Expression::Column("a".to_string())),
-                Box::new(ast::Expression::Column("b".to_string())),
+                Box::new(ast::Expression::Column(path_expr_a.clone())),
+                Box::new(ast::Expression::Column(path_expr_b.clone())),
             )),
             Box::new(ast::Expression::Value(ast::Value::Integral(3))),
         );
@@ -636,6 +643,9 @@ mod test {
 
     #[test]
     fn test_expression_term() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+
         let ans = ast::Expression::BinaryOperator(
             ast::BinaryOperator::And,
             Box::new(ast::Expression::Value(ast::Value::Boolean(true))),
@@ -650,12 +660,12 @@ mod test {
             ast::BinaryOperator::And,
             Box::new(ast::Expression::BinaryOperator(
                 ast::BinaryOperator::Equal,
-                Box::new(ast::Expression::Column("a".to_string())),
+                Box::new(ast::Expression::Column(path_expr_a.clone())),
                 Box::new(ast::Expression::Value(ast::Value::Integral(1))),
             )),
             Box::new(ast::Expression::BinaryOperator(
                 ast::BinaryOperator::Equal,
-                Box::new(ast::Expression::Column("b".to_string())),
+                Box::new(ast::Expression::Column(path_expr_b.clone())),
                 Box::new(ast::Expression::Value(ast::Value::Integral(2))),
             )),
         );
@@ -664,6 +674,10 @@ mod test {
 
     #[test]
     fn test_select_expression_list() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let ans = vec![
             ast::SelectExpression::Star,
             ast::SelectExpression::Star,
@@ -679,24 +693,28 @@ mod test {
         assert_eq!(select_expression_list("1, 2, 3"), Ok(("", ans)));
 
         let ans = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
         assert_eq!(select_expression_list("a, b, c"), Ok(("", ans)));
     }
 
     #[test]
     fn test_select_statement() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
@@ -713,14 +731,14 @@ mod test {
 
         assert_eq!(select_query("select a, b, c from it where a = 1"), Ok(("", ans)));
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
@@ -729,7 +747,7 @@ mod test {
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_b], None);
         let having_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::MoreThan,
-            Box::new(ast::Expression::Column("c".to_string())),
+            Box::new(ast::Expression::Column(path_expr_c.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
@@ -753,12 +771,15 @@ mod test {
 
     #[test]
     fn test_func_call() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let ans = ast::Expression::FuncCall(
             "foo".to_string(),
             vec![
-                ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+                ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
                 ast::SelectExpression::Expression(Box::new(ast::Expression::Value(ast::Value::Integral(1))), None),
-                ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+                ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
             ],
             None,
         );
@@ -768,7 +789,7 @@ mod test {
         let ans = ast::Expression::FuncCall(
             "foo".to_string(),
             vec![
-                ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+                ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
                 ast::SelectExpression::Expression(
                     Box::new(ast::Expression::FuncCall(
                         "bar".to_string(),
@@ -780,7 +801,7 @@ mod test {
                     )),
                     None,
                 ),
-                ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+                ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
             ],
             None,
         );
@@ -801,25 +822,29 @@ mod test {
 
     #[test]
     fn test_select_statement_with_func_call() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::FuncCall(
                     "avg".to_string(),
                     vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Column("b".to_string())),
+                        Box::new(ast::Expression::Column(path_expr_b.clone())),
                         None,
                     )],
                     None,
                 )),
                 None,
             ),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
 
         let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::Equal,
-            Box::new(ast::Expression::Column("a".to_string())),
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
@@ -842,10 +867,14 @@ mod test {
 
     #[test]
     fn test_select_statement_with_limit() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
 
         let limit_expr = ast::LimitExpression::new(1);
@@ -866,10 +895,14 @@ mod test {
 
     #[test]
     fn test_select_statement_with_order() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("b".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_b.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
 
         let order_by_clause = ast::OrderByExpression::new(vec![ast::OrderingTerm::new("a", "asc")]);
@@ -890,9 +923,12 @@ mod test {
 
     #[test]
     fn test_select_statement_with_within_group() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+
         let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("a".to_string())), None),
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column("c".to_string())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::FuncCall(
                     "percentile_disc".to_string(),
@@ -932,16 +968,19 @@ mod test {
 
     #[test]
     fn test_select_statement_with_as() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+
         let select_exprs = vec![
             ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Column("a".to_string())),
+                Box::new(ast::Expression::Column(path_expr_a.clone())),
                 Some("aa".to_string()),
             ),
             ast::SelectExpression::Expression(
                 Box::new(ast::Expression::FuncCall(
                     "foo".to_string(),
                     vec![ast::SelectExpression::Expression(
-                        Box::new(ast::Expression::Column("b".to_string())),
+                        Box::new(ast::Expression::Column(path_expr_b.clone())),
                         None,
                     )],
                     None,

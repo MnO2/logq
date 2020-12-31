@@ -308,6 +308,11 @@ pub(crate) struct Binding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsingContext {
+    pub(crate) table_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DataSource {
     File(PathBuf, String, String),
     Stdin(String, String),

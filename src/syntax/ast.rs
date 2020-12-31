@@ -49,13 +49,13 @@ impl fmt::Display for SelectStatement {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub(crate) enum PathSegment {
     AttrName(String),
     ArrayIndex(String, usize),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub(crate) struct PathExpr {
     pub(crate) path_segments: Vec<PathSegment>,
 }
@@ -98,7 +98,7 @@ pub(crate) struct CaseWhenExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Expression {
-    Column(ColumnName),
+    Column(PathExpr),
     Value(Value),
     BinaryOperator(BinaryOperator, Box<Expression>, Box<Expression>),
     UnaryOperator(UnaryOperator, Box<Expression>),
@@ -107,7 +107,6 @@ pub(crate) enum Expression {
 }
 
 pub(crate) type FuncName = String;
-pub(crate) type ColumnName = String;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum BinaryOperator {

@@ -1,6 +1,7 @@
 use crate::common::types as common;
 use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
+use crate::syntax::ast;
 use ordered_float::OrderedFloat;
 use std::result;
 
@@ -128,7 +129,7 @@ impl Named {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Expression {
     Constant(common::Value),
-    Variable(VariableName),
+    Variable(ast::PathExpr),
     Logic(Box<Formula>),
     Function(String, Vec<Named>),
     Branch(Box<Formula>, Box<Expression>, Option<Box<Expression>>),
@@ -142,7 +143,8 @@ impl Expression {
         match self {
             Expression::Constant(value) => {
                 let constant_name = physical_plan_creator.new_constant_name();
-                let node = Box::new(execution::Expression::Variable(constant_name.clone()));
+                let path_expr = ast::PathExpr::new(vec![ast::PathSegment::AttrName(constant_name.clone())]);
+                let node = Box::new(execution::Expression::Variable(path_expr));
                 let mut variables = common::Variables::default();
                 variables.insert(constant_name, value.clone());
 
@@ -556,11 +558,13 @@ mod test {
 
     #[test]
     fn test_expression_gen_physical() {
+        let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
+
         let expr = Expression::Constant(common::Value::Int(1));
         let mut physical_plan_creator =
             PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
-        let expected_formula = execution::Expression::Variable("const_000000000".to_string());
+        let expected_formula = execution::Expression::Variable(path_expr_const.clone());
 
         let mut expected_variables = common::Variables::default();
         expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
@@ -570,9 +574,13 @@ mod test {
 
     #[test]
     fn test_filter_with_map_gen_physical() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
+
         let filtered_formula = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable("a".to_string())),
+            Box::new(Expression::Variable(path_expr_a.clone())),
             Box::new(Expression::Constant(common::Value::Int(1))),
         );
 
@@ -586,8 +594,8 @@ mod test {
             Box::new(filtered_formula),
             Box::new(Node::Map(
                 vec![
-                    Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
-                    Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
+                    Named::Expression(Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                    Named::Expression(Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
                 ],
                 Box::new(Node::DataSource(
                     DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -602,8 +610,8 @@ mod test {
 
         let expected_filtered_formula = execution::Formula::Predicate(
             execution::Relation::Equal,
-            Box::new(execution::Expression::Variable("a".to_string())),
-            Box::new(execution::Expression::Variable("const_000000000".to_string())),
+            Box::new(execution::Expression::Variable(path_expr_a.clone())),
+            Box::new(execution::Expression::Variable(path_expr_const.clone())),
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
@@ -613,8 +621,14 @@ mod test {
         };
         let expected_source = execution::Node::Map(
             vec![
-                execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
-                execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
+                execution::Named::Expression(
+                    execution::Expression::Variable(path_expr_a.clone()),
+                    Some("a".to_string()),
+                ),
+                execution::Named::Expression(
+                    execution::Expression::Variable(path_expr_b.clone()),
+                    Some("b".to_string()),
+                ),
             ],
             Box::new(execution::Node::DataSource(
                 DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -633,9 +647,13 @@ mod test {
 
     #[test]
     fn test_group_by_gen_physical() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
+
         let filtered_formula = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable("a".to_string())),
+            Box::new(Expression::Variable(path_expr_a.clone())),
             Box::new(Expression::Constant(common::Value::Int(1))),
         );
 
@@ -648,8 +666,8 @@ mod test {
             Box::new(filtered_formula),
             Box::new(Node::Map(
                 vec![
-                    Named::Expression(Expression::Variable("a".to_string()), Some("a".to_string())),
-                    Named::Expression(Expression::Variable("b".to_string()), Some("b".to_string())),
+                    Named::Expression(Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                    Named::Expression(Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
                 ],
                 Box::new(Node::DataSource(
                     DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -661,14 +679,14 @@ mod test {
         let named_aggregates = vec![
             NamedAggregate::new(
                 Aggregate::Avg(Named::Expression(
-                    Expression::Variable("a".to_string()),
+                    Expression::Variable(path_expr_a.clone()),
                     Some("a".to_string()),
                 )),
                 None,
             ),
             NamedAggregate::new(
                 Aggregate::Count(Named::Expression(
-                    Expression::Variable("b".to_string()),
+                    Expression::Variable(path_expr_b.clone()),
                     Some("b".to_string()),
                 )),
                 None,
@@ -684,8 +702,8 @@ mod test {
 
         let expected_filtered_formula = execution::Formula::Predicate(
             execution::Relation::Equal,
-            Box::new(execution::Expression::Variable("a".to_string())),
-            Box::new(execution::Expression::Variable("const_000000000".to_string())),
+            Box::new(execution::Expression::Variable(path_expr_a.clone())),
+            Box::new(execution::Expression::Variable(path_expr_const.clone())),
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
@@ -696,8 +714,14 @@ mod test {
 
         let expected_source = execution::Node::Map(
             vec![
-                execution::Named::Expression(execution::Expression::Variable("a".to_string()), Some("a".to_string())),
-                execution::Named::Expression(execution::Expression::Variable("b".to_string()), Some("b".to_string())),
+                execution::Named::Expression(
+                    execution::Expression::Variable(path_expr_a.clone()),
+                    Some("a".to_string()),
+                ),
+                execution::Named::Expression(
+                    execution::Expression::Variable(path_expr_b.clone()),
+                    Some("b".to_string()),
+                ),
             ],
             Box::new(execution::Node::DataSource(
                 DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -713,7 +737,7 @@ mod test {
                     execution::Aggregate::Avg(
                         execution::AvgAggregate::new(),
                         execution::Named::Expression(
-                            execution::Expression::Variable("a".to_string()),
+                            execution::Expression::Variable(path_expr_a.clone()),
                             Some("a".to_string()),
                         ),
                     ),
@@ -723,7 +747,7 @@ mod test {
                     execution::Aggregate::Count(
                         execution::CountAggregate::new(),
                         execution::Named::Expression(
-                            execution::Expression::Variable("b".to_string()),
+                            execution::Expression::Variable(path_expr_b.clone()),
                             Some("b".to_string()),
                         ),
                     ),

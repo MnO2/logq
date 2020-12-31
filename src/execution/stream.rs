@@ -661,8 +661,11 @@ mod tests {
 
     #[test]
     fn test_filter_stream() {
-        let left = Box::new(types::Expression::Variable("host".to_string()));
-        let right = Box::new(types::Expression::Variable("const".to_string()));
+        let path_expr_host = ast::PathExpr::new(vec![ast::PathSegment::AttrName("host".to_string())]);
+        let path_expr_const = ast::PathExpr::new(vec![ast::PathSegment::AttrName("const".to_string())]);
+
+        let left = Box::new(types::Expression::Variable(path_expr_host));
+        let right = Box::new(types::Expression::Variable(path_expr_const));
         let rel = types::Relation::Equal;
         let predicate = types::Formula::Predicate(rel, left, right);
 
@@ -748,8 +751,9 @@ mod tests {
 
     #[test]
     fn test_map_stream_with_names() {
+        let path_expr_port = ast::PathExpr::new(vec![ast::PathSegment::AttrName("port".to_string())]);
         let named_list = vec![Named::Expression(
-            Expression::Variable("port".to_string()),
+            Expression::Variable(path_expr_port),
             Some("port".to_string()),
         )];
 
