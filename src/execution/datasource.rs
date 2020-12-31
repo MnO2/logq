@@ -743,8 +743,9 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 SquidLogField::field_names()
             };
 
-            //FIXME: parse to the more specific
-            let mut values: Vec<Value> = Vec::new();
+            let mut record_vars = common::types::Variables::default();
+            let mut value_cnt: usize = 0;
+
             for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&buf).enumerate() {
                 if self.file_format == "elb" {
                     if i >= ClassicLoadBalancerLogField::len() {
@@ -780,41 +781,44 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 match datatype {
                     DataType::DateTime => {
                         let dt = chrono::DateTime::parse_from_rfc3339(s)?;
-                        values.push(Value::DateTime(dt));
+                        record_vars.insert(field_names[i].clone(), Value::DateTime(dt));
                     }
                     DataType::String => {
-                        values.push(Value::String(s.to_string()));
+                        record_vars.insert(field_names[i].clone(), Value::String(s.to_string()));
                     }
                     DataType::Integral => {
-                        let i = s.parse::<i32>()?;
-                        values.push(Value::Int(i));
+                        let i_val = s.parse::<i32>()?;
+                        record_vars.insert(field_names[i].clone(), Value::Int(i_val));
                     }
                     DataType::Float => {
                         let f = s.parse::<f32>()?;
-                        values.push(Value::Float(OrderedFloat::from(f)));
+                        record_vars.insert(field_names[i].clone(), Value::Float(OrderedFloat::from(f)));
                     }
                     DataType::Host => {
                         if s == "-" {
-                            values.push(Value::Null)
+                            record_vars.insert(field_names[i].clone(), Value::Null);
                         } else {
                             let host = common::types::parse_host(s)?;
-                            values.push(Value::Host(host));
+                            record_vars.insert(field_names[i].clone(), Value::Host(host));
                         }
                     }
                     DataType::HttpRequest => {
                         let s = s.trim_matches('"');
                         let request = common::types::parse_http_request(s)?;
-                        values.push(Value::HttpRequest(request));
+                        record_vars.insert(field_names[i].clone(), Value::HttpRequest(request));
                     }
                 }
+
+                value_cnt += 1;
             }
 
             //Adjust the width to be the same
-            while values.len() < field_names.len() {
-                values.push(Value::Null);
+            while value_cnt < field_names.len() {
+                record_vars.insert(field_names[value_cnt].clone(), Value::Null);
+                value_cnt += 1;
             }
 
-            let record = Record::new(field_names, values);
+            let record = Record::new_with_variables(record_vars);
             Ok(Some(record))
         } else if more_data > 0 && self.file_format == "jsonl" {
             let parsed = json::parse(&buf)?;
