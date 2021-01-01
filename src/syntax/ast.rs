@@ -1,3 +1,4 @@
+use crate::common::types::VariableName;
 use ordered_float::OrderedFloat;
 use std::fmt;
 use std::result;
@@ -70,6 +71,13 @@ pub(crate) struct PathExpr {
 impl PathExpr {
     pub fn new(path_segments: Vec<PathSegment>) -> Self {
         PathExpr { path_segments }
+    }
+
+    pub fn unwrap_last(&self) -> VariableName {
+        match &self.path_segments.last().unwrap() {
+            PathSegment::AttrName(s) => s.clone(),
+            PathSegment::ArrayIndex(s, _idx) => s.clone(),
+        }
     }
 }
 
@@ -267,14 +275,14 @@ impl FromStr for Ordering {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct OrderingTerm {
-    pub(crate) column_name: String,
+    pub(crate) column_name: PathExpr,
     pub(crate) ordering: Ordering,
 }
 
 impl OrderingTerm {
-    pub(crate) fn new(column_name: &str, ordering: &str) -> Self {
+    pub(crate) fn new(column_name: PathExpr, ordering: &str) -> Self {
         OrderingTerm {
-            column_name: column_name.to_string(),
+            column_name,
             ordering: Ordering::from_str(ordering).unwrap(),
         }
     }

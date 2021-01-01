@@ -76,12 +76,8 @@ impl Record {
         Record { variables }
     }
 
-    pub(crate) fn get(&self, field_name: &VariableName) -> Option<Value> {
-        if let Some(v) = self.variables.get(field_name) {
-            return Some(v.clone());
-        }
-
-        None
+    pub(crate) fn get(&self, field_name: &ast::PathExpr) -> Value {
+        get_value_by_path_expr(field_name, 0, &self.variables)
     }
 
     pub(crate) fn alias(&mut self, bindings: &Vec<common::types::Binding>) {
@@ -463,14 +459,7 @@ impl RecordStream for GroupByStream {
 
             if let Some(values_in_key) = &key {
                 for k in self.keys.iter() {
-                    match &k.path_segments.last().unwrap() {
-                        ast::PathSegment::AttrName(n) => {
-                            fields.push(n.clone());
-                        }
-                        ast::PathSegment::ArrayIndex(n, _idx) => {
-                            fields.push(n.clone());
-                        }
-                    }
+                    fields.push(k.unwrap_last());
                 }
 
                 for v in values_in_key {

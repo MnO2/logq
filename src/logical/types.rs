@@ -2,6 +2,7 @@ use crate::common::types as common;
 use crate::common::types::{DataSource, VariableName};
 use crate::execution::types as execution;
 use crate::syntax::ast;
+use crate::syntax::ast::PathExpr;
 use ordered_float::OrderedFloat;
 use std::result;
 
@@ -21,7 +22,7 @@ pub(crate) enum Node {
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<ast::PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
-    OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>),
+    OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
 }
 
 impl Node {
@@ -322,8 +323,8 @@ pub(crate) enum Aggregate {
     Min(Named),
     Sum(Named),
     ApproxCountDistinct(Named),
-    PercentileDisc(OrderedFloat<f32>, VariableName, Ordering),
-    ApproxPercentile(OrderedFloat<f32>, VariableName, Ordering),
+    PercentileDisc(OrderedFloat<f32>, ast::PathExpr, Ordering),
+    ApproxPercentile(OrderedFloat<f32>, ast::PathExpr, Ordering),
 }
 
 impl Aggregate {
@@ -466,7 +467,8 @@ impl Aggregate {
                 let physical_ordering = ordering.physical()?;
 
                 let percentile_disc_aggregate = execution::PercentileDiscAggregate::new(*percentile, physical_ordering);
-                let aggregate = execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.clone());
+                let aggregate =
+                    execution::Aggregate::PercentileDisc(percentile_disc_aggregate, column_name.unwrap_last());
                 Ok((aggregate, variables))
             }
             Aggregate::ApproxPercentile(percentile, column_name, ordering) => {
@@ -476,7 +478,7 @@ impl Aggregate {
                 let approx_percentile_aggregate =
                     execution::ApproxPercentileAggregate::new(*percentile, physical_ordering);
                 let aggregate =
-                    execution::Aggregate::ApproxPercentile(approx_percentile_aggregate, column_name.clone());
+                    execution::Aggregate::ApproxPercentile(approx_percentile_aggregate, column_name.unwrap_last());
                 Ok((aggregate, variables))
             }
         }

@@ -229,14 +229,10 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
                     if let Some(rename) = name_opt {
                         Ok(Box::new(types::Named::Expression(*e.clone(), Some(rename.clone()))))
                     } else {
-                        match &path_expr.path_segments.last().unwrap() {
-                            PathSegment::AttrName(s) => {
-                                Ok(Box::new(types::Named::Expression(*e.clone(), Some(s.clone()))))
-                            }
-                            PathSegment::ArrayIndex(a, _idx) => {
-                                Ok(Box::new(types::Named::Expression(*e.clone(), Some(a.clone()))))
-                            }
-                        }
+                        Ok(Box::new(types::Named::Expression(
+                            *e.clone(),
+                            Some(path_expr.unwrap_last()),
+                        )))
                     }
                 }
                 _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
@@ -482,18 +478,14 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                             }
                             types::Aggregate::PercentileDisc(_, column_name, _) => {
                                 named_list.push(types::Named::Expression(
-                                    types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
-                                        column_name.clone(),
-                                    )])),
-                                    Some(column_name.clone()),
+                                    types::Expression::Variable(column_name.clone()),
+                                    Some(column_name.unwrap_last()),
                                 ))
                             }
                             types::Aggregate::ApproxPercentile(_, column_name, _) => {
                                 named_list.push(types::Named::Expression(
-                                    types::Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
-                                        column_name.clone(),
-                                    )])),
-                                    Some(column_name.clone()),
+                                    types::Expression::Variable(column_name.clone()),
+                                    Some(column_name.unwrap_last()),
                                 ))
                             }
                         }

@@ -671,7 +671,7 @@ pub(crate) enum Node {
     Map(Vec<Named>, Box<Node>),
     GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
-    OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>),
+    OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
 }
 
 impl Node {
@@ -736,8 +736,8 @@ impl Node {
                         let column_name = &column_names[idx];
                         let curr_ordering = &orderings[idx];
 
-                        let a_value = a.get(column_name).unwrap();
-                        let b_value = b.get(column_name).unwrap();
+                        let a_value = a.get(column_name);
+                        let b_value = b.get(column_name);
 
                         match (a_value, b_value) {
                             (Value::Int(i1), Value::Int(i2)) => match curr_ordering {

@@ -127,10 +127,6 @@ where
     }
 }
 
-fn column_name(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
-    terminated(identifier, not(char('(')))(i)
-}
-
 fn boolean(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     alt((
         map(tag("true"), |_| ast::Value::Boolean(true)),
@@ -305,7 +301,10 @@ fn path_bracket(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
 
 fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
     map(
-        terminated(separated_list0(char('.'), pair(identifier, opt(path_bracket))), space0),
+        terminated(
+            separated_list0(char('.'), pair(identifier, opt(path_bracket))),
+            not(char('(')),
+        ),
         |v| {
             let segments = v
                 .iter()
@@ -385,7 +384,10 @@ fn limit_expression(i: &str) -> IResult<&str, ast::LimitExpression, VerboseError
 
 fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, VerboseError<&str>> {
     map(
-        pair(column_name, preceded(space1, alt((tag("asc"), tag("desc"))))),
+        pair(
+            column_name_in_group_by,
+            preceded(space1, alt((tag("asc"), tag("desc")))),
+        ),
         |(column_name, ordering)| ast::OrderingTerm::new(column_name, ordering),
     )(i)
 }
@@ -1014,6 +1016,22 @@ mod test {
     }
 
     #[test]
+    fn test_ordering_term() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::OrderingTerm::new(path_expr_a.clone(), "asc");
+
+        assert_eq!(ordering_term("a asc"), Ok(("", expected)));
+    }
+
+    #[test]
+    fn test_order_by_clause() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::OrderByExpression::new(vec![ast::OrderingTerm::new(path_expr_a.clone(), "asc")]);
+
+        assert_eq!(order_by_clause("order by a asc"), Ok(("", expected)));
+    }
+
+    #[test]
     fn test_select_statement_with_order() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
@@ -1025,7 +1043,7 @@ mod test {
             ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_c.clone())), None),
         ];
 
-        let order_by_clause = ast::OrderByExpression::new(vec![ast::OrderingTerm::new("a", "asc")]);
+        let order_by_clause = ast::OrderByExpression::new(vec![ast::OrderingTerm::new(path_expr_a.clone(), "asc")]);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
@@ -1044,6 +1062,7 @@ mod test {
     #[test]
     fn test_select_statement_with_within_group() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
         let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
 
         let select_exprs = vec![
@@ -1057,7 +1076,7 @@ mod test {
                         None,
                     )],
                     Some(ast::WithinGroupClause::new(ast::OrderByExpression::new(vec![
-                        ast::OrderingTerm::new("b", "asc"),
+                        ast::OrderingTerm::new(path_expr_b.clone(), "asc"),
                     ]))),
                 )),
                 None,
