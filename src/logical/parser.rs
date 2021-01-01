@@ -525,10 +525,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 return Err(ParseError::GroupByFieldsMismatch);
             }
 
-            root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+            root = types::Node::GroupBy(fields, named_aggregates, group_by.group_as_clause.clone(), Box::new(root));
         } else {
             let fields = Vec::new();
-            root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+            root = types::Node::GroupBy(fields, named_aggregates, None, Box::new(root));
         }
 
         if let Some(having_expr) = query.having_expr_opt {
@@ -947,7 +947,7 @@ mod test {
         )];
 
         let fields = vec![path_expr_b.clone()];
-        let expected = types::Node::GroupBy(fields, named_aggregates, Box::new(filter));
+        let expected = types::Node::GroupBy(fields, named_aggregates, None, Box::new(filter));
 
         let ans = parse_query(before, data_source).unwrap();
         assert_eq!(expected, ans);

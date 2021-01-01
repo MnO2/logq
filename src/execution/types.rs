@@ -669,7 +669,7 @@ pub(crate) enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Box<Node>),
+    GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Option<String>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
 }
@@ -709,9 +709,9 @@ impl Node {
                     Ok(Box::new(stream))
                 }
             },
-            Node::GroupBy(fields, named_aggregates, source) => {
+            Node::GroupBy(fields, named_aggregates, opt_group_as_var, source) => {
                 let record_stream = source.get(variables.clone())?;
-                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream);
+                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), opt_group_as_var.clone(), record_stream);
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
@@ -1187,6 +1187,36 @@ impl CountAggregate {
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&counts) = self.counts.get(key) {
             Ok(Value::Int(counts as i32))
+        } else {
+            Err(AggregateError::KeyNotFound)
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GroupAsAggregate {
+    pub(crate) tuples: HashMap<Option<Tuple>, Vec<Value>>,
+}
+
+impl GroupAsAggregate {
+    pub(crate) fn new() -> Self {
+        GroupAsAggregate { tuples: HashMap::new() }
+    }
+
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, variables: Variables) -> AggregateResult<()> {
+        if let Some(tuples) = self.tuples.get_mut(key) {
+            tuples.push(Value::Object(variables));
+            Ok(())
+        } else {
+            self.tuples.insert(key.clone(), vec![Value::Object(variables)]);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Vec<Value>> {
+        if let Some(tuples) = self.tuples.get(key) {
+            Ok(tuples.clone())
         } else {
             Err(AggregateError::KeyNotFound)
         }

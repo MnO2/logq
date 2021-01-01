@@ -20,7 +20,7 @@ pub(crate) enum Node {
     DataSource(DataSource, Vec<common::Binding>),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<ast::PathExpr>, Vec<NamedAggregate>, Box<Node>),
+    GroupBy(Vec<ast::PathExpr>, Vec<NamedAggregate>, Option<String>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
 }
@@ -62,7 +62,7 @@ impl Node {
 
                 Ok((Box::new(node), return_variables))
             }
-            Node::GroupBy(fields, named_aggergates, source) => {
+            Node::GroupBy(fields, named_aggergates, opt_group_as_var, source) => {
                 let mut variables = common::empty_variables();
 
                 let mut physical_aggregates = Vec::new();
@@ -74,7 +74,7 @@ impl Node {
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&variables, &child_variables);
 
-                let node = execution::Node::GroupBy(fields.clone(), physical_aggregates, child);
+                let node = execution::Node::GroupBy(fields.clone(), physical_aggregates, opt_group_as_var.clone(), child);
 
                 Ok((Box::new(node), return_variables))
             }
@@ -699,7 +699,7 @@ mod test {
         ];
 
         let fields = vec![path_expr_b.clone()];
-        let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
+        let group_by = Node::GroupBy(fields, named_aggregates, None, Box::new(filter));
 
         let mut physical_plan_creator =
             PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
@@ -760,6 +760,7 @@ mod test {
                     None,
                 ),
             ],
+            None,
             Box::new(expected_filter),
         );
 

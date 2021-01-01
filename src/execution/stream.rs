@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult, GroupAsAggregate};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::syntax::ast;
@@ -314,6 +314,8 @@ pub(crate) struct GroupByStream {
     keys: Vec<ast::PathExpr>,
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
+    opt_group_as_var: Option<String>,
+    group_as_aggregate: GroupAsAggregate,
     source: Box<dyn RecordStream>,
     group_iterator: Option<hash_set::IntoIter<Option<Tuple>>>,
 }
@@ -323,12 +325,17 @@ impl<'a> GroupByStream {
         keys: Vec<ast::PathExpr>,
         variables: Variables,
         aggregates: Vec<NamedAggregate>,
+        opt_group_as_var: Option<String>,
         source: Box<dyn RecordStream>,
     ) -> Self {
+        let group_as_aggregate = GroupAsAggregate::new();
+
         GroupByStream {
             keys,
             variables,
             aggregates,
+            opt_group_as_var,
+            group_as_aggregate,
             source,
             group_iterator: None,
         }
@@ -346,6 +353,11 @@ impl RecordStream for GroupByStream {
                 } else {
                     Some(record.get_many(&self.keys))
                 };
+
+                if self.opt_group_as_var.is_some() {
+                    let tuple_for_group_as = record.to_variables();
+                    self.group_as_aggregate.add_record(&key, tuple_for_group_as.clone())?;
+                }
 
                 groups.insert(key.clone());
                 for named_agg in self.aggregates.iter_mut() {
@@ -476,6 +488,13 @@ impl RecordStream for GroupByStream {
                 }
                 let v = named_agg.aggregate.get_aggregated(&key)?;
                 values.push(v);
+            }
+
+
+            if let Some(group_as_var) = self.opt_group_as_var.as_ref() {
+                fields.push(group_as_var.clone());
+                let v = self.group_as_aggregate.get_aggregated(&key)?;
+                values.push(Value::Array(v));
             }
 
             let record = Record::new(&fields, values);
