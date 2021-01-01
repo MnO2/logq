@@ -526,19 +526,14 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
             }
 
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
-
-            if let Some(having_expr) = query.having_expr_opt {
-                let filter_formula = parse_logic(&parsing_context, &having_expr.expr)?;
-                root = types::Node::Filter(filter_formula, Box::new(root));
-            }
         } else {
             let fields = Vec::new();
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
+        }
 
-            if let Some(having_expr) = query.having_expr_opt {
-                let filter_formula = parse_logic(&parsing_context, &having_expr.expr)?;
-                root = types::Node::Filter(filter_formula, Box::new(root));
-            }
+        if let Some(having_expr) = query.having_expr_opt {
+            let filter_formula = parse_logic(&parsing_context, &having_expr.expr)?;
+            root = types::Node::Filter(filter_formula, Box::new(root));
         }
     } else {
         //sanity check if there is a group by statement
