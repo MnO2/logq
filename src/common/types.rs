@@ -311,6 +311,7 @@ pub(crate) struct IndexBinding {
 pub(crate) struct Binding {
     pub(crate) path_expr: ast::PathExpr,
     pub(crate) name: String,
+    pub(crate) idx_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

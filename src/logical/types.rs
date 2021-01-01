@@ -590,6 +590,7 @@ mod test {
         let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
+            idx_name: None,
         };
 
         let filter = Node::Filter(
@@ -620,6 +621,7 @@ mod test {
         let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
+            idx_name: None,
         };
         let expected_source = execution::Node::Map(
             vec![
@@ -663,6 +665,7 @@ mod test {
         let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
+            idx_name: None,
         };
         let filter = Node::Filter(
             Box::new(filtered_formula),
@@ -712,6 +715,7 @@ mod test {
         let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
+            idx_name: None,
         };
 
         let expected_source = execution::Node::Map(

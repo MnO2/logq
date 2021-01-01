@@ -393,7 +393,11 @@ fn to_bindings(table_name: &String, table_references: &Vec<TableReference>) -> V
             };
 
             if let Some(name) = table_reference.as_clause.clone() {
-                Some(common::Binding { path_expr, name })
+                Some(common::Binding {
+                    path_expr,
+                    name,
+                    idx_name: table_reference.at_clause.clone(),
+                })
             } else {
                 None
             }
@@ -799,6 +803,7 @@ mod test {
         let bindings = vec![common::Binding {
             path_expr,
             name: "e".to_string(),
+            idx_name: None,
         }];
 
         let expected = types::Node::Filter(
@@ -921,6 +926,7 @@ mod test {
         let _binding = common::Binding {
             path_expr,
             name: "e".to_string(),
+            idx_name: None,
         };
 
         let filter = types::Node::Filter(
