@@ -692,9 +692,7 @@ impl Node {
             Node::DataSource(data_source, bindings) => match data_source {
                 DataSource::File(path, file_format, _table_name) => {
                     let reader = ReaderBuilder::new(file_format.clone()).with_path(path)?;
-                    let file_stream = LogFileStream {
-                        reader: Box::new(reader),
-                    };
+                    let file_stream = LogFileStream::new(Box::new(reader));
 
                     if !bindings.is_empty() {
                         let stream = ProjectionStream::new(Box::new(file_stream), bindings.clone());
@@ -706,9 +704,7 @@ impl Node {
                 }
                 DataSource::Stdin(file_format, _table_name) => {
                     let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin());
-                    let stream = LogFileStream {
-                        reader: Box::new(reader),
-                    };
+                    let stream = LogFileStream::new(Box::new(reader));
 
                     Ok(Box::new(stream))
                 }

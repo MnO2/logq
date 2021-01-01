@@ -87,6 +87,10 @@ impl Record {
         }
     }
 
+    pub(crate) fn bind_index(&mut self, binding: &common::types::IndexBinding) {
+        self.variables.insert(binding.name.clone(), Value::Int(binding.idx as i32));
+    }
+
     pub(crate) fn project(&self, field_names: &[VariableName]) -> Record {
         let mut variables = Variables::default();
         for name in field_names {
@@ -597,11 +601,28 @@ impl RecordStream for ProjectionStream {
 
 pub(crate) struct LogFileStream {
     pub(crate) reader: Box<dyn RecordRead>,
+    pub(crate) index_binding_name: Option<VariableName>,
+    pub(crate) counter: usize
+}
+
+impl LogFileStream {
+    pub(crate) fn new(reader: Box<dyn RecordRead>) -> Self {
+        LogFileStream {
+            reader,
+            index_binding_name: None,
+            counter: 0
+        }
+    }
 }
 
 impl RecordStream for LogFileStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        if let Some(record) = self.reader.read_record()? {
+        if let Some(mut record) = self.reader.read_record()? {
+            if let Some(name) = &self.index_binding_name {
+                record.bind_index(&common::types::IndexBinding { name: name.clone(), idx: self.counter });
+                self.counter += 1;
+            }
+
             Ok(Some(record))
         } else {
             Ok(None)

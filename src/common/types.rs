@@ -302,6 +302,12 @@ pub(crate) fn merge(left: &Variables, right: &Variables) -> Variables {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IndexBinding {
+    pub(crate) idx: usize,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Binding {
     pub(crate) path_expr: ast::PathExpr,
     pub(crate) name: String,
