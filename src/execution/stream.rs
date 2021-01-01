@@ -101,12 +101,11 @@ impl Record {
         Record::new_with_variables(variables)
     }
 
-    pub(crate) fn get_many(&self, field_names: &[VariableName]) -> Vec<Value> {
+    pub(crate) fn get_many(&self, field_names: &[ast::PathExpr]) -> Vec<Value> {
         let mut ret = Vec::with_capacity(field_names.len());
         for name in field_names {
-            if let Some(v) = self.variables.get(name) {
-                ret.push(v.clone());
-            }
+            let v = get_value_by_path_expr(name, 0, &self.variables);
+            ret.push(v);
         }
         ret
     }
@@ -316,7 +315,7 @@ impl RecordStream for InMemoryStream {
 }
 
 pub(crate) struct GroupByStream {
-    keys: Vec<VariableName>,
+    keys: Vec<ast::PathExpr>,
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
     source: Box<dyn RecordStream>,
@@ -325,7 +324,7 @@ pub(crate) struct GroupByStream {
 
 impl<'a> GroupByStream {
     pub(crate) fn new(
-        keys: Vec<VariableName>,
+        keys: Vec<ast::PathExpr>,
         variables: Variables,
         aggregates: Vec<NamedAggregate>,
         source: Box<dyn RecordStream>,
@@ -464,7 +463,14 @@ impl RecordStream for GroupByStream {
 
             if let Some(values_in_key) = &key {
                 for k in self.keys.iter() {
-                    fields.push(k.clone());
+                    match &k.path_segments.last().unwrap() {
+                        ast::PathSegment::AttrName(n) => {
+                            fields.push(n.clone());
+                        }
+                        ast::PathSegment::ArrayIndex(n, _idx) => {
+                            fields.push(n.clone());
+                        }
+                    }
                 }
 
                 for v in values_in_key {

@@ -272,14 +272,8 @@ fn where_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError
     map(preceded(tag("where"), expression), ast::WhereExpression::new)(i)
 }
 
-fn qualified_column_name(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
-    map(terminated(separated_list0(char('.'), identifier), space0), |v| {
-        v.iter().map(|s| s.to_string()).collect()
-    })(i)
-}
-
-fn column_name_in_group_by(i: &str) -> IResult<&str, Vec<String>, VerboseError<&str>> {
-    terminated(qualified_column_name, not(char('(')))(i)
+fn column_name_in_group_by(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
+    terminated(path_expr, not(char('(')))(i)
 }
 
 fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, VerboseError<&str>> {
@@ -868,8 +862,8 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let group_by_ref_a = ast::GroupByReference::new(vec!["a".to_string()], None);
-        let group_by_ref_b = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_ref_a = ast::GroupByReference::new(path_expr_a.clone(), None);
+        let group_by_ref_b = ast::GroupByReference::new(path_expr_b.clone(), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_b], None);
         let having_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::MoreThan,
@@ -1070,8 +1064,8 @@ mod test {
             ),
         ];
 
-        let group_by_ref_a = ast::GroupByReference::new(vec!["a".to_string()], None);
-        let group_by_ref_c = ast::GroupByReference::new(vec!["c".to_string()], None);
+        let group_by_ref_a = ast::GroupByReference::new(path_expr_a.clone(), None);
+        let group_by_ref_c = ast::GroupByReference::new(path_expr_c.clone(), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_c], None);
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);

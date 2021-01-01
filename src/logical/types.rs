@@ -19,7 +19,7 @@ pub(crate) enum Node {
     DataSource(DataSource, Vec<common::Binding>),
     Filter(Box<Formula>, Box<Node>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
+    GroupBy(Vec<ast::PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>),
 }
@@ -693,7 +693,7 @@ mod test {
             ),
         ];
 
-        let fields = vec!["b".to_string()];
+        let fields = vec![path_expr_b.clone()];
         let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
         let mut physical_plan_creator =
@@ -731,7 +731,7 @@ mod test {
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
         let expected_group_by = execution::Node::GroupBy(
-            vec!["b".to_string()],
+            vec![path_expr_b.clone()],
             vec![
                 execution::NamedAggregate::new(
                     execution::Aggregate::Avg(

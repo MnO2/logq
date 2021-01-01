@@ -669,7 +669,7 @@ pub(crate) enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<VariableName>, Vec<NamedAggregate>, Box<Node>),
+    GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<VariableName>, Vec<Ordering>, Box<Node>),
 }

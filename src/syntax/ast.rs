@@ -214,12 +214,12 @@ impl WhereExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct GroupByReference {
-    pub(crate) column_name: Vec<String>,
+    pub(crate) column_name: PathExpr,
     pub(crate) as_clause: Option<String>,
 }
 
 impl GroupByReference {
-    pub fn new(column_name: Vec<String>, as_clause: Option<String>) -> Self {
+    pub fn new(column_name: PathExpr, as_clause: Option<String>) -> Self {
         GroupByReference { column_name, as_clause }
     }
 }

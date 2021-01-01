@@ -1,6 +1,6 @@
 use super::types;
 use crate::common::types as common;
-use crate::common::types::{ParsingContext, VariableName};
+use crate::common::types::ParsingContext;
 use crate::execution;
 use crate::syntax::ast;
 use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
@@ -523,11 +523,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     if !named_aggregates.is_empty() {
         if let Some(group_by) = query.group_by_exprs_opt {
-            let fields: Vec<VariableName> = group_by
-                .exprs
-                .iter()
-                .map(|r| r.column_name.last().unwrap().clone())
-                .collect();
+            let fields: Vec<PathExpr> = group_by.exprs.iter().map(|r| r.column_name.clone()).collect();
 
             if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
@@ -578,15 +574,8 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     Ok(root)
 }
 
-fn is_match_group_by_fields(
-    variables: &[common::VariableName],
-    named_list: &[types::Named],
-    file_format: &str,
-) -> bool {
-    let mut a: Vec<PathExpr> = variables
-        .iter()
-        .map(|s| PathExpr::new(vec![PathSegment::AttrName(s.to_string())]))
-        .collect();
+fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Named], file_format: &str) -> bool {
+    let mut a: Vec<PathExpr> = variables.iter().map(|s| s.clone()).collect();
     let mut b: Vec<PathExpr> = Vec::new();
 
     for named in named_list.iter() {
@@ -915,7 +904,7 @@ mod test {
             Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_ref = ast::GroupByReference::new(path_expr_b.clone(), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
@@ -964,7 +953,7 @@ mod test {
             None,
         )];
 
-        let fields = vec!["b".to_string()];
+        let fields = vec![path_expr_b.clone()];
         let expected = types::Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
         let ans = parse_query(before, data_source).unwrap();
@@ -987,7 +976,7 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_ref = ast::GroupByReference::new(path_expr_b.clone(), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
@@ -1028,7 +1017,7 @@ mod test {
             ),
         ];
 
-        let group_by_ref = ast::GroupByReference::new(vec!["b".to_string()], None);
+        let group_by_ref = ast::GroupByReference::new(path_expr_b.clone(), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
