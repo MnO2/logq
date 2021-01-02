@@ -482,7 +482,7 @@ impl RecordStream for GroupByStream {
                     fields.push(field_name.clone());
                 } else {
                     let idx = fields.len() + 1;
-                    fields.push(format!("{}", idx));
+                    fields.push(format!("_{}", idx));
                 }
                 let v = named_agg.aggregate.get_aggregated(&key)?;
                 values.push(v);
