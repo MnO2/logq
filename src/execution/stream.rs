@@ -469,7 +469,14 @@ impl RecordStream for GroupByStream {
 
             if let Some(values_in_key) = &key {
                 for k in self.keys.iter() {
-                    fields.push(k.unwrap_last());
+                    match k.path_segments.last().unwrap() {
+                        ast::PathSegment::AttrName(s) => {
+                            fields.push(s.clone());
+                        }
+                        ast::PathSegment::ArrayIndex(s, idx) => {
+                            fields.push(format!("_{}", idx));
+                        }
+                    }
                 }
 
                 for v in values_in_key {
