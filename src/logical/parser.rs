@@ -456,6 +456,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         named_aggregates.push(named_aggregate.clone());
 
                         match named_aggregate.aggregate {
+                            types::Aggregate::GroupAsAggregate(_) => {
+                                unreachable!();
+                            }
                             types::Aggregate::Avg(named) => {
                                 if let types::Named::Star = named {
                                     return Err(ParseError::InvalidArguments("avg".to_string()));
@@ -517,8 +520,26 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                         }
                     } else {
                         let named = *parse_expression(&parsing_context, select_expr)?;
-                        non_aggregates.push(named.clone());
-                        named_list.push(named);
+
+                        if let Some(group_as_clause) = query
+                            .group_by_exprs_opt
+                            .as_ref()
+                            .and_then(|x| x.group_as_clause.as_ref())
+                        {
+                            if check_contains_group_as_var(&[named.clone()], group_as_clause) {
+                                named_list.push(named.clone());
+                                named_aggregates.push(types::NamedAggregate::new(
+                                    types::Aggregate::GroupAsAggregate(named),
+                                    Some(group_as_clause.clone()),
+                                ));
+                            } else {
+                                non_aggregates.push(named.clone());
+                                named_list.push(named);
+                            }
+                        } else {
+                            non_aggregates.push(named.clone());
+                            named_list.push(named);
+                        }
                     }
                 }
 
@@ -543,7 +564,8 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         if let Some(group_by) = query.group_by_exprs_opt {
             let fields: Vec<PathExpr> = group_by.exprs.iter().map(|r| r.column_name.clone()).collect();
 
-            if !is_match_group_by_fields(&fields, &non_aggregates, group_by.group_as_clause.clone(), &file_format) {
+            println!("{:?} {:?}", &fields, &non_aggregates);
+            if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
             }
 
@@ -598,12 +620,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     Ok(root)
 }
 
-fn is_match_group_by_fields(
-    variables: &[ast::PathExpr],
-    named_list: &[types::Named],
-    opt_group_as_var: Option<String>,
-    file_format: &str,
-) -> bool {
+fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Named], file_format: &str) -> bool {
     let mut a: Vec<PathExpr> = variables.iter().map(|s| s.clone()).collect();
     let mut b: Vec<PathExpr> = Vec::new();
 
@@ -645,17 +662,6 @@ fn is_match_group_by_fields(
                     unreachable!();
                 }
             }
-        }
-    }
-
-    if let Some(group_as_var) = opt_group_as_var {
-        let path_expr = PathExpr::new(vec![PathSegment::AttrName(group_as_var)]);
-        if !a.iter().any(|n| n.eq(&path_expr)) {
-            return false;
-        }
-
-        if a.len() - 1 != b.len() {
-            return false;
         }
     }
 

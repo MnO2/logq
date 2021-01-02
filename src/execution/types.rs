@@ -861,12 +861,14 @@ pub(crate) enum Aggregate {
     ApproxCountDistinct(ApproxCountDistinctAggregate, Named),
     PercentileDisc(PercentileDiscAggregate, String),
     ApproxPercentile(ApproxPercentileAggregate, String),
+    GroupAs(GroupAsAggregate, Named),
 }
 
 impl Aggregate {
     #[allow(dead_code)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         match self {
+            Aggregate::GroupAs(agg, _) => agg.add_record(key, value),
             Aggregate::Avg(agg, _) => agg.add_record(key, value),
             Aggregate::Count(agg, _) => agg.add_record(key, value),
             Aggregate::First(agg, _) => agg.add_record(key, value),
@@ -881,6 +883,7 @@ impl Aggregate {
     }
     pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
         match self {
+            Aggregate::GroupAs(agg, _) => agg.get_aggregated(key),
             Aggregate::Avg(agg, _) => agg.get_aggregated(key),
             Aggregate::Count(agg, _) => agg.get_aggregated(key),
             Aggregate::First(agg, _) => agg.get_aggregated(key),
@@ -1209,19 +1212,19 @@ impl GroupAsAggregate {
         GroupAsAggregate { tuples: HashMap::new() }
     }
 
-    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, variables: Variables) -> AggregateResult<()> {
+    pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         if let Some(tuples) = self.tuples.get_mut(key) {
-            tuples.push(Value::Object(variables));
+            tuples.push(value.clone());
             Ok(())
         } else {
-            self.tuples.insert(key.clone(), vec![Value::Object(variables)]);
+            self.tuples.insert(key.clone(), vec![value.clone()]);
             Ok(())
         }
     }
 
-    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Vec<Value>> {
+    pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(tuples) = self.tuples.get(key) {
-            Ok(tuples.clone())
+            Ok(Value::Array(tuples.clone()))
         } else {
             Err(AggregateError::KeyNotFound)
         }

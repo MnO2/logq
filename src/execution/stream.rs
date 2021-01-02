@@ -128,10 +128,7 @@ impl Record {
                 Value::Host(host) => Cell::new(&*host.to_string()),
                 Value::Missing => Cell::new("<null>"),
                 Value::Object(_) => Cell::new("{...}"),
-                Value::Array(a) => {
-                    println!("{:?}", &a);
-                    Cell::new("[...]")
-                }
+                Value::Array(a) => Cell::new("[...]"),
             })
             .collect()
     }
@@ -354,14 +351,19 @@ impl RecordStream for GroupByStream {
                     Some(record.get_many(&self.keys))
                 };
 
-                if self.opt_group_as_var.is_some() {
-                    let tuple_for_group_as = record.to_variables();
-                    self.group_as_aggregate.add_record(&key, tuple_for_group_as.clone())?;
-                }
-
                 groups.insert(key.clone());
                 for named_agg in self.aggregates.iter_mut() {
                     match &mut named_agg.aggregate {
+                        Aggregate::GroupAs(ref mut inner, named) => {
+                            let val = match named {
+                                Named::Expression(expr, _) => Value::Object(record.to_variables().clone()),
+                                Named::Star => {
+                                    unreachable!();
+                                }
+                            };
+
+                            inner.add_record(&key, &val)?;
+                        }
                         Aggregate::Avg(ref mut inner, named) => {
                             let val = match named {
                                 Named::Expression(expr, _) => expr.expression_value(&variables)?,
@@ -488,12 +490,6 @@ impl RecordStream for GroupByStream {
                 }
                 let v = named_agg.aggregate.get_aggregated(&key)?;
                 values.push(v);
-            }
-
-            if let Some(group_as_var) = self.opt_group_as_var.as_ref() {
-                fields.push(group_as_var.clone());
-                let v = self.group_as_aggregate.get_aggregated(&key)?;
-                values.push(Value::Array(v));
             }
 
             let record = Record::new(&fields, values);

@@ -326,6 +326,7 @@ pub(crate) enum Aggregate {
     ApproxCountDistinct(Named),
     PercentileDisc(OrderedFloat<f32>, ast::PathExpr, Ordering),
     ApproxPercentile(OrderedFloat<f32>, ast::PathExpr, Ordering),
+    GroupAsAggregate(Named),
 }
 
 impl Aggregate {
@@ -334,6 +335,24 @@ impl Aggregate {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(execution::Aggregate, common::Variables)> {
         match self {
+            Aggregate::GroupAsAggregate(named) => {
+                let mut variables = common::empty_variables();
+
+                let physical_named = match named {
+                    Named::Expression(expr, name) => {
+                        let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                        variables = common::merge(&variables, &expr_variables);
+                        execution::Named::Expression(*physical_expr, name.clone())
+                    }
+                    Named::Star => {
+                        unreachable!();
+                    }
+                };
+
+                let group_as_aggregate = execution::GroupAsAggregate::new();
+                let aggregate = execution::Aggregate::GroupAs(group_as_aggregate, physical_named);
+                Ok((aggregate, variables))
+            }
             Aggregate::Avg(named) => {
                 let mut variables = common::empty_variables();
 
