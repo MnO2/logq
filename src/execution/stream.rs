@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult, GroupAsAggregate};
+use super::types::{Aggregate, Formula, GroupAsAggregate, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::syntax::ast;
@@ -489,7 +489,6 @@ impl RecordStream for GroupByStream {
                 let v = named_agg.aggregate.get_aggregated(&key)?;
                 values.push(v);
             }
-
 
             if let Some(group_as_var) = self.opt_group_as_var.as_ref() {
                 fields.push(group_as_var.clone());

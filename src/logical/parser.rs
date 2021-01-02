@@ -317,6 +317,28 @@ fn parse_aggregate(ctx: &ParsingContext, select_expr: &ast::SelectExpression) ->
     }
 }
 
+fn check_contains_group_as_var(named_list: &[types::Named], group_as_var: &String) -> bool {
+    for named in named_list.iter() {
+        match named {
+            types::Named::Expression(expr, var_name_opt) => {
+                if let Some(var_name) = var_name_opt {
+                    if var_name.eq(group_as_var) {
+                        return true;
+                    }
+                } else if let types::Expression::Variable(var_name) = expr {
+                    let path_expr = &PathExpr::new(vec![PathSegment::AttrName(group_as_var.clone())]);
+                    if path_expr.eq(var_name) {
+                        return true;
+                    }
+                }
+            }
+            types::Named::Star => {}
+        }
+    }
+
+    false
+}
+
 fn check_conflict_naming(named_list: &[types::Named]) -> bool {
     let mut name_set: HashSet<PathExpr> = HashSet::new();
     for named in named_list {
@@ -504,7 +526,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                     return Err(ParseError::ConflictVariableNaming);
                 }
 
-                root = types::Node::Map(named_list, Box::new(root));
+                root = types::Node::Map(named_list.clone(), Box::new(root));
             }
         }
         ast::SelectClause::ValueConstructor(_vc) => {
@@ -521,11 +543,16 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         if let Some(group_by) = query.group_by_exprs_opt {
             let fields: Vec<PathExpr> = group_by.exprs.iter().map(|r| r.column_name.clone()).collect();
 
-            if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
+            if !is_match_group_by_fields(&fields, &non_aggregates, group_by.group_as_clause.clone(), &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
             }
 
-            root = types::Node::GroupBy(fields, named_aggregates, group_by.group_as_clause.clone(), Box::new(root));
+            root = types::Node::GroupBy(
+                fields,
+                named_aggregates,
+                group_by.group_as_clause.clone(),
+                Box::new(root),
+            );
         } else {
             let fields = Vec::new();
             root = types::Node::GroupBy(fields, named_aggregates, None, Box::new(root));
@@ -537,8 +564,14 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         }
     } else {
         //sanity check if there is a group by statement
-        if query.group_by_exprs_opt.is_some() {
-            return Err(ParseError::GroupByWithoutAggregateFunction);
+        if let Some(group_by_exprs) = query.group_by_exprs_opt {
+            if let Some(group_as_clause) = group_by_exprs.group_as_clause {
+                if !check_contains_group_as_var(&named_list, &group_as_clause) {
+                    return Err(ParseError::GroupByWithoutAggregateFunction);
+                }
+            } else {
+                return Err(ParseError::GroupByWithoutAggregateFunction);
+            }
         }
 
         if query.having_expr_opt.is_some() {
@@ -565,7 +598,12 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     Ok(root)
 }
 
-fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Named], file_format: &str) -> bool {
+fn is_match_group_by_fields(
+    variables: &[ast::PathExpr],
+    named_list: &[types::Named],
+    opt_group_as_var: Option<String>,
+    file_format: &str,
+) -> bool {
     let mut a: Vec<PathExpr> = variables.iter().map(|s| s.clone()).collect();
     let mut b: Vec<PathExpr> = Vec::new();
 
@@ -607,6 +645,17 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
                     unreachable!();
                 }
             }
+        }
+    }
+
+    if let Some(group_as_var) = opt_group_as_var {
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName(group_as_var)]);
+        if !a.iter().any(|n| n.eq(&path_expr)) {
+            return false;
+        }
+
+        if a.len() - 1 != b.len() {
+            return false;
         }
     }
 

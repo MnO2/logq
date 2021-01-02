@@ -74,7 +74,8 @@ impl Node {
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&variables, &child_variables);
 
-                let node = execution::Node::GroupBy(fields.clone(), physical_aggregates, opt_group_as_var.clone(), child);
+                let node =
+                    execution::Node::GroupBy(fields.clone(), physical_aggregates, opt_group_as_var.clone(), child);
 
                 Ok((Box::new(node), return_variables))
             }

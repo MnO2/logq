@@ -711,7 +711,13 @@ impl Node {
             },
             Node::GroupBy(fields, named_aggregates, opt_group_as_var, source) => {
                 let record_stream = source.get(variables.clone())?;
-                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), opt_group_as_var.clone(), record_stream);
+                let stream = GroupByStream::new(
+                    fields.clone(),
+                    variables,
+                    named_aggregates.clone(),
+                    opt_group_as_var.clone(),
+                    record_stream,
+                );
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
@@ -1192,7 +1198,6 @@ impl CountAggregate {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GroupAsAggregate {
