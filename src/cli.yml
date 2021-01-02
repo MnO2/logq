@@ -1,5 +1,5 @@
 name: logq 
-version: "0.1.16"
+version: "0.1.17"
 author: Paul Meng <me@paulme.ng>
 about: A web-server log file command line toolkit with SQL interface.
 subcommands:
