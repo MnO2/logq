@@ -558,7 +558,6 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         if let Some(group_by) = query.group_by_exprs_opt {
             let fields: Vec<PathExpr> = group_by.exprs.iter().map(|r| r.column_name.clone()).collect();
 
-            println!("{:?} {:?}", &fields, &non_aggregates);
             if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
             }
