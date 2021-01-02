@@ -1,9 +1,9 @@
 use crate::common;
 use crate::syntax::ast;
 use chrono;
+use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 use regex::Regex;
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::result;
@@ -27,7 +27,7 @@ pub(crate) enum Value {
     HttpRequest(common::types::HttpRequest),
     Host(common::types::Host),
     Missing,
-    Object(BTreeMap<String, Value>),
+    Object(LinkedHashMap<String, Value>),
     Array(Vec<Value>),
 }
 
@@ -291,7 +291,7 @@ pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterv
 
 pub(crate) type Tuple = Vec<Value>;
 pub(crate) type VariableName = String;
-pub(crate) type Variables = BTreeMap<String, Value>;
+pub(crate) type Variables = LinkedHashMap<String, Value>;
 
 pub(crate) fn empty_variables() -> Variables {
     Variables::default()

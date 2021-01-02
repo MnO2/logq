@@ -1,9 +1,9 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, GroupAsAggregate, Named, NamedAggregate, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::syntax::ast;
-use nom::lib::std::collections::BTreeMap;
+use linked_hash_map::LinkedHashMap;
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
@@ -59,12 +59,12 @@ fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Varia
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Record {
-    variables: BTreeMap<String, Value>,
+    variables: LinkedHashMap<String, Value>,
 }
 
 impl Record {
     pub(crate) fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
-        let mut variables = BTreeMap::default();
+        let mut variables = LinkedHashMap::default();
         for (i, v) in data.into_iter().enumerate() {
             variables.insert(field_names[i].clone(), v);
         }
@@ -128,7 +128,7 @@ impl Record {
                 Value::Host(host) => Cell::new(&*host.to_string()),
                 Value::Missing => Cell::new("<null>"),
                 Value::Object(_) => Cell::new("{...}"),
-                Value::Array(a) => Cell::new("[...]"),
+                Value::Array(_) => Cell::new("[...]"),
             })
             .collect()
     }
@@ -312,7 +312,6 @@ pub(crate) struct GroupByStream {
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
     opt_group_as_var: Option<String>,
-    group_as_aggregate: GroupAsAggregate,
     source: Box<dyn RecordStream>,
     group_iterator: Option<hash_set::IntoIter<Option<Tuple>>>,
 }
@@ -325,14 +324,11 @@ impl<'a> GroupByStream {
         opt_group_as_var: Option<String>,
         source: Box<dyn RecordStream>,
     ) -> Self {
-        let group_as_aggregate = GroupAsAggregate::new();
-
         GroupByStream {
             keys,
             variables,
             aggregates,
             opt_group_as_var,
-            group_as_aggregate,
             source,
             group_iterator: None,
         }
@@ -356,7 +352,7 @@ impl RecordStream for GroupByStream {
                     match &mut named_agg.aggregate {
                         Aggregate::GroupAs(ref mut inner, named) => {
                             let val = match named {
-                                Named::Expression(expr, _) => Value::Object(record.to_variables().clone()),
+                                Named::Expression(_expr, _) => Value::Object(record.to_variables().clone()),
                                 Named::Star => {
                                     unreachable!();
                                 }
@@ -485,8 +481,8 @@ impl RecordStream for GroupByStream {
                 if let Some(ref field_name) = named_agg.name_opt {
                     fields.push(field_name.clone());
                 } else {
-                    //FIXME: Insert empty string for now
-                    fields.push("".to_string());
+                    let idx = fields.len() + 1;
+                    fields.push(format!("{}", idx));
                 }
                 let v = named_agg.aggregate.get_aggregated(&key)?;
                 values.push(v);

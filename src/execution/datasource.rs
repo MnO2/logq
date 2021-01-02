@@ -7,7 +7,7 @@ use regex::Regex;
 use url;
 
 use json::JsonValue;
-use nom::lib::std::collections::BTreeMap;
+use linked_hash_map::LinkedHashMap;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -685,7 +685,8 @@ impl ReaderBuilder {
 fn json_to_data_model(parsed: &JsonValue) -> Value {
     match parsed {
         json::JsonValue::Object(o) => {
-            let t: BTreeMap<String, Value> = o.iter().map(|(k, v)| (k.to_string(), json_to_data_model(v))).collect();
+            let t: LinkedHashMap<String, Value> =
+                o.iter().map(|(k, v)| (k.to_string(), json_to_data_model(v))).collect();
             Value::Object(t)
         }
         json::JsonValue::Array(a) => {

@@ -166,6 +166,7 @@ pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, outpu
     match output_mode {
         OutputMode::Table => {
             let mut table = Table::new();
+
             while let Some(record) = stream.next()? {
                 table.add_row(Row::new(record.to_row()));
             }
