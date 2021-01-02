@@ -225,16 +225,10 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
         ast::SelectExpression::Expression(expr, name_opt) => {
             let e = parse_value_expression(ctx, expr)?;
             match &*e {
-                types::Expression::Variable(path_expr) => {
-                    if let Some(rename) = name_opt {
-                        Ok(Box::new(types::Named::Expression(*e.clone(), Some(rename.clone()))))
-                    } else {
-                        Ok(Box::new(types::Named::Expression(
-                            *e.clone(),
-                            Some(path_expr.unwrap_last()),
-                        )))
-                    }
-                }
+                types::Expression::Variable(path_expr) => Ok(Box::new(types::Named::Expression(
+                    *e.clone(),
+                    Some(path_expr.unwrap_last()),
+                ))),
                 _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
             }
         }
