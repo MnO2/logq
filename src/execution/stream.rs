@@ -468,13 +468,13 @@ impl RecordStream for GroupByStream {
             let mut fields: Vec<VariableName> = Vec::new();
 
             if let Some(values_in_key) = &key {
-                for k in self.keys.iter() {
+                for (position_idx, k) in self.keys.iter().enumerate() {
                     match k.path_segments.last().unwrap() {
                         ast::PathSegment::AttrName(s) => {
                             fields.push(s.clone());
                         }
-                        ast::PathSegment::ArrayIndex(_s, idx) => {
-                            fields.push(format!("_{}", idx));
+                        ast::PathSegment::ArrayIndex(_s, _idx) => {
+                            fields.push(format!("_{}", position_idx + 1));
                         }
                     }
                 }
