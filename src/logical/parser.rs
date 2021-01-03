@@ -4,6 +4,7 @@ use crate::common::types::ParsingContext;
 use crate::execution;
 use crate::syntax::ast;
 use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
+use hashbrown::HashSet;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -222,10 +223,7 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
         ast::SelectExpression::Expression(expr, name_opt) => {
             let e = parse_value_expression(ctx, expr)?;
             match &*e {
-                types::Expression::Variable(path_expr) => Ok(Box::new(types::Named::Expression(
-                    *e.clone(),
-                    Some(path_expr.unwrap_last()),
-                ))),
+                types::Expression::Variable(_path_expr) => Ok(Box::new(types::Named::Expression(*e.clone(), None))),
                 _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
             }
         }
@@ -413,6 +411,14 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
 
+    if let Some(group_by) = &query.group_by_exprs_opt {
+        for r in group_by.exprs.iter() {
+            let named = types::Named::Expression(types::Expression::Variable(r.column_name.clone()), None);
+            non_aggregates.push(named.clone());
+            named_list.push(named);
+        }
+    }
+
     match query.select_clause {
         ast::SelectClause::SelectExpressions(select_exprs) => {
             if !select_exprs.is_empty() {
@@ -581,18 +587,18 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 }
 
 fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Named], file_format: &str) -> bool {
-    let mut a: Vec<PathExpr> = variables.iter().map(|s| s.clone()).collect();
-    let mut b: Vec<PathExpr> = Vec::new();
+    let a: HashSet<PathExpr> = variables.iter().map(|s| s.clone()).collect();
+    let mut b: HashSet<PathExpr> = HashSet::new();
 
     for named in named_list.iter() {
         match named {
             types::Named::Expression(expr, name_opt) => {
                 if let Some(name) = name_opt {
-                    b.push(PathExpr::new(vec![PathSegment::AttrName(name.clone())]));
+                    b.insert(PathExpr::new(vec![PathSegment::AttrName(name.clone())]));
                 } else {
                     match expr {
                         types::Expression::Variable(path_expr) => {
-                            b.push(path_expr.clone());
+                            b.insert(path_expr.clone());
                         }
                         _ => {
                             return false;
@@ -603,20 +609,20 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
             types::Named::Star => {
                 if file_format == "elb" {
                     for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
-                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
+                        b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "alb" {
                     for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().into_iter()
                     {
-                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
+                        b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "squid" {
                     for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
-                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
+                        b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "s3" {
                     for field_name in execution::datasource::S3Field::field_names().into_iter() {
-                        b.push(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
+                        b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else {
                     unreachable!();
@@ -628,9 +634,6 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
     if a.len() != b.len() {
         false
     } else {
-        a.sort();
-        b.sort();
-
         let mut a_iter = a.iter();
         let mut b_iter = b.iter();
         while let (Some(aa), Some(bb)) = (a_iter.next(), b_iter.next()) {
