@@ -473,7 +473,7 @@ impl RecordStream for GroupByStream {
                         ast::PathSegment::AttrName(s) => {
                             fields.push(s.clone());
                         }
-                        ast::PathSegment::ArrayIndex(s, idx) => {
+                        ast::PathSegment::ArrayIndex(_s, idx) => {
                             fields.push(format!("_{}", idx));
                         }
                     }

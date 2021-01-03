@@ -4,7 +4,6 @@ use crate::common::types::ParsingContext;
 use crate::execution;
 use crate::syntax::ast;
 use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
-use std::collections::hash_set::HashSet;
 
 #[derive(Fail, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -16,8 +15,6 @@ pub enum ParseError {
     GroupByWithoutAggregateFunction,
     #[fail(display = "Group By statement mismatch with the non-aggregate fields")]
     GroupByFieldsMismatch,
-    #[fail(display = "Conflict variable naming")]
-    ConflictVariableNaming,
     #[fail(display = "Invalid Arguments: {}", _0)]
     InvalidArguments(String),
     #[fail(display = "Invalid Arguments: {}", _0)]
@@ -333,32 +330,6 @@ fn check_contains_group_as_var(named_list: &[types::Named], group_as_var: &Strin
     false
 }
 
-fn check_conflict_naming(named_list: &[types::Named]) -> bool {
-    let mut name_set: HashSet<PathExpr> = HashSet::new();
-    for named in named_list {
-        match named {
-            types::Named::Expression(expr, var_name_opt) => {
-                if let Some(var_name) = var_name_opt {
-                    if name_set.contains(&PathExpr::new(vec![PathSegment::AttrName(var_name.clone())])) {
-                        return true;
-                    } else {
-                        name_set.insert(PathExpr::new(vec![PathSegment::AttrName(var_name.clone())]));
-                    }
-                } else if let types::Expression::Variable(var_name) = expr {
-                    if name_set.contains(var_name) {
-                        return true;
-                    }
-
-                    name_set.insert(var_name.clone());
-                }
-            }
-            types::Named::Star => {}
-        }
-    }
-
-    false
-}
-
 fn check_env(table_name: &String, table_references: &Vec<TableReference>) -> ParseResult<()> {
     for (i, table_reference) in table_references.iter().enumerate() {
         if i == 0 {
@@ -535,10 +506,6 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                             named_list.push(named);
                         }
                     }
-                }
-
-                if check_conflict_naming(&named_list) {
-                    return Err(ParseError::ConflictVariableNaming);
                 }
 
                 root = types::Node::Map(named_list.clone(), Box::new(root));
@@ -1074,40 +1041,6 @@ mod test {
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByFieldsMismatch);
-        assert_eq!(expected, ans);
-    }
-
-    #[test]
-    fn test_parse_query_group_by_conflict_naming() {
-        let select_exprs = vec![
-            ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
-                    ast::PathSegment::AttrName("a".to_string()),
-                ]))),
-                Some("t".to_string()),
-            ),
-            ast::SelectExpression::Expression(
-                Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
-                    ast::PathSegment::AttrName("b".to_string()),
-                ]))),
-                Some("t".to_string()),
-            ),
-        ];
-
-        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
-        let table_reference = ast::TableReference::new(path_expr, None, None);
-        let before = ast::SelectStatement::new(
-            SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
-        let ans = parse_query(before, data_source);
-        let expected = Err(ParseError::ConflictVariableNaming);
         assert_eq!(expected, ans);
     }
 }
