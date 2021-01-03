@@ -270,7 +270,7 @@ mod tests {
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
         let result = run(
-            r#"select time_bucket("5 seconds", timestamp) as t, sum(sent_bytes) as s from it group by t order by t asc limit 1"#,
+            r#"select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t order by t asc limit 1"#,
             data_source.clone(),
             OutputMode::Csv,
         );

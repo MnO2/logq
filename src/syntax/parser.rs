@@ -272,13 +272,26 @@ fn column_name_in_group_by(i: &str) -> IResult<&str, PathExpr, VerboseError<&str
     terminated(path_expr, not(char('(')))(i)
 }
 
+fn column_factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+    delimited(
+        space0,
+        alt((
+            parens,
+            map(value, ast::Expression::Value),
+            func_call,
+            map(column_name_in_group_by, |path_expr| ast::Expression::Column(path_expr)),
+        )),
+        space0,
+    )(i)
+}
+
 fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, VerboseError<&str>> {
     map(
         tuple((
-            column_name_in_group_by,
+            column_factor,
             opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
         )),
-        |(column_name, as_clasue)| ast::GroupByReference::new(column_name, as_clasue.map(|s| s.to_string())),
+        |(column_expr, as_clasue)| ast::GroupByReference::new(column_expr, as_clasue.map(|s| s.to_string())),
     )(i)
 }
 
@@ -864,8 +877,8 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let group_by_ref_a = ast::GroupByReference::new(path_expr_a.clone(), None);
-        let group_by_ref_b = ast::GroupByReference::new(path_expr_b.clone(), None);
+        let group_by_ref_a = ast::GroupByReference::new(ast::Expression::Column(path_expr_a.clone()), None);
+        let group_by_ref_b = ast::GroupByReference::new(ast::Expression::Column(path_expr_b.clone()), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_b], None);
         let having_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
             ast::BinaryOperator::MoreThan,
@@ -1032,6 +1045,33 @@ mod test {
     }
 
     #[test]
+    fn test_group_by_expression() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+
+        let func_call_expr = ast::Expression::FuncCall(
+            "time_bucket".to_string(),
+            vec![
+                ast::SelectExpression::Expression(
+                    Box::new(ast::Expression::Value(ast::Value::StringLiteral(
+                        "5 seconds".to_string(),
+                    ))),
+                    None,
+                ),
+                ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+            ],
+            None,
+        );
+
+        let group_by_ref_a = ast::GroupByReference::new(func_call_expr, Some("t".to_string()));
+        let expected = ast::GroupByExpression::new(vec![group_by_ref_a], None);
+
+        assert_eq!(
+            group_by_expression("group by time_bucket(\"5 seconds\", a) as t "),
+            Ok(("", expected))
+        );
+    }
+
+    #[test]
     fn test_select_statement_with_order() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
@@ -1083,8 +1123,8 @@ mod test {
             ),
         ];
 
-        let group_by_ref_a = ast::GroupByReference::new(path_expr_a.clone(), None);
-        let group_by_ref_c = ast::GroupByReference::new(path_expr_c.clone(), None);
+        let group_by_ref_a = ast::GroupByReference::new(ast::Expression::Column(path_expr_a.clone()), None);
+        let group_by_ref_c = ast::GroupByReference::new(ast::Expression::Column(path_expr_c.clone()), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref_a, group_by_ref_c], None);
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);

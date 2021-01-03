@@ -2,6 +2,7 @@ use super::types;
 use crate::common::types as common;
 use crate::common::types::ParsingContext;
 use crate::execution;
+use crate::logical::types::Named;
 use crate::syntax::ast;
 use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
 use hashbrown::HashSet;
@@ -223,7 +224,14 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
         ast::SelectExpression::Expression(expr, name_opt) => {
             let e = parse_value_expression(ctx, expr)?;
             match &*e {
-                types::Expression::Variable(_path_expr) => Ok(Box::new(types::Named::Expression(*e.clone(), None))),
+                types::Expression::Variable(path_expr) => {
+                    let name = match path_expr.path_segments.last().unwrap() {
+                        PathSegment::ArrayIndex(_s, _) => None,
+                        PathSegment::AttrName(s) => Some(s.clone()),
+                    };
+
+                    Ok(Box::new(types::Named::Expression(*e.clone(), name)))
+                }
                 _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
             }
         }
@@ -391,6 +399,38 @@ fn to_bindings(table_name: &String, table_references: &Vec<TableReference>) -> V
         .collect()
 }
 
+fn check_group_by_vars(named: &Named, group_by_vars: &HashSet<String>) -> bool {
+    println!("named = {:?}, group_by_vars: {:?}", named, group_by_vars);
+    match named {
+        Named::Expression(expr, alias) => {
+            match expr {
+                types::Expression::Variable(path_expr) => match path_expr.path_segments.last().unwrap() {
+                    PathSegment::AttrName(s) => {
+                        return group_by_vars.contains(s);
+                    }
+                    PathSegment::ArrayIndex(_, _) => {
+                        return false;
+                    }
+                },
+                types::Expression::Function(_, _) => {
+                    if let Some(a) = alias {
+                        return group_by_vars.contains(a);
+                    } else {
+                        return false;
+                    }
+                }
+                _ => {
+                    //TODO: branch furhter
+                    return false;
+                }
+            }
+        }
+        _ => {
+            return false;
+        }
+    }
+}
+
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     let table_references = &query.table_references;
 
@@ -410,10 +450,41 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
+    let mut group_by_vars: HashSet<String> = HashSet::default();
 
     if let Some(group_by) = &query.group_by_exprs_opt {
-        for r in group_by.exprs.iter() {
-            let named = types::Named::Expression(types::Expression::Variable(r.column_name.clone()), None);
+        for (position, r) in group_by.exprs.iter().enumerate() {
+            let e = parse_value_expression(&parsing_context, &r.column_expr)?;
+            let named = match &*e {
+                types::Expression::Variable(path_expr) => {
+                    if let Some(alias) = &r.as_clause {
+                        group_by_vars.insert(alias.clone());
+                        types::Named::Expression(*e.clone(), Some(alias.clone()))
+                    } else {
+                        let l = path_expr.path_segments.last().unwrap();
+                        match l {
+                            PathSegment::AttrName(s) => {
+                                group_by_vars.insert(s.clone());
+                                types::Named::Expression(*e.clone(), Some(s.clone()))
+                            }
+                            PathSegment::ArrayIndex(_s, _idx) => {
+                                group_by_vars.insert(format!("_{}", position + 1));
+                                types::Named::Expression(*e.clone(), Some(format!("_{}", position + 1)))
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(alias) = &r.as_clause {
+                        group_by_vars.insert(alias.clone());
+                        types::Named::Expression(*e.clone(), Some(alias.clone()))
+                    } else {
+                        group_by_vars.insert(format!("_{}", position + 1));
+                        types::Named::Expression(*e.clone(), Some(format!("_{}", position + 1)))
+                    }
+                }
+            };
+
             non_aggregates.push(named.clone());
             named_list.push(named);
         }
@@ -492,7 +563,11 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                     } else {
                         let named = *parse_expression(&parsing_context, select_expr)?;
 
-                        if let Some(group_as_clause) = query
+                        if query.group_by_exprs_opt.is_some() {
+                            if !check_group_by_vars(&named, &group_by_vars) {
+                                return Err(ParseError::GroupByFieldsMismatch);
+                            }
+                        } else if let Some(group_as_clause) = query
                             .group_by_exprs_opt
                             .as_ref()
                             .and_then(|x| x.group_as_clause.as_ref())
@@ -503,13 +578,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                                     types::Aggregate::GroupAsAggregate(named),
                                     Some(group_as_clause.clone()),
                                 ));
-                            } else {
-                                non_aggregates.push(named.clone());
-                                named_list.push(named);
                             }
                         } else {
                             non_aggregates.push(named.clone());
-                            named_list.push(named);
+                            named_list.push(named.clone());
                         }
                     }
                 }
@@ -529,7 +601,38 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     if !named_aggregates.is_empty() {
         if let Some(group_by) = query.group_by_exprs_opt {
-            let fields: Vec<PathExpr> = group_by.exprs.iter().map(|r| r.column_name.clone()).collect();
+            let fields: Vec<PathExpr> = group_by
+                .exprs
+                .iter()
+                .enumerate()
+                .map(|(position, r)| {
+                    let e = parse_value_expression(&parsing_context, &r.column_expr).unwrap();
+                    match &*e {
+                        types::Expression::Variable(path_expr) => {
+                            if let Some(alias) = &r.as_clause {
+                                PathExpr::new(vec![PathSegment::AttrName(alias.clone())])
+                            } else {
+                                let l = path_expr.path_segments.last().unwrap();
+                                match l {
+                                    PathSegment::AttrName(s) => PathExpr::new(vec![PathSegment::AttrName(s.clone())]),
+                                    PathSegment::ArrayIndex(_s, _idx) => {
+                                        let s = format!("_{}", position + 1);
+                                        PathExpr::new(vec![PathSegment::AttrName(s.clone())])
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(alias) = &r.as_clause {
+                                PathExpr::new(vec![PathSegment::AttrName(alias.clone())])
+                            } else {
+                                let s = format!("_{}", position + 1);
+                                PathExpr::new(vec![PathSegment::AttrName(s.clone())])
+                            }
+                        }
+                    }
+                })
+                .collect();
 
             if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
@@ -583,6 +686,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         root = types::Node::Limit(limit_expr.row_count, Box::new(root));
     }
 
+    println!("{:?}", &root);
     Ok(root)
 }
 
@@ -631,6 +735,7 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
         }
     }
 
+    println!("a = {:?}, b = {:?}", &a, &b);
     if a.len() != b.len() {
         false
     } else {
@@ -914,7 +1019,7 @@ mod test {
             Box::new(ast::Expression::Column(path_expr_a.clone())),
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
-        let group_by_ref = ast::GroupByReference::new(path_expr_b.clone(), None);
+        let group_by_ref = ast::GroupByReference::new(ast::Expression::Column(path_expr_b.clone()), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
@@ -946,8 +1051,8 @@ mod test {
             filtered_formula,
             Box::new(types::Node::Map(
                 vec![
-                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
                     types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
+                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
                 ],
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
@@ -987,7 +1092,7 @@ mod test {
             Box::new(ast::Expression::Value(ast::Value::Integral(1))),
         ));
 
-        let group_by_ref = ast::GroupByReference::new(path_expr_b.clone(), None);
+        let group_by_ref = ast::GroupByReference::new(ast::Expression::Column(path_expr_b.clone()), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
@@ -1002,7 +1107,7 @@ mod test {
         );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
         let ans = parse_query(before, data_source);
-        let expected = Err(ParseError::GroupByWithoutAggregateFunction);
+        let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
     }
 
@@ -1028,7 +1133,7 @@ mod test {
             ),
         ];
 
-        let group_by_ref = ast::GroupByReference::new(path_expr_b.clone(), None);
+        let group_by_ref = ast::GroupByReference::new(ast::Expression::Column(path_expr_b.clone()), None);
         let group_by_expr = ast::GroupByExpression::new(vec![group_by_ref], None);
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);

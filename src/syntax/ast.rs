@@ -222,13 +222,13 @@ impl WhereExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct GroupByReference {
-    pub(crate) column_name: PathExpr,
+    pub(crate) column_expr: Expression,
     pub(crate) as_clause: Option<String>,
 }
 
 impl GroupByReference {
-    pub fn new(column_name: PathExpr, as_clause: Option<String>) -> Self {
-        GroupByReference { column_name, as_clause }
+    pub fn new(column_expr: Expression, as_clause: Option<String>) -> Self {
+        GroupByReference { column_expr, as_clause }
     }
 }
 

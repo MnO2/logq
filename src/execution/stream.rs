@@ -193,7 +193,7 @@ impl RecordStream for MapStream {
                             name.clone()
                         } else {
                             //Give the column a positional name if not provided.
-                            format!("{:02}", idx)
+                            format!("_{}", idx)
                         };
 
                         field_names.push(name);
@@ -341,6 +341,7 @@ impl RecordStream for GroupByStream {
             let mut groups: hash_set::HashSet<Option<Tuple>> = hash_set::HashSet::new();
             while let Some(record) = self.source.next()? {
                 let variables = common::types::merge(&self.variables, record.to_variables());
+
                 let key = if self.keys.is_empty() {
                     None
                 } else {
