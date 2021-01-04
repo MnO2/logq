@@ -1,4 +1,4 @@
-# logq - Analyzing log files in SQL with command-line toolkit, implemented in Rust
+# logq - Analyzing log files in PartiSQL with command-line toolkit, implemented in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
 [![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
@@ -6,7 +6,7 @@
 
 This project is in alpha stage, PRs are welcomed.
 
-logq is a command line tool for easily analyzing, querying, aggregating web-server log files though SQL inteface. 
+logq is a command line tool for easily analyzing, querying, aggregating web-server log files though PartiSQL (which is compatible with SQL-92) inteface 
 Right now the supported formats are
 
 1. AWS classic elastic load balancer
@@ -22,7 +22,7 @@ More log formats would be supported in the future, and ideally it could be custo
 cargo install logq
 ```
 
-## Examples
+## Examples on querying flat logs
 
 Project the columns of `timestamp` and `backend_and_port` fields from the log file and print the first three records out.
 
@@ -164,6 +164,29 @@ The supported log format
 * elb
 ```
 
+## Examples to query nested `jsonl` logs
+
+For the `jsonl` format like this
+
+```
+{"a": 1, "b": "123", "c": 456.1, "d": [0, 1, 2], "e": {"f": {"g": 1}}}
+{"a": 1, "b": "123", "d": [1, 2, 3], "e": {"f": {"g": 2}}}
+{"a": 1, "b": "456", "d": [4, 5, 6], "e": {"f": {"g": 3}}}
+```
+
+We can query the log like this
+
+```
+logq run query 'select x, count(*) as x from it group by d[0] as x' --table it:jsonl=data/structured.log --output=json
+[{"x":1},{"x":1},{"x":1}]
+```
+
+```
+logq run query 'select b, e.f.g from it' --table it:jsonl=data/structured.log --output=json
+[{"b":"123","g":1},{"b":"123","g":2},{"b":"456","g":3}]
+```
+
+
 ## Available Functions
 
 | Function Name | Description | Input Type | Output Type | 
@@ -212,6 +235,8 @@ TextQL is implemented in python ant it's ok for the smaller cases. In the case o
 regarding to the speed. Furthermore, either TextQL and sqlite are limited in their provided SQL functions and data types, it makes the domain processing like URL, and HTTP
 reuqests line and User-Agents tedious. 
 
+Another big reason is that we would like to support `jsonl` format (lines of `json`), which is nested semi-structured data that require the extension of SQL to be able to be queried effectively.
+
 Also, in the use case of web-traffic analytics, the questions you would to be answered are like "What is the 99th percentile in a given time frame to this Restful endpoint, by ignoring the user_id in the URL path segments". It would be easier to have a software providing handy functions to extract or canonicalize the information from the log.
 
 
@@ -219,11 +244,11 @@ Also, in the use case of web-traffic analytics, the questions you would to be an
 
 - [ ] Using cmdline flag to specify the table names and their the backing files.
 - [ ] Spin-off the syntax parser as a separate cargo crate.
-- [ ] Support the [PartiQL](https://partiql.org/assets/PartiQL-Specification.pdf) specification, tutorial [here](https://partiql.org/tutorial.html#running-the-partiql-repl).
+- [ ] Support complete [PartiQL](https://partiql.org/assets/PartiQL-Specification.pdf) specification, tutorial [here](https://partiql.org/tutorial.html#running-the-partiql-repl).
 - [ ] Performance optimization, avoid unnecessary parsing
 - [ ] More supported functions
 - [ ] time_bucket with arbitrary interval (begin from epoch)
-- [ ] Polish the parser to be [SQL-compatible](https://jakewheat.github.io/sql-overview/sql-2016-foundation-grammar.html#_5_lexical_elements)
+- [ ] Polish the parser to be [SQL-92-compatible](https://jakewheat.github.io/sql-overview/sql-2016-foundation-grammar.html#_5_lexical_elements)
 - [ ] Streaming mode to work with `tail -f`
 - [ ] Customizable Reader, to follow GoAccess's style
 - [ ] More supported log format
