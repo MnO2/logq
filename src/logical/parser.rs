@@ -400,7 +400,6 @@ fn to_bindings(table_name: &String, table_references: &Vec<TableReference>) -> V
 }
 
 fn check_group_by_vars(named: &Named, group_by_vars: &HashSet<String>) -> bool {
-    println!("named = {:?}, group_by_vars: {:?}", named, group_by_vars);
     match named {
         Named::Expression(expr, alias) => {
             match expr {
@@ -686,7 +685,6 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         root = types::Node::Limit(limit_expr.row_count, Box::new(root));
     }
 
-    println!("{:?}", &root);
     Ok(root)
 }
 
@@ -735,7 +733,6 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
         }
     }
 
-    println!("a = {:?}, b = {:?}", &a, &b);
     if a.len() != b.len() {
         false
     } else {
