@@ -1,4 +1,4 @@
-# logq - Analyzing log files in PartiSQL with command-line toolkit, implemented in Rust
+# logq - Analyzing log files in PartiQL with command-line toolkit, implemented in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
 [![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
@@ -6,7 +6,7 @@
 
 This project is in alpha stage, PRs are welcomed.
 
-logq is a command line tool for easily analyzing, querying, aggregating web-server log files though PartiSQL (which is compatible with SQL-92) inteface 
+logq is a command line tool for easily analyzing, querying, aggregating web-server log files though PartiQL (which is compatible with SQL-92) inteface 
 Right now the supported formats are
 
 1. AWS classic elastic load balancer
