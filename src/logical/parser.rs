@@ -492,11 +492,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     match query.select_clause {
         ast::SelectClause::SelectExpressions(select_exprs) => {
             if !select_exprs.is_empty() {
-                for select_expr in select_exprs.iter() {
-                    if let Ok(named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
-                        named_aggregates.push(named_aggregate.clone());
-
-                        match named_aggregate.aggregate {
+                for (offset, select_expr) in select_exprs.iter().enumerate() {
+                    if let Ok(mut named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
+                        match &named_aggregate.aggregate {
                             types::Aggregate::GroupAsAggregate(_) => {
                                 unreachable!();
                             }
@@ -505,54 +503,97 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                                     return Err(ParseError::InvalidArguments("avg".to_string()));
                                 }
 
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::Count(named) => {
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::First(named) => {
                                 if let types::Named::Star = named {
                                     return Err(ParseError::InvalidArguments("first".to_string()));
                                 }
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::Last(named) => {
                                 if let types::Named::Star = named {
                                     return Err(ParseError::InvalidArguments("last".to_string()));
                                 }
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::Sum(named) => {
-                                if let types::Named::Star = named {
-                                    return Err(ParseError::InvalidArguments("sum".to_string()));
+                                let nnn = named.clone();
+                                match &named {
+                                    types::Named::Star => {
+                                        return Err(ParseError::InvalidArguments("sum".to_string()));
+                                    }
+                                    types::Named::Expression(expr, opt_name) => match expr {
+                                        types::Expression::Variable(path_expr) => {
+                                            let l = path_expr.path_segments.last().unwrap();
+                                            match l {
+                                                PathSegment::AttrName(_s) => {
+                                                    let p = PathExpr::new(vec![l.clone()]);
+                                                    let n = types::Named::Expression(
+                                                        types::Expression::Variable(p),
+                                                        opt_name.clone(),
+                                                    );
+                                                    named_aggregate.aggregate = types::Aggregate::Sum(n);
+                                                    named_aggregates.push(named_aggregate);
+                                                    named_list.push(nnn);
+                                                }
+                                                PathSegment::ArrayIndex(_s, _idx) => {
+                                                    let s = format! {"_{}", offset};
+                                                    let p = PathExpr::new(vec![PathSegment::AttrName(s)]);
+                                                    let n = types::Named::Expression(
+                                                        types::Expression::Variable(p),
+                                                        opt_name.clone(),
+                                                    );
+                                                    named_aggregate.aggregate = types::Aggregate::Sum(n);
+                                                    named_aggregates.push(named_aggregate);
+                                                    named_list.push(nnn);
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            named_aggregates.push(named_aggregate.clone());
+                                            named_list.push(named.clone());
+                                        }
+                                    },
                                 }
-                                named_list.push(named);
                             }
                             types::Aggregate::Max(named) => {
                                 if let types::Named::Star = named {
                                     return Err(ParseError::InvalidArguments("max".to_string()));
                                 }
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::Min(named) => {
                                 if let types::Named::Star = named {
                                     return Err(ParseError::InvalidArguments("min".to_string()));
                                 }
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::ApproxCountDistinct(named) => {
                                 if let types::Named::Star = named {
                                     return Err(ParseError::InvalidArguments("approx_count_distinct".to_string()));
                                 }
-                                named_list.push(named);
+                                named_aggregates.push(named_aggregate.clone());
+                                named_list.push(named.clone());
                             }
                             types::Aggregate::PercentileDisc(_, column_name, _) => {
+                                named_aggregates.push(named_aggregate.clone());
                                 named_list.push(types::Named::Expression(
                                     types::Expression::Variable(column_name.clone()),
                                     Some(column_name.unwrap_last()),
                                 ))
                             }
                             types::Aggregate::ApproxPercentile(_, column_name, _) => {
+                                named_aggregates.push(named_aggregate.clone());
                                 named_list.push(types::Named::Expression(
                                     types::Expression::Variable(column_name.clone()),
                                     Some(column_name.unwrap_last()),
