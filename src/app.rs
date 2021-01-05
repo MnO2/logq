@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_real_mode() {
+    fn test_run_real_flat_log() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");
         let file_format = "elb".to_string();
@@ -285,6 +285,48 @@ mod tests {
 
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_real_jsonl_log() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("log_for_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(
+            file,
+            r#"{{"a": 1, "b": "123", "d": [1, 2, 3], "e": {{"f": {{"g": 2}}}}}}"#
+        )
+        .unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let result = run(
+            r#"select b, e.f.g as x from it limit 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        let result = run(
+            r#"select b, count(e.f.g) as x from it group by b"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+
+        let result = run(
+            r#"select x, count(*) as x from it group by d[0] as x"#,
             data_source.clone(),
             OutputMode::Csv,
         );
