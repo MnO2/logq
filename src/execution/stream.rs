@@ -311,7 +311,6 @@ pub(crate) struct GroupByStream {
     keys: Vec<ast::PathExpr>,
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
-    opt_group_as_var: Option<String>,
     source: Box<dyn RecordStream>,
     group_iterator: Option<hash_set::IntoIter<Option<Tuple>>>,
 }
@@ -321,14 +320,12 @@ impl<'a> GroupByStream {
         keys: Vec<ast::PathExpr>,
         variables: Variables,
         aggregates: Vec<NamedAggregate>,
-        opt_group_as_var: Option<String>,
         source: Box<dyn RecordStream>,
     ) -> Self {
         GroupByStream {
             keys,
             variables,
             aggregates,
-            opt_group_as_var,
             source,
             group_iterator: None,
         }

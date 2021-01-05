@@ -669,7 +669,7 @@ pub(crate) enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
-    GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Option<String>, Box<Node>),
+    GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
 }
@@ -709,15 +709,9 @@ impl Node {
                     Ok(Box::new(stream))
                 }
             },
-            Node::GroupBy(fields, named_aggregates, opt_group_as_var, source) => {
+            Node::GroupBy(fields, named_aggregates, source) => {
                 let record_stream = source.get(variables.clone())?;
-                let stream = GroupByStream::new(
-                    fields.clone(),
-                    variables,
-                    named_aggregates.clone(),
-                    opt_group_as_var.clone(),
-                    record_stream,
-                );
+                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream);
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
