@@ -323,8 +323,6 @@ mod tests {
         );
         assert_eq!(result, Ok(()));
 
-        dir.close().unwrap();
-
         let result = run(
             r#"select x, count(*) as x from it group by d[0] as x"#,
             data_source.clone(),
