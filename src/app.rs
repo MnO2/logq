@@ -277,6 +277,13 @@ mod tests {
         assert_eq!(result, Ok(()));
 
         let result = run(
+            r#"select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from it limit 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_source.clone(),
             OutputMode::Csv,
