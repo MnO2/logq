@@ -31,6 +31,7 @@ json = "0.12"
 tdigest = "0.2"
 pdatastructs = "0.6.0"
 linked-hash-map = "0.5.3"
+anyhow = "1.0"
 
 [dev-dependencies]
 criterion = "0.3"
