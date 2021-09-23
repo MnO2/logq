@@ -17,26 +17,26 @@ codecov = { repository = "MnO2/logq" }
 
 [dependencies]
 clap = {version = "2.33", features = ["yaml"]}
-regex = "1.4"
+regex = "1.5"
 failure = "0.1"
-hashbrown = "0.5"
-ordered-float = "2.0"
-nom = "6.0.1"
+hashbrown = "0.11"
+ordered-float = "2.8"
+nom = "7.0"
 prettytable-rs = "^0.8"
 chrono = "0.4"
-url = "2.2.0"
+url = "2.2"
 csv = "1.1"
 lazy_static = "1.4.0"
 json = "0.12"
 tdigest = "0.2"
 pdatastructs = "0.6.0"
-linked-hash-map = "0.5.3"
+linked-hash-map = "0.5"
 anyhow = "1.0"
 
 [dev-dependencies]
 criterion = "0.3"
 rand = "0.8"
-tempfile = "3.1.0"
+tempfile = "3.2"
 
 [[bench]]
 name = "logq_benchmark"
