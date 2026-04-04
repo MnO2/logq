@@ -1,5 +1,5 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{CrossJoinStream, DistinctStream, FilterStream, GroupByStream, InMemoryStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream};
+use super::stream::{CrossJoinStream, DistinctStream, ExceptStream, FilterStream, GroupByStream, InMemoryStream, IntersectStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream, UnionStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
@@ -929,6 +929,9 @@ pub(crate) enum Node {
     Distinct(Box<Node>),
     CrossJoin(Box<Node>, Box<Node>),
     LeftJoin(Box<Node>, Box<Node>, Box<Formula>),
+    Union(Box<Node>, Box<Node>),
+    Intersect(Box<Node>, Box<Node>, bool),
+    Except(Box<Node>, Box<Node>, bool),
 }
 
 impl Node {
@@ -1103,6 +1106,21 @@ impl Node {
                 let right_node = *right.clone();
                 let right_variables = variables;
                 Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone())))
+            }
+            Node::Union(left, right) => {
+                let left_stream = left.get(variables.clone())?;
+                let right_stream = right.get(variables)?;
+                Ok(Box::new(UnionStream::new(left_stream, right_stream)))
+            }
+            Node::Intersect(left, right, all) => {
+                let left_stream = left.get(variables.clone())?;
+                let right_stream = right.get(variables)?;
+                Ok(Box::new(IntersectStream::new(left_stream, right_stream, *all)?))
+            }
+            Node::Except(left, right, all) => {
+                let left_stream = left.get(variables.clone())?;
+                let right_stream = right.get(variables)?;
+                Ok(Box::new(ExceptStream::new(left_stream, right_stream, *all)?))
             }
         }
     }

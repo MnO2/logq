@@ -1,5 +1,18 @@
 use super::ast::*;
 
+/// Desugar a top-level Query (which may be a set operation or a single SELECT).
+pub(crate) fn desugar_query(q: Query) -> Query {
+    match q {
+        Query::Select(stmt) => Query::Select(desugar_statement(stmt)),
+        Query::SetOp { op, all, left, right } => Query::SetOp {
+            op,
+            all,
+            left: Box::new(desugar_query(*left)),
+            right: Box::new(desugar_query(*right)),
+        },
+    }
+}
+
 /// Post-parse AST transformation pass.
 /// Rewrites syntactic sugar nodes into core AST nodes:
 /// - BETWEEN(x, lo, hi) → x >= lo AND x <= hi

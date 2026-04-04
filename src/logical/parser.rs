@@ -611,6 +611,32 @@ fn build_from_node(
     }
 }
 
+pub(crate) fn parse_query_top(q: ast::Query, data_source: common::DataSource) -> ParseResult<types::Node> {
+    match q {
+        ast::Query::Select(stmt) => parse_query(stmt, data_source),
+        ast::Query::SetOp { op, all, left, right } => {
+            let left_node = parse_query_top(*left, data_source.clone())?;
+            let right_node = parse_query_top(*right, data_source)?;
+            match op {
+                ast::SetOperator::Union => {
+                    let union_node = types::Node::Union(Box::new(left_node), Box::new(right_node));
+                    if all {
+                        Ok(union_node)
+                    } else {
+                        Ok(types::Node::Distinct(Box::new(union_node)))
+                    }
+                }
+                ast::SetOperator::Intersect => {
+                    Ok(types::Node::Intersect(Box::new(left_node), Box::new(right_node), all))
+                }
+                ast::SetOperator::Except => {
+                    Ok(types::Node::Except(Box::new(left_node), Box::new(right_node), all))
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
     let from_clause = &query.from_clause;
 

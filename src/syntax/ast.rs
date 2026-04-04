@@ -5,6 +5,24 @@ use std::result;
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum SetOperator {
+    Union,
+    Intersect,
+    Except,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Query {
+    Select(SelectStatement),
+    SetOp {
+        op: SetOperator,
+        all: bool,
+        left: Box<Query>,
+        right: Box<Query>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum JoinType {
     Cross,
     Left,

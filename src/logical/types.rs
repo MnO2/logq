@@ -26,6 +26,9 @@ pub(crate) enum Node {
     Distinct(Box<Node>),
     CrossJoin(Box<Node>, Box<Node>),
     LeftJoin(Box<Node>, Box<Node>, Box<Formula>), // left, right, ON condition
+    Union(Box<Node>, Box<Node>),                   // Concatenate two result sets
+    Intersect(Box<Node>, Box<Node>, bool),          // Rows in both (bool = ALL)
+    Except(Box<Node>, Box<Node>, bool),             // Rows in left not in right (bool = ALL)
 }
 
 impl Node {
@@ -120,6 +123,27 @@ impl Node {
                 let (physical_condition, condition_variables) = condition.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&left_variables, &common::merge(&right_variables, &condition_variables));
                 let node = execution::Node::LeftJoin(left_child, right_child, physical_condition);
+                Ok((Box::new(node), return_variables))
+            }
+            Node::Union(left, right) => {
+                let (left_child, left_variables) = left.physical(physical_plan_creator)?;
+                let (right_child, right_variables) = right.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&left_variables, &right_variables);
+                let node = execution::Node::Union(left_child, right_child);
+                Ok((Box::new(node), return_variables))
+            }
+            Node::Intersect(left, right, all) => {
+                let (left_child, left_variables) = left.physical(physical_plan_creator)?;
+                let (right_child, right_variables) = right.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&left_variables, &right_variables);
+                let node = execution::Node::Intersect(left_child, right_child, *all);
+                Ok((Box::new(node), return_variables))
+            }
+            Node::Except(left, right, all) => {
+                let (left_child, left_variables) = left.physical(physical_plan_creator)?;
+                let (right_child, right_variables) = right.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&left_variables, &right_variables);
+                let node = execution::Node::Except(left_child, right_child, *all);
                 Ok((Box::new(node), return_variables))
             }
         }

@@ -806,6 +806,130 @@ impl RecordStream for LeftJoinStream {
     }
 }
 
+pub(crate) struct UnionStream {
+    left: Box<dyn RecordStream>,
+    right: Box<dyn RecordStream>,
+    left_exhausted: bool,
+}
+
+impl UnionStream {
+    pub(crate) fn new(left: Box<dyn RecordStream>, right: Box<dyn RecordStream>) -> Self {
+        UnionStream {
+            left,
+            right,
+            left_exhausted: false,
+        }
+    }
+}
+
+impl RecordStream for UnionStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        if !self.left_exhausted {
+            if let Some(record) = self.left.next()? {
+                return Ok(Some(record));
+            }
+            self.left_exhausted = true;
+        }
+        self.right.next()
+    }
+
+    fn close(&self) {
+        self.left.close();
+        self.right.close();
+    }
+}
+
+pub(crate) struct IntersectStream {
+    left: Box<dyn RecordStream>,
+    right_set: std::collections::HashMap<Vec<(VariableName, Value)>, usize>,
+    all: bool,
+}
+
+impl IntersectStream {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        mut right: Box<dyn RecordStream>,
+        all: bool,
+    ) -> StreamResult<Self> {
+        let mut right_set = std::collections::HashMap::new();
+        while let Some(record) = right.next()? {
+            let key = record.to_tuples();
+            *right_set.entry(key).or_insert(0) += 1;
+        }
+        Ok(IntersectStream { left, right_set, all })
+    }
+}
+
+impl RecordStream for IntersectStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        while let Some(record) = self.left.next()? {
+            let key = record.to_tuples();
+            if let Some(count) = self.right_set.get_mut(&key) {
+                if *count > 0 {
+                    if self.all {
+                        *count -= 1;
+                    } else {
+                        self.right_set.remove(&key);
+                    }
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn close(&self) {
+        self.left.close();
+    }
+}
+
+pub(crate) struct ExceptStream {
+    left: Box<dyn RecordStream>,
+    right_set: std::collections::HashMap<Vec<(VariableName, Value)>, usize>,
+    all: bool,
+}
+
+impl ExceptStream {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        mut right: Box<dyn RecordStream>,
+        all: bool,
+    ) -> StreamResult<Self> {
+        let mut right_set = std::collections::HashMap::new();
+        while let Some(record) = right.next()? {
+            let key = record.to_tuples();
+            *right_set.entry(key).or_insert(0) += 1;
+        }
+        Ok(ExceptStream { left, right_set, all })
+    }
+}
+
+impl RecordStream for ExceptStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        while let Some(record) = self.left.next()? {
+            let key = record.to_tuples();
+            if self.all {
+                if let Some(count) = self.right_set.get_mut(&key) {
+                    if *count > 0 {
+                        *count -= 1;
+                        continue;
+                    }
+                }
+                return Ok(Some(record));
+            } else {
+                if !self.right_set.contains_key(&key) {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn close(&self) {
+        self.left.close();
+    }
+}
+
 pub(crate) struct DistinctStream {
     source: Box<dyn RecordStream>,
     seen: std::collections::HashSet<Vec<(VariableName, Value)>>,

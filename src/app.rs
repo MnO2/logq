@@ -102,13 +102,13 @@ impl FromStr for OutputMode {
 }
 
 pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
-    let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
+    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
-    let select_stmt = syntax::desugar::desugar_statement(select_stmt);
+    let q = syntax::desugar::desugar_query(q);
 
-    let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
+    let node = logical::parser::parse_query_top(q, data_source.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -118,13 +118,13 @@ pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -
 }
 
 pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, output_mode: OutputMode) -> AppResult<()> {
-    let (rest_of_str, select_stmt) = syntax::parser::select_query(&query_str)?;
+    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
-    let select_stmt = syntax::desugar::desugar_statement(select_stmt);
+    let q = syntax::desugar::desugar_query(q);
 
-    let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
+    let node = logical::parser::parse_query_top(q, data_source.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -502,6 +502,90 @@ mod tests {
         // Scalar subquery in SELECT
         let result = run(
             r#"select x, (select count(*) from it) as total from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_union() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("union_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // UNION (deduplicates)
+        let result = run(
+            r#"select x from it where x < 3 union select x from it where x > 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // UNION ALL (keeps duplicates)
+        let result = run(
+            r#"select x from it where x < 3 union all select x from it where x > 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_intersect() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("intersect_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        let result = run(
+            r#"select x from it where x < 3 intersect select x from it where x > 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_except() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("except_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        let result = run(
+            r#"select x from it except select x from it where x > 2"#,
             data_source.clone(),
             OutputMode::Csv,
         );

@@ -711,6 +711,10 @@ fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a st
             return Ok((input, expr));
         }
     } else if let Ok((i2, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("in")(i) {
+        // Ensure "in" is not a prefix of another keyword (e.g., "intersect")
+        if i2.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+            return Ok((input, expr));
+        }
         (i2, false)
     } else {
         return Ok((input, expr));
@@ -912,6 +916,55 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
             limit_expr,
         ),
     ))
+}
+
+fn set_operator(i: &str) -> IResult<&str, (ast::SetOperator, bool), VerboseError<&str>> {
+    alt((
+        map(
+            tuple((tag_no_case("union"), multispace1, tag_no_case("all"))),
+            |_| (ast::SetOperator::Union, true),
+        ),
+        map(tag_no_case("union"), |_| (ast::SetOperator::Union, false)),
+        map(
+            tuple((tag_no_case("intersect"), multispace1, tag_no_case("all"))),
+            |_| (ast::SetOperator::Intersect, true),
+        ),
+        map(tag_no_case("intersect"), |_| {
+            (ast::SetOperator::Intersect, false)
+        }),
+        map(
+            tuple((tag_no_case("except"), multispace1, tag_no_case("all"))),
+            |_| (ast::SetOperator::Except, true),
+        ),
+        map(tag_no_case("except"), |_| (ast::SetOperator::Except, false)),
+    ))(i)
+}
+
+pub(crate) fn query(i: &str) -> IResult<&str, ast::Query, VerboseError<&str>> {
+    let (i, first) = select_query(i)?;
+    let mut result = ast::Query::Select(first);
+
+    // Parse trailing UNION/INTERSECT/EXCEPT
+    let mut remaining = i;
+    loop {
+        let (i2, _) = multispace0(remaining)?;
+        if let Ok((i3, op)) = set_operator(i2) {
+            let (i4, _) = multispace1(i3)?;
+            let (i5, right_select) = select_query(i4)?;
+            let (op_type, all) = op;
+            result = ast::Query::SetOp {
+                op: op_type,
+                all,
+                left: Box::new(result),
+                right: Box::new(ast::Query::Select(right_select)),
+            };
+            remaining = i5;
+        } else {
+            break;
+        }
+    }
+
+    Ok((remaining, result))
 }
 
 #[cfg(test)]
@@ -2369,5 +2422,29 @@ mod test {
     fn test_subquery_in_select() {
         let result = select_query("select a, (select count(*) from it) as total from it");
         assert!(result.is_ok(), "Subquery in SELECT should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_union_parsing() {
+        let result = query("select a from it union select b from it");
+        assert!(result.is_ok(), "UNION should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_union_all_parsing() {
+        let result = query("select a from it union all select b from it");
+        assert!(result.is_ok(), "UNION ALL should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_intersect_parsing() {
+        let result = query("select a from it intersect select b from it");
+        assert!(result.is_ok(), "INTERSECT should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_except_parsing() {
+        let result = query("select a from it except select b from it");
+        assert!(result.is_ok(), "EXCEPT should parse, got: {:?}", result);
     }
 }
