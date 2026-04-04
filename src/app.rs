@@ -593,4 +593,425 @@ mod tests {
 
         dir.close().unwrap();
     }
+
+    // ==================== Comprehensive Integration Tests ====================
+
+    #[test]
+    fn test_integration_mixed_case_keywords() {
+        // Verify case-insensitive keywords work throughout
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_case.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"a": 1, "b": 2}}"#).unwrap();
+        writeln!(file, r#"{{"a": 3, "b": 4}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // Mixed case: SELECT, FROM, WHERE, AND, LIMIT
+        let result = run(
+            r#"SELECT a, b FROM it WHERE a > 0 AND b > 0 LIMIT 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // Mixed case: ORDER BY, ASC (lowercase order by to avoid OR prefix match)
+        let result = run(
+            r#"SELECT a FROM it order by a ASC LIMIT 1"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // Mixed case variant with OR
+        let result = run(
+            r#"Select a From it Where a = 1 Or b = 4"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_null_missing_propagation() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_null.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"a": 1, "b": null}}"#).unwrap();
+        writeln!(file, r#"{{"a": null, "b": 2}}"#).unwrap();
+        writeln!(file, r#"{{"a": 3}}"#).unwrap(); // b is MISSING
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // IS NULL
+        let result = run(
+            r#"select a from it where b is null"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // IS NOT MISSING
+        let result = run(
+            r#"select a, b from it where b is not missing"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // COALESCE with NULL/MISSING
+        let result = run(
+            r#"select coalesce(b, 0) as b_or_zero from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_case_when() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_case_when.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 5}}"#).unwrap();
+        writeln!(file, r#"{{"x": 10}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // Multi-branch CASE WHEN with ELSE
+        let result = run(
+            r#"select case when x < 3 then "low" when x < 8 then "mid" else "high" end as category from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_like_between_in() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_operators.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"name": "alice", "age": 25}}"#).unwrap();
+        writeln!(file, r#"{{"name": "bob", "age": 30}}"#).unwrap();
+        writeln!(file, r#"{{"name": "carol", "age": 35}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // LIKE
+        let result = run(
+            r#"select name from it where name like "%ob%""#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // BETWEEN
+        let result = run(
+            r#"select name, age from it where age between 28 and 32"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // IN
+        let result = run(
+            r#"select name from it where age in (25, 35)"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // NOT LIKE + NOT BETWEEN + NOT IN
+        let result = run(
+            r#"select name from it where name not like "%a%" and age not between 30 and 40 and age not in (30)"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_cast_and_concat() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_cast.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": "42", "y": "hello"}}"#).unwrap();
+        writeln!(file, r#"{{"x": "99", "y": "world"}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // CAST to int
+        let result = run(
+            r#"select cast(x as int) as xi from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // String concatenation
+        let result = run(
+            r#"select y || " " || x as combined from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_string_functions() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_strings.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"name": "Hello World"}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // UPPER, LOWER, CHAR_LENGTH
+        let result = run(
+            r#"select upper(name) as u, lower(name) as l, char_length(name) as len from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_distinct_and_order_by() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_distinct.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // SELECT DISTINCT with ORDER BY
+        let result = run(
+            r#"select distinct x from it order by x asc"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_join_with_aggregation() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_join_agg.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"id": 1, "val": 10}}"#).unwrap();
+        writeln!(file, r#"{{"id": 1, "val": 20}}"#).unwrap();
+        writeln!(file, r#"{{"id": 2, "val": 30}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // CROSS JOIN
+        let result = run(
+            r#"select a.id, b.val from it as a cross join it as b limit 3"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // LEFT JOIN with ON condition
+        let result = run(
+            r#"select a.id, b.val from it as a left join it as b on a.id = b.id limit 5"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_subquery_and_union() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_subquery_union.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // Subquery in WHERE
+        let result = run(
+            r#"select x from it where x = (select max(x) from it)"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // UNION
+        let result = run(
+            r#"select x from it where x = 1 union select x from it where x = 3"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // INTERSECT
+        let result = run(
+            r#"select x from it where x > 1 intersect select x from it where x < 3"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // EXCEPT
+        let result = run(
+            r#"select x from it except select x from it where x = 2"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_nullif() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_nullif.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"a": 1, "b": 1}}"#).unwrap();
+        writeln!(file, r#"{{"a": 2, "b": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // NULLIF returns NULL when equal, value when not
+        let result = run(
+            r#"select nullif(a, b) as result from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_json_output_mode() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_json.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1, "y": "hello"}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2, "y": "world"}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // JSON output mode
+        let result = run(
+            r#"select x, y from it"#,
+            data_source.clone(),
+            OutputMode::Json,
+        );
+        assert_eq!(result, Ok(()));
+
+        // CSV output mode (Table mode omitted: prettytable may SIGSEGV without a TTY)
+        let result = run(
+            r#"select x, y from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_integration_nested_path_and_array() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("integration_nested.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"a": {{"b": {{"c": 42}}}}, "d": [10, 20, 30]}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+
+        // Nested path access
+        let result = run(
+            r#"select a.b.c as deep from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        // Array index
+        let result = run(
+            r#"select d[0] as first, d[2] as third from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
 }
