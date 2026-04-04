@@ -1,7 +1,7 @@
 # CHANGELOG — PartiQL Implementation Progress
 
 ## Current Status
-Starting Phase 1: Foundation (Data Model & Type System)
+Phase 1 complete. Starting Phase 2: Expressions.
 
 ## Completed Tasks
 
@@ -14,17 +14,20 @@ Starting Phase 1: Foundation (Data Model & Type System)
 - **Step 6:** Fixed `is_match_group_by_fields` nondeterministic bug — replaced positional HashSet iteration with proper set equality.
 - **Step 7:** Fixed `LimitStream` early termination bug — added early return when limit reached.
 
+### Phase 1: Foundation (2026-04-04)
+- **Step 8:** Added float arithmetic and NULL/MISSING propagation — Plus/Minus/Times/Divide handle Float, mixed Int/Float promotion, and propagate NULL/MISSING. Integer division by zero returns NULL.
+- **Step 9:** Added Int/Float coercion in comparisons — Relation::apply handles mixed Int/Float and returns None for NULL/MISSING comparisons.
+- **Step 10:** Implemented three-valued logic — Formula::evaluate returns Option<bool>. AND/OR/NOT follow PartiQL spec (FALSE AND UNKNOWN = FALSE, TRUE OR UNKNOWN = TRUE). FilterStream treats None as "not true".
+- **Step 11:** Added IS [NOT] NULL/MISSING operators and NULL/MISSING literals — new postfix operators in parser, routed through logical planner, evaluated in Formula.
+- **Step 12:** Fixed ORDER BY mixed-type handling — NULL/MISSING sort last ascending, first descending. Mixed types maintain stability.
+- **Step 13:** Multi-branch CASE WHEN — CaseWhenExpression now supports multiple WHEN branches. No ELSE returns NULL.
+- **Step 14:** Refactored parse_logic — replaced unreachable!() with ExpressionPredicate for FuncCall, CaseWhen, Column in boolean context.
+
 ## Failed Approaches
-(none yet)
+- Worktree isolation caused branch confusion when two agents ran in parallel. Avoided worktrees after that.
 
 ## Known Limitations
-- Float arithmetic not supported (only Int)
-- NULL/MISSING not properly propagated (TypeMismatch errors)
-- CASE WHEN only supports single branch
-- parse_logic panics on unrecognized expression types
 - No LIKE, BETWEEN, IN, CAST, string concat, COALESCE/NULLIF
 - No JOINs, subqueries, DISTINCT, SELECT VALUE (parsed but unimplemented)
 - No UNION/INTERSECT/EXCEPT
-- Formula::evaluate returns bool, not three-valued logic
-- ORDER BY panics on mixed types
 - date_part only supports Second and Minute
