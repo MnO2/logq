@@ -119,6 +119,7 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
             )
         }
         Expression::Cast(inner, cast_type) => Expression::Cast(Box::new(desugar_expr(*inner)), cast_type),
+        Expression::Subquery(stmt) => Expression::Subquery(Box::new(desugar_statement(*stmt))),
         // Leaf nodes — no children to recurse into
         Expression::Column(_) | Expression::Value(_) => expr,
     }

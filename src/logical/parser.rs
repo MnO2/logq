@@ -129,6 +129,10 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
             let expr = parse_value_expression(ctx, &ast::Expression::Cast(inner.clone(), cast_type.clone()))?;
             Ok(Box::new(types::Formula::ExpressionPredicate(expr)))
         }
+        ast::Expression::Subquery(_) => {
+            let expr = parse_value_expression(ctx, expr)?;
+            Ok(Box::new(types::Formula::ExpressionPredicate(expr)))
+        }
         ast::Expression::FuncCall(_, _, _)
         | ast::Expression::CaseWhenExpression(_)
         | ast::Expression::Column(_) => {
@@ -309,6 +313,10 @@ fn parse_value_expression(
         ast::Expression::Cast(inner, cast_type) => {
             let expr = parse_value_expression(ctx, inner)?;
             Ok(Box::new(types::Expression::Cast(expr, cast_type.clone())))
+        }
+        ast::Expression::Subquery(stmt) => {
+            let inner_node = parse_query(*stmt.clone(), ctx.data_source.clone())?;
+            Ok(Box::new(types::Expression::Subquery(Box::new(inner_node))))
         }
     }
 }
@@ -615,6 +623,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
 
     let parsing_context = ParsingContext {
         table_name: table_name.clone(),
+        data_source: data_source.clone(),
     };
 
     let mut root = build_from_node(&parsing_context, from_clause, &data_source, &table_name)?;
@@ -1005,6 +1014,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
         };
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
             types::LogicInfixOp::And,
@@ -1027,6 +1037,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
         };
         let ans = parse_logic_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1063,6 +1074,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
         };
         let ans = parse_value_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1089,6 +1101,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
         };
         let ans = parse_aggregate(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1111,6 +1124,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
         };
         let ans = parse_condition(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1411,6 +1425,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
         };
         let result = parse_logic(&parsing_context, &func_call);
         assert!(result.is_ok());
@@ -1437,6 +1452,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
         };
         let result = parse_logic(&parsing_context, &column_expr);
         assert!(result.is_ok());
@@ -1473,6 +1489,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
         };
         let result = parse_logic(&parsing_context, &case_when);
         assert!(result.is_ok());
@@ -1499,6 +1516,7 @@ mod test {
 
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
+            data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
         };
         let result = parse_condition(&parsing_context, &column_expr);
         assert!(result.is_ok());

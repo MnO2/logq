@@ -127,6 +127,7 @@ pub(crate) enum Expression {
     Function(String, Vec<Named>),
     Branch(Vec<(Box<Formula>, Box<Expression>)>, Option<Box<Expression>>),
     Cast(Box<Expression>, CastType),
+    Subquery(Box<Node>),
 }
 
 impl Expression {
@@ -206,6 +207,21 @@ impl Expression {
                         }
                     }
                     _ => Err(ExpressionError::TypeMismatch),
+                }
+            }
+            Expression::Subquery(node) => {
+                let mut stream = node.get(variables.clone())
+                    .map_err(|_| ExpressionError::InvalidArguments)?;
+                if let Some(record) = stream.next()
+                    .map_err(|_| ExpressionError::InvalidArguments)? {
+                    let tuples = record.to_tuples();
+                    if let Some((_, val)) = tuples.into_iter().next() {
+                        Ok(val)
+                    } else {
+                        Ok(Value::Null)
+                    }
+                } else {
+                    Ok(Value::Null)
                 }
             }
         }

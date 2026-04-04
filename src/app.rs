@@ -458,4 +458,55 @@ mod tests {
 
         dir.close().unwrap();
     }
+
+    #[test]
+    fn test_run_subquery_in_where() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("subquery_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // Subquery: select rows where x equals the max x
+        let result = run(
+            r#"select x from it where x = (select max(x) from it)"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_subquery_in_select() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("subquery_select_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // Scalar subquery in SELECT
+        let result = run(
+            r#"select x, (select count(*) from it) as total from it"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
 }

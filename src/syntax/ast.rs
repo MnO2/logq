@@ -192,6 +192,7 @@ pub(crate) enum Expression {
     Between(Box<Expression>, Box<Expression>, Box<Expression>),      // expr BETWEEN lo AND hi
     NotBetween(Box<Expression>, Box<Expression>, Box<Expression>),   // expr NOT BETWEEN lo AND hi
     Cast(Box<Expression>, CastType),
+    Subquery(Box<SelectStatement>),  // A parenthesized SELECT statement used as a scalar expression
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

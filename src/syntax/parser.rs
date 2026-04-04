@@ -233,10 +233,22 @@ fn select_column_reference(i: &str) -> IResult<&str, ast::PathExpr, VerboseError
     terminated(path_expr, not(char('(')))(i)
 }
 
+fn subquery(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+    map(
+        delimited(
+            tuple((space0, tag("("), space0)),
+            select_query,
+            tuple((space0, tag(")"), space0)),
+        ),
+        |stmt| ast::Expression::Subquery(Box::new(stmt)),
+    )(i)
+}
+
 fn factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     delimited(
         space0,
         alt((
+            subquery,   // Try subquery first (parenthesized SELECT)
             parens,
             map(value, ast::Expression::Value),
             func_call,
@@ -2345,5 +2357,17 @@ mod test {
             }
             other => panic!("Expected FromClause::Join, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_subquery_in_where() {
+        let result = select_query("select a from it where a = (select max(a) from it)");
+        assert!(result.is_ok(), "Subquery in WHERE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_subquery_in_select() {
+        let result = select_query("select a, (select count(*) from it) as total from it");
+        assert!(result.is_ok(), "Subquery in SELECT should parse, got: {:?}", result);
     }
 }

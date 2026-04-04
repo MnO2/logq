@@ -158,6 +158,7 @@ pub(crate) enum Expression {
     Function(String, Vec<Named>),
     Branch(Vec<(Box<Formula>, Box<Expression>)>, Option<Box<Expression>>),
     Cast(Box<Expression>, ast::CastType),
+    Subquery(Box<Node>),  // Non-correlated subquery, materialized to a single value
 }
 
 impl Expression {
@@ -234,6 +235,10 @@ impl Expression {
                     Box::new(execution::Expression::Cast(physical_inner, cast_type.clone())),
                     variables,
                 ))
+            }
+            Expression::Subquery(node) => {
+                let (physical_node, node_variables) = node.physical(physical_plan_creator)?;
+                Ok((Box::new(execution::Expression::Subquery(physical_node)), node_variables))
             }
         }
     }

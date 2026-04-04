@@ -413,6 +413,7 @@ pub(crate) struct Binding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsingContext {
     pub(crate) table_name: String,
+    pub(crate) data_source: DataSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
