@@ -122,15 +122,19 @@ fn parse_case_when_expression(
 ) -> ParseResult<Box<types::Expression>> {
     match value_expr {
         ast::Expression::CaseWhenExpression(case_when_expr) => {
-            let branch = parse_logic(ctx, &case_when_expr.condition)?;
-            let then_expr = parse_value_expression(ctx, &case_when_expr.then_expr)?;
+            let mut branches = Vec::new();
+            for (condition, then_expr) in &case_when_expr.branches {
+                let formula = parse_logic(ctx, condition)?;
+                let expr = parse_value_expression(ctx, then_expr)?;
+                branches.push((formula, expr));
+            }
             let else_expr = if let Some(e) = &case_when_expr.else_expr {
-                Some(parse_value_expression(ctx, &e)?)
+                Some(parse_value_expression(ctx, e)?)
             } else {
                 None
             };
 
-            Ok(Box::new(types::Expression::Branch(branch, then_expr, else_expr)))
+            Ok(Box::new(types::Expression::Branch(branches, else_expr)))
         }
         _ => {
             unreachable!();

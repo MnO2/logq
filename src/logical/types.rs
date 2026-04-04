@@ -133,7 +133,7 @@ pub(crate) enum Expression {
     Variable(ast::PathExpr),
     Logic(Box<Formula>),
     Function(String, Vec<Named>),
-    Branch(Box<Formula>, Box<Expression>, Option<Box<Expression>>),
+    Branch(Vec<(Box<Formula>, Box<Expression>)>, Option<Box<Expression>>),
 }
 
 impl Expression {
@@ -176,29 +176,30 @@ impl Expression {
                     variables,
                 ))
             }
-            Expression::Branch(condition, then_expr, else_expr) => {
+            Expression::Branch(branches, else_expr) => {
                 let mut variables = common::empty_variables();
+                let mut physical_branches = Vec::new();
 
-                let (condition_expr, condition_ariables) = condition.physical(physical_plan_creator)?;
-                variables = common::merge(&variables, &condition_ariables);
+                for (condition, then_expr) in branches {
+                    let (condition_expr, condition_variables) = condition.physical(physical_plan_creator)?;
+                    variables = common::merge(&variables, &condition_variables);
 
-                let (then_expr, then_variables) = then_expr.physical(physical_plan_creator)?;
-                variables = common::merge(&variables, &then_variables);
+                    let (then_expr, then_variables) = then_expr.physical(physical_plan_creator)?;
+                    variables = common::merge(&variables, &then_variables);
+
+                    physical_branches.push((condition_expr, then_expr));
+                }
 
                 if let Some(e) = else_expr {
-                    let (else_expr, else_ariables) = e.physical(physical_plan_creator)?;
-                    variables = common::merge(&variables, &else_ariables);
+                    let (else_expr, else_variables) = e.physical(physical_plan_creator)?;
+                    variables = common::merge(&variables, &else_variables);
                     Ok((
-                        Box::new(execution::Expression::Branch(
-                            condition_expr,
-                            then_expr,
-                            Some(else_expr),
-                        )),
+                        Box::new(execution::Expression::Branch(physical_branches, Some(else_expr))),
                         variables,
                     ))
                 } else {
                     Ok((
-                        Box::new(execution::Expression::Branch(condition_expr, then_expr, None)),
+                        Box::new(execution::Expression::Branch(physical_branches, None)),
                         variables,
                     ))
                 }

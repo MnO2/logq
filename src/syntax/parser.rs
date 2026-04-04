@@ -8,7 +8,7 @@ use nom::{
     character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
-    multi::separated_list0,
+    multi::{many1, separated_list0},
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult, InputTakeAtPosition,
@@ -30,21 +30,33 @@ lazy_static! {
     };
 }
 
-fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, VerboseError<&str>> {
-    let (remaining_input, (_, condition, _, then_expr, else_expr, _)) = tuple((
-        tuple((tag_no_case("case"), space1, tag_no_case("when"), space1)),
+fn case_when_branch(i: &str) -> IResult<&str, (ast::Expression, ast::Expression), VerboseError<&str>> {
+    let (remaining_input, (_, condition, _, then_expr)) = tuple((
+        tuple((multispace0, tag_no_case("when"), space1)),
         expression,
         tuple((multispace0, tag_no_case("then"), space1)),
         factor,
-        opt(delimited(terminated(tag_no_case("else"), space1), factor, multispace0)),
+    ))(i)?;
+
+    Ok((remaining_input, (condition, then_expr)))
+}
+
+fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, VerboseError<&str>> {
+    let (remaining_input, (_, branches, else_expr, _)) = tuple((
+        tag_no_case("case"),
+        many1(case_when_branch),
+        opt(delimited(
+            tuple((multispace0, tag_no_case("else"), space1)),
+            factor,
+            multispace0,
+        )),
         tag_no_case("end"),
     ))(i)?;
 
     Ok((
         remaining_input,
         ast::CaseWhenExpression {
-            condition: Box::new(condition),
-            then_expr: Box::new(then_expr),
+            branches,
             else_expr: else_expr.map(|n| Box::new(n)),
         },
     ))
@@ -703,12 +715,31 @@ mod test {
     #[test]
     fn test_case_when_expression() {
         let ans = ast::CaseWhenExpression {
-            condition: Box::new(ast::Expression::Value(ast::Value::Boolean(true))),
-            then_expr: Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+            branches: vec![(
+                ast::Expression::Value(ast::Value::Boolean(true)),
+                ast::Expression::Value(ast::Value::Integral(1)),
+            )],
             else_expr: Some(Box::new(ast::Expression::Value(ast::Value::Integral(2)))),
         };
 
         assert_eq!(case_when_expression("case when true then 1 else 2 end"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_multi_branch_case_when() {
+        let result = case_when_expression("case when true then 1 when false then 2 else 3 end");
+        assert!(result.is_ok());
+        let (_, cwe) = result.unwrap();
+        assert_eq!(cwe.branches.len(), 2);
+    }
+
+    #[test]
+    fn test_case_when_no_else() {
+        let result = case_when_expression("case when true then 1 when false then 2 end");
+        assert!(result.is_ok());
+        let (_, cwe) = result.unwrap();
+        assert_eq!(cwe.branches.len(), 2);
+        assert!(cwe.else_expr.is_none());
     }
 
     #[test]

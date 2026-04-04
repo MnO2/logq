@@ -129,8 +129,7 @@ pub(crate) enum SelectExpression {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct CaseWhenExpression {
-    pub(crate) condition: Box<Expression>,
-    pub(crate) then_expr: Box<Expression>,
+    pub(crate) branches: Vec<(Expression, Expression)>,
     pub(crate) else_expr: Option<Box<Expression>>,
 }
 
