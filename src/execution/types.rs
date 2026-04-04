@@ -823,8 +823,22 @@ impl Node {
                                     }
                                 }
                             }
+                            (Value::Missing, Value::Missing) => {
+                                return std::cmp::Ordering::Equal;
+                            }
+                            (Value::Null, Value::Missing) | (Value::Missing, Value::Null) => {
+                                return std::cmp::Ordering::Equal;
+                            }
+                            (Value::Null, _) | (Value::Missing, _) => match curr_ordering {
+                                Ordering::Asc => return std::cmp::Ordering::Greater,
+                                Ordering::Desc => return std::cmp::Ordering::Less,
+                            },
+                            (_, Value::Null) | (_, Value::Missing) => match curr_ordering {
+                                Ordering::Asc => return std::cmp::Ordering::Less,
+                                Ordering::Desc => return std::cmp::Ordering::Greater,
+                            },
                             _ => {
-                                unreachable!();
+                                return std::cmp::Ordering::Equal;
                             }
                         }
                     }
