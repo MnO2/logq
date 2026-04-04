@@ -186,6 +186,10 @@ impl LimitStream {
 
 impl RecordStream for LimitStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
+        if self.curr >= self.row_count {
+            return Ok(None);
+        }
+
         while let Some(record) = self.source.next()? {
             if self.curr < self.row_count {
                 self.curr += 1;
