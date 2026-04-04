@@ -142,6 +142,10 @@ pub(crate) enum Expression {
     UnaryOperator(UnaryOperator, Box<Expression>),
     FuncCall(FuncName, Vec<SelectExpression>, Option<WithinGroupClause>),
     CaseWhenExpression(CaseWhenExpression),
+    IsNull(Box<Expression>),
+    IsNotNull(Box<Expression>),
+    IsMissing(Box<Expression>),
+    IsNotMissing(Box<Expression>),
 }
 
 pub(crate) type FuncName = String;
@@ -208,6 +212,8 @@ pub enum Value {
     Float(OrderedFloat<f32>),
     StringLiteral(String),
     Boolean(bool),
+    Null,
+    Missing,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

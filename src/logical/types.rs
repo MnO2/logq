@@ -213,6 +213,10 @@ pub(crate) enum Formula {
     PrefixOperator(LogicPrefixOp, Box<Formula>),
     Constant(bool),
     Predicate(Relation, Box<Expression>, Box<Expression>),
+    IsNull(Box<Expression>),
+    IsNotNull(Box<Expression>),
+    IsMissing(Box<Expression>),
+    IsNotMissing(Box<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,6 +268,22 @@ impl Formula {
                     Box::new(execution::Formula::Predicate(physical_relation, left, right)),
                     return_variables,
                 ))
+            }
+            Formula::IsNull(expr) => {
+                let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
+                Ok((Box::new(execution::Formula::IsNull(physical_expr)), variables))
+            }
+            Formula::IsNotNull(expr) => {
+                let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
+                Ok((Box::new(execution::Formula::IsNotNull(physical_expr)), variables))
+            }
+            Formula::IsMissing(expr) => {
+                let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
+                Ok((Box::new(execution::Formula::IsMissing(physical_expr)), variables))
+            }
+            Formula::IsNotMissing(expr) => {
+                let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
+                Ok((Box::new(execution::Formula::IsNotMissing(physical_expr)), variables))
             }
         }
     }

@@ -624,6 +624,10 @@ pub(crate) enum Formula {
     Or(Box<Formula>, Box<Formula>),
     Not(Box<Formula>),
     Predicate(Relation, Box<Expression>, Box<Expression>),
+    IsNull(Box<Expression>),
+    IsNotNull(Box<Expression>),
+    IsMissing(Box<Expression>),
+    IsNotMissing(Box<Expression>),
 }
 
 impl Formula {
@@ -658,6 +662,22 @@ impl Formula {
                 Ok(result)
             }
             Formula::Constant(value) => Ok(Some(*value)),
+            Formula::IsNull(expr) => {
+                let val = expr.expression_value(variables)?;
+                Ok(Some(val == Value::Null))
+            }
+            Formula::IsNotNull(expr) => {
+                let val = expr.expression_value(variables)?;
+                Ok(Some(val != Value::Null))
+            }
+            Formula::IsMissing(expr) => {
+                let val = expr.expression_value(variables)?;
+                Ok(Some(val == Value::Missing))
+            }
+            Formula::IsNotMissing(expr) => {
+                let val = expr.expression_value(variables)?;
+                Ok(Some(val != Value::Missing))
+            }
         }
     }
 }
@@ -1722,5 +1742,61 @@ mod tests {
         // NOT None = None
         let f = Formula::Not(Box::new(null_pred));
         assert_eq!(f.evaluate(&vars), Ok(None));
+    }
+
+    #[test]
+    fn test_is_null() {
+        let vars = Variables::default();
+        // IS NULL on Null => true
+        let f = Formula::IsNull(Box::new(Expression::Constant(Value::Null)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // IS NULL on non-null => false
+        let f = Formula::IsNull(Box::new(Expression::Constant(Value::Int(1))));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // IS NULL on Missing => false
+        let f = Formula::IsNull(Box::new(Expression::Constant(Value::Missing)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+    }
+
+    #[test]
+    fn test_is_not_null() {
+        let vars = Variables::default();
+        // IS NOT NULL on Null => false
+        let f = Formula::IsNotNull(Box::new(Expression::Constant(Value::Null)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // IS NOT NULL on non-null => true
+        let f = Formula::IsNotNull(Box::new(Expression::Constant(Value::Int(1))));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // IS NOT NULL on Missing => true
+        let f = Formula::IsNotNull(Box::new(Expression::Constant(Value::Missing)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+    }
+
+    #[test]
+    fn test_is_missing() {
+        let vars = Variables::default();
+        // IS MISSING on Missing => true
+        let f = Formula::IsMissing(Box::new(Expression::Constant(Value::Missing)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // IS MISSING on non-missing => false
+        let f = Formula::IsMissing(Box::new(Expression::Constant(Value::Int(1))));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // IS MISSING on Null => false
+        let f = Formula::IsMissing(Box::new(Expression::Constant(Value::Null)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+    }
+
+    #[test]
+    fn test_is_not_missing() {
+        let vars = Variables::default();
+        // IS NOT MISSING on Missing => false
+        let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Missing)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // IS NOT MISSING on non-missing => true
+        let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Int(1))));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // IS NOT MISSING on Null => true
+        let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Null)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
     }
 }

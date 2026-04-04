@@ -5,7 +5,7 @@ use std::str::FromStr;
 use nom::{
     branch::alt,
     bytes::complete::{escaped, tag, tag_no_case},
-    character::complete::{char, digit1, multispace0, none_of, one_of, space0, space1},
+    character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
     multi::separated_list0,
@@ -152,8 +152,16 @@ fn integral(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     ))(i)
 }
 
+fn null_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+    map(tag_no_case("null"), |_| ast::Value::Null)(i)
+}
+
+fn missing_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+    map(tag_no_case("missing"), |_| ast::Value::Missing)(i)
+}
+
 fn value(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
-    alt((integral, float, boolean, double_quote_string_literal))(i)
+    alt((integral, float, boolean, double_quote_string_literal, null_literal, missing_literal))(i)
 }
 
 fn parens(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
@@ -445,12 +453,38 @@ fn parse_expression_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     ))(i)
 }
 
+fn parse_postfix_is<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("is")(i) {
+        if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
+                if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
+                    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("null")(i) {
+                        return Ok((i, ast::Expression::IsNotNull(Box::new(expr))));
+                    }
+                    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("missing")(i) {
+                        return Ok((i, ast::Expression::IsNotMissing(Box::new(expr))));
+                    }
+                }
+            }
+            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("null")(i) {
+                return Ok((i, ast::Expression::IsNull(Box::new(expr))));
+            }
+            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("missing")(i) {
+                return Ok((i, ast::Expression::IsMissing(Box::new(expr))));
+            }
+        }
+    }
+    Ok((input, expr))
+}
+
 fn parse_expression_at_precedence<'a>(
     i0: &'a str,
     current_precedence: u32,
     precedence_table: &HashMap<String, (u32, bool)>,
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let (mut i1, mut expr) = parse_expression_atom(i0)?;
+    let (i1, expr) = parse_expression_atom(i0)?;
+    let (mut i1, mut expr) = parse_postfix_is(i1, expr)?;
     while let Ok((i2, op)) = parse_expression_op(i1) {
         let (op_precedence, op_left_associative) = *precedence_table.get(op.to_ascii_lowercase().as_str()).unwrap();
 
@@ -1384,5 +1418,96 @@ mod test {
         assert!(result.is_ok(), "Uppercase AND should parse successfully, got: {:?}", result);
         let result = select_query("SELECT a FROM it WHERE a = 1 OR b = 2");
         assert!(result.is_ok(), "Uppercase OR should parse successfully, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_null_literal() {
+        let result = expression("null");
+        assert!(result.is_ok(), "null literal should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, ast::Expression::Value(ast::Value::Null));
+    }
+
+    #[test]
+    fn test_null_literal_uppercase() {
+        let result = expression("NULL");
+        assert!(result.is_ok(), "NULL literal should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, ast::Expression::Value(ast::Value::Null));
+    }
+
+    #[test]
+    fn test_missing_literal() {
+        let result = expression("missing");
+        assert!(result.is_ok(), "missing literal should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, ast::Expression::Value(ast::Value::Missing));
+    }
+
+    #[test]
+    fn test_is_null_parsing() {
+        let result = select_query("select a from it where a is null");
+        assert!(result.is_ok(), "IS NULL should parse, got: {:?}", result);
+
+        let result = select_query("select a from it where a IS NULL");
+        assert!(result.is_ok(), "IS NULL uppercase should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_is_not_null_parsing() {
+        let result = select_query("select a from it where a is not null");
+        assert!(result.is_ok(), "IS NOT NULL should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_is_missing_parsing() {
+        let result = select_query("select a from it where a is missing");
+        assert!(result.is_ok(), "IS MISSING should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_is_not_missing_parsing() {
+        let result = select_query("select a from it where a is not missing");
+        assert!(result.is_ok(), "IS NOT MISSING should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_is_null_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::IsNull(Box::new(ast::Expression::Column(path_expr_a)));
+        let result = expression("a is null");
+        assert!(result.is_ok(), "a is null should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_is_not_null_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::IsNotNull(Box::new(ast::Expression::Column(path_expr_a)));
+        let result = expression("a is not null");
+        assert!(result.is_ok(), "a is not null should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_is_missing_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::IsMissing(Box::new(ast::Expression::Column(path_expr_a)));
+        let result = expression("a is missing");
+        assert!(result.is_ok(), "a is missing should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_is_not_missing_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::IsNotMissing(Box::new(ast::Expression::Column(path_expr_a)));
+        let result = expression("a is not missing");
+        assert!(result.is_ok(), "a is not missing should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
     }
 }

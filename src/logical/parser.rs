@@ -80,6 +80,22 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
             ast::Value::Boolean(b) => Ok(Box::new(types::Formula::Constant(*b))),
             _ => Err(ParseError::TypeMismatch),
         },
+        ast::Expression::IsNull(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            Ok(Box::new(types::Formula::IsNull(inner_expr)))
+        }
+        ast::Expression::IsNotNull(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            Ok(Box::new(types::Formula::IsNotNull(inner_expr)))
+        }
+        ast::Expression::IsMissing(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            Ok(Box::new(types::Formula::IsMissing(inner_expr)))
+        }
+        ast::Expression::IsNotMissing(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            Ok(Box::new(types::Formula::IsNotMissing(inner_expr)))
+        }
         _ => unreachable!(),
     }
 }
@@ -95,6 +111,8 @@ fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
         ast::Value::Float(f) => Ok(Box::new(types::Expression::Constant(common::Value::Float(*f)))),
         ast::Value::Integral(i) => Ok(Box::new(types::Expression::Constant(common::Value::Int(*i)))),
         ast::Value::StringLiteral(s) => Ok(Box::new(types::Expression::Constant(common::Value::String(s.clone())))),
+        ast::Value::Null => Ok(Box::new(types::Expression::Constant(common::Value::Null))),
+        ast::Value::Missing => Ok(Box::new(types::Expression::Constant(common::Value::Missing))),
     }
 }
 
@@ -191,6 +209,26 @@ fn parse_value_expression(
             Ok(Box::new(types::Expression::Function(func_name.clone(), args)))
         }
         ast::Expression::CaseWhenExpression(_) => parse_case_when_expression(ctx, value_expr),
+        ast::Expression::IsNull(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            let formula = Box::new(types::Formula::IsNull(inner_expr));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::IsNotNull(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            let formula = Box::new(types::Formula::IsNotNull(inner_expr));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::IsMissing(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            let formula = Box::new(types::Formula::IsMissing(inner_expr));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::IsNotMissing(inner) => {
+            let inner_expr = parse_value_expression(ctx, inner)?;
+            let formula = Box::new(types::Formula::IsNotMissing(inner_expr));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
     }
 }
 
