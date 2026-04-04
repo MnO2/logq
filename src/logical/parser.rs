@@ -769,19 +769,7 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
         }
     }
 
-    if a.len() != b.len() {
-        false
-    } else {
-        let mut a_iter = a.iter();
-        let mut b_iter = b.iter();
-        while let (Some(aa), Some(bb)) = (a_iter.next(), b_iter.next()) {
-            if aa != bb {
-                return false;
-            }
-        }
-
-        true
-    }
+    a == b
 }
 
 #[cfg(test)]
