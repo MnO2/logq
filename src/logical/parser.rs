@@ -352,6 +352,7 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
                     let name = match path_expr.path_segments.last().unwrap() {
                         PathSegment::ArrayIndex(_s, _) => None,
                         PathSegment::AttrName(s) => Some(s.clone()),
+                        PathSegment::Wildcard | PathSegment::WildcardAttr => None,
                     };
 
                     Ok(Box::new(types::Named::Expression(*e.clone(), name)))
@@ -531,7 +532,9 @@ fn check_group_by_vars(named: &Named, group_by_vars: &HashSet<String>) -> bool {
                     PathSegment::AttrName(s) => {
                         return group_by_vars.contains(s);
                     }
-                    PathSegment::ArrayIndex(_, _) => {
+                    PathSegment::ArrayIndex(_, _)
+                    | PathSegment::Wildcard
+                    | PathSegment::WildcardAttr => {
                         return false;
                     }
                 },
@@ -590,7 +593,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                                 group_by_vars.insert(s.clone());
                                 types::Named::Expression(*e.clone(), Some(s.clone()))
                             }
-                            PathSegment::ArrayIndex(_s, _idx) => {
+                            PathSegment::ArrayIndex(_, _)
+                            | PathSegment::Wildcard
+                            | PathSegment::WildcardAttr => {
                                 group_by_vars.insert(format!("_{}", position + 1));
                                 types::Named::Expression(*e.clone(), Some(format!("_{}", position + 1)))
                             }
@@ -668,7 +673,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                                                     named_aggregates.push(named_aggregate);
                                                     named_list.push(nnn);
                                                 }
-                                                PathSegment::ArrayIndex(_s, _idx) => {
+                                                PathSegment::ArrayIndex(_, _)
+                                                | PathSegment::Wildcard
+                                                | PathSegment::WildcardAttr => {
                                                     let s = format! {"_{}", offset};
                                                     let p = PathExpr::new(vec![PathSegment::AttrName(s)]);
                                                     let n = types::Named::Expression(
@@ -753,8 +760,46 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 root = types::Node::Map(named_list.clone(), Box::new(root));
             }
         }
-        ast::SelectClause::ValueConstructor(_vc) => {
-            unimplemented!()
+        ast::SelectClause::ValueConstructor(vc) => {
+            match vc {
+                ast::ValueConstructor::Expression(expr) => {
+                    let e = parse_value_expression(&parsing_context, &expr)?;
+                    let name = match &*e {
+                        types::Expression::Variable(path_expr) => {
+                            match path_expr.path_segments.last().unwrap() {
+                                ast::PathSegment::AttrName(s) => Some(s.clone()),
+                                _ => Some("_value".to_string()),
+                            }
+                        }
+                        _ => Some("_value".to_string()),
+                    };
+                    named_list.push(types::Named::Expression(*e, name));
+                    root = types::Node::Map(named_list.clone(), Box::new(root));
+                }
+                ast::ValueConstructor::TupleConstructor(tc) => {
+                    for (key, val_expr) in tc.key_values.iter() {
+                        let e = parse_value_expression(&parsing_context, val_expr)?;
+                        named_list.push(types::Named::Expression(*e, Some(key.clone())));
+                    }
+                    root = types::Node::Map(named_list.clone(), Box::new(root));
+                }
+                ast::ValueConstructor::ArrayConstructor(ac) => {
+                    for (idx, val_expr) in ac.values.iter().enumerate() {
+                        let e = parse_value_expression(&parsing_context, val_expr)?;
+                        let name = match &*e {
+                            types::Expression::Variable(path_expr) => {
+                                match path_expr.path_segments.last().unwrap() {
+                                    ast::PathSegment::AttrName(s) => Some(s.clone()),
+                                    _ => Some(format!("_{}", idx)),
+                                }
+                            }
+                            _ => Some(format!("_{}", idx)),
+                        };
+                        named_list.push(types::Named::Expression(*e, name));
+                    }
+                    root = types::Node::Map(named_list.clone(), Box::new(root));
+                }
+            }
         }
     }
 
@@ -779,7 +824,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                                 let l = path_expr.path_segments.last().unwrap();
                                 match l {
                                     PathSegment::AttrName(s) => PathExpr::new(vec![PathSegment::AttrName(s.clone())]),
-                                    PathSegment::ArrayIndex(_s, _idx) => {
+                                    PathSegment::ArrayIndex(_, _) | PathSegment::Wildcard | PathSegment::WildcardAttr => {
                                         let s = format!("_{}", position + 1);
                                         PathExpr::new(vec![PathSegment::AttrName(s.clone())])
                                     }
@@ -827,6 +872,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         if query.having_expr_opt.is_some() {
             return Err(ParseError::HavingClauseWithoutGroupBy);
         }
+    }
+
+    if query.distinct {
+        root = types::Node::Distinct(Box::new(root));
     }
 
     if let Some(order_by_expr) = query.order_by_expr_opt {
@@ -1045,6 +1094,7 @@ mod test {
 
         let table_reference = ast::TableReference::new(path_expr, Some("e".to_string()), None);
         let before = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1106,6 +1156,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1169,6 +1220,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1242,6 +1294,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1283,6 +1336,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
@@ -1416,5 +1470,92 @@ mod test {
             }
             _ => panic!("Expected ExpressionPredicate formula"),
         }
+    }
+
+    #[test]
+    fn test_parse_query_select_value_expression() {
+        // SELECT VALUE a FROM it WHERE a = 1
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+
+        let where_expr = ast::WhereExpression::new(ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+        ));
+
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
+        let before = ast::SelectStatement::new(
+            false,
+            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(
+                ast::Expression::Column(path_expr_a.clone()),
+            )),
+            vec![table_reference],
+            Some(where_expr),
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+
+        let filtered_formula = Box::new(types::Formula::Predicate(
+            types::Relation::Equal,
+            Box::new(types::Expression::Variable(path_expr_a.clone())),
+            Box::new(types::Expression::Constant(common::Value::Int(1))),
+        ));
+
+        // SELECT VALUE a should produce a Map with a single named expression
+        let expected = types::Node::Filter(
+            filtered_formula,
+            Box::new(types::Node::Map(
+                vec![types::Named::Expression(
+                    types::Expression::Variable(path_expr_a.clone()),
+                    Some("a".to_string()),
+                )],
+                Box::new(types::Node::DataSource(
+                    common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    vec![],
+                )),
+            )),
+        );
+
+        let ans = parse_query(before, data_source).unwrap();
+        assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query_select_value_literal() {
+        // SELECT VALUE 42 FROM it
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_reference = ast::TableReference::new(path_expr, None, None);
+        let before = ast::SelectStatement::new(
+            false,
+            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(
+                ast::Expression::Value(ast::Value::Integral(42)),
+            )),
+            vec![table_reference],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+
+        // Literal expression should get _value as the name
+        let expected = types::Node::Map(
+            vec![types::Named::Expression(
+                types::Expression::Constant(common::Value::Int(42)),
+                Some("_value".to_string()),
+            )],
+            Box::new(types::Node::DataSource(
+                common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                vec![],
+            )),
+        );
+
+        let ans = parse_query(before, data_source).unwrap();
+        assert_eq!(expected, ans);
     }
 }

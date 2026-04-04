@@ -426,7 +426,9 @@ impl RecordStream for GroupByStream {
                         ast::PathSegment::AttrName(s) => {
                             fields.push(s.clone());
                         }
-                        ast::PathSegment::ArrayIndex(_s, _idx) => {
+                        ast::PathSegment::ArrayIndex(_, _)
+                        | ast::PathSegment::Wildcard
+                        | ast::PathSegment::WildcardAttr => {
                             fields.push(format!("_{}", position_idx + 1));
                         }
                     }
@@ -616,6 +618,36 @@ impl RecordStream for LogFileStream {
     fn close(&self) {}
 }
 
+pub(crate) struct DistinctStream {
+    source: Box<dyn RecordStream>,
+    seen: std::collections::HashSet<Vec<(VariableName, Value)>>,
+}
+
+impl DistinctStream {
+    pub(crate) fn new(source: Box<dyn RecordStream>) -> Self {
+        DistinctStream {
+            source,
+            seen: std::collections::HashSet::new(),
+        }
+    }
+}
+
+impl RecordStream for DistinctStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        while let Some(record) = self.source.next()? {
+            let key = record.to_tuples();
+            if self.seen.insert(key) {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
+    }
+
+    fn close(&self) {
+        self.source.close();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,5 +821,85 @@ mod tests {
         ];
 
         assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_distinct_stream() {
+        let mut records = VecDeque::new();
+        records.push_back(Record::new(
+            &vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example.com".to_string()), Value::Int(8000)],
+        ));
+        records.push_back(Record::new(
+            &vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example.com".to_string()), Value::Int(8000)],
+        ));
+        records.push_back(Record::new(
+            &vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("other.com".to_string()), Value::Int(8001)],
+        ));
+        records.push_back(Record::new(
+            &vec!["host".to_string(), "port".to_string()],
+            vec![Value::String("example.com".to_string()), Value::Int(8000)],
+        ));
+        let stream = Box::new(InMemoryStream::new(records));
+
+        let mut distinct_stream = DistinctStream::new(stream);
+
+        let mut result = Vec::new();
+        while let Some(n) = distinct_stream.next().unwrap() {
+            result.push(n);
+        }
+
+        let expected = vec![
+            Record::new(
+                &vec!["host".to_string(), "port".to_string()],
+                vec![Value::String("example.com".to_string()), Value::Int(8000)],
+            ),
+            Record::new(
+                &vec!["host".to_string(), "port".to_string()],
+                vec![Value::String("other.com".to_string()), Value::Int(8001)],
+            ),
+        ];
+
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_distinct_stream_all_unique() {
+        let mut records = VecDeque::new();
+        records.push_back(Record::new(
+            &vec!["a".to_string()],
+            vec![Value::Int(1)],
+        ));
+        records.push_back(Record::new(
+            &vec!["a".to_string()],
+            vec![Value::Int(2)],
+        ));
+        records.push_back(Record::new(
+            &vec!["a".to_string()],
+            vec![Value::Int(3)],
+        ));
+        let stream = Box::new(InMemoryStream::new(records));
+
+        let mut distinct_stream = DistinctStream::new(stream);
+
+        let mut result = Vec::new();
+        while let Some(n) = distinct_stream.next().unwrap() {
+            result.push(n);
+        }
+
+        assert_eq!(3, result.len());
+    }
+
+    #[test]
+    fn test_distinct_stream_empty() {
+        let records = VecDeque::new();
+        let stream = Box::new(InMemoryStream::new(records));
+
+        let mut distinct_stream = DistinctStream::new(stream);
+
+        let result = distinct_stream.next().unwrap();
+        assert_eq!(None, result);
     }
 }

@@ -1,5 +1,5 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
+use super::stream::{DistinctStream, FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
@@ -910,6 +910,7 @@ pub(crate) enum Node {
     GroupBy(Vec<PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
+    Distinct(Box<Node>),
 }
 
 impl Node {
@@ -1068,6 +1069,10 @@ impl Node {
 
                 let stream = InMemoryStream::new(VecDeque::from(records));
                 Ok(Box::new(stream))
+            }
+            Node::Distinct(source) => {
+                let record_stream = source.get(variables)?;
+                Ok(Box::new(DistinctStream::new(record_stream)))
             }
         }
     }

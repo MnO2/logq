@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
+    pub(crate) distinct: bool,
     pub(crate) select_clause: SelectClause,
     pub(crate) table_references: Vec<TableReference>,
     pub(crate) where_expr_opt: Option<WhereExpression>,
@@ -17,6 +18,7 @@ pub(crate) struct SelectStatement {
 
 impl SelectStatement {
     pub fn new(
+        distinct: bool,
         select_clause: SelectClause,
         table_references: Vec<TableReference>,
         where_expr_opt: Option<WhereExpression>,
@@ -26,6 +28,7 @@ impl SelectStatement {
         limit_expr_opt: Option<LimitExpression>,
     ) -> Self {
         SelectStatement {
+            distinct,
             select_clause,
             table_references: table_references,
             where_expr_opt,
@@ -50,8 +53,8 @@ impl fmt::Display for SelectStatement {
                     .collect();
                 write!(f, "{:?}", select_exprs_str)
             }
-            SelectClause::ValueConstructor(_vc) => {
-                unimplemented!()
+            SelectClause::ValueConstructor(vc) => {
+                write!(f, "SELECT VALUE {:?}", vc)
             }
         }
     }
@@ -61,6 +64,8 @@ impl fmt::Display for SelectStatement {
 pub(crate) enum PathSegment {
     AttrName(String),
     ArrayIndex(String, usize),
+    Wildcard,     // [*] — iterate all array elements
+    WildcardAttr, // .* — iterate all tuple values
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
@@ -77,6 +82,8 @@ impl PathExpr {
         match &self.path_segments.last().unwrap() {
             PathSegment::AttrName(s) => s.clone(),
             PathSegment::ArrayIndex(s, _idx) => s.clone(),
+            PathSegment::Wildcard => "[*]".to_string(),
+            PathSegment::WildcardAttr => ".*".to_string(),
         }
     }
 }

@@ -23,6 +23,7 @@ pub(crate) enum Node {
     GroupBy(Vec<ast::PathExpr>, Vec<NamedAggregate>, Box<Node>),
     Limit(u32, Box<Node>),
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
+    Distinct(Box<Node>),
 }
 
 impl Node {
@@ -98,6 +99,11 @@ impl Node {
 
                 let node = execution::Node::OrderBy(column_names.clone(), physical_orderings, child);
                 Ok((Box::new(node), return_variables))
+            }
+            Node::Distinct(source) => {
+                let (child, child_variables) = source.physical(physical_plan_creator)?;
+                let node = execution::Node::Distinct(child);
+                Ok((Box::new(node), child_variables))
             }
         }
     }

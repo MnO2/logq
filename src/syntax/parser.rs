@@ -349,31 +349,110 @@ fn path_bracket(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     delimited(tag("["), integral, tag("]"))(i)
 }
 
-fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
+/// Parse a bracket suffix: either `[*]` (wildcard) or `[<integer>]` (array index)
+fn path_bracket_or_wildcard(i: &str) -> IResult<&str, PathSegment, VerboseError<&str>> {
+    alt((
+        map(tag("[*]"), |_| PathSegment::Wildcard),
+        map(path_bracket, |v| match v {
+            ast::Value::Integral(idx) => PathSegment::ArrayIndex(String::new(), idx as usize),
+            _ => unreachable!(),
+        }),
+    ))(i)
+}
+
+/// A trailing segment after the first identifier:
+/// - `.<identifier>` (possibly followed by `[<index>]` or `[*]`)
+/// - `.*` (wildcard attr)
+/// - `[<index>]` (array index on previous segment — handled separately)
+/// - `[*]` (array wildcard on previous segment — handled separately)
+enum TrailingSegment {
+    DotAttr(String, Option<PathSegment>), // .attr possibly followed by bracket
+    DotWildcardAttr,                       // .*
+    Bracket(PathSegment),                  // [index] or [*]
+}
+
+fn trailing_dot_wildcard_attr(i: &str) -> IResult<&str, TrailingSegment, VerboseError<&str>> {
+    map(tag(".*"), |_| TrailingSegment::DotWildcardAttr)(i)
+}
+
+fn trailing_dot_attr(i: &str) -> IResult<&str, TrailingSegment, VerboseError<&str>> {
     map(
-        terminated(
-            separated_list0(char('.'), pair(identifier, opt(path_bracket))),
-            not(char('(')),
-        ),
-        |v| {
-            let segments = v
-                .iter()
-                .map(|(attr_name, opt_array_idx)| {
-                    if let Some(array_idx) = opt_array_idx {
-                        match array_idx {
-                            ast::Value::Integral(i) => PathSegment::ArrayIndex(attr_name.to_string(), *i as usize),
-                            _ => {
-                                unreachable!()
-                            }
-                        }
-                    } else {
-                        PathSegment::AttrName(attr_name.to_string())
-                    }
-                })
-                .collect();
-            PathExpr::new(segments)
-        },
+        pair(preceded(char('.'), identifier), opt(path_bracket_or_wildcard)),
+        |(name, bracket)| TrailingSegment::DotAttr(name.to_string(), bracket),
     )(i)
+}
+
+fn trailing_bracket(i: &str) -> IResult<&str, TrailingSegment, VerboseError<&str>> {
+    map(path_bracket_or_wildcard, TrailingSegment::Bracket)(i)
+}
+
+fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
+    let (rest, (first_id, first_bracket, trailing)) = terminated(
+        tuple((
+            identifier,
+            opt(path_bracket_or_wildcard),
+            many0(alt((trailing_dot_wildcard_attr, trailing_dot_attr, trailing_bracket))),
+        )),
+        not(char('(')),
+    )(i)?;
+
+    let mut segments = Vec::new();
+
+    // First segment
+    match first_bracket {
+        Some(PathSegment::ArrayIndex(_, idx)) => {
+            segments.push(PathSegment::ArrayIndex(first_id.to_string(), idx));
+        }
+        Some(PathSegment::Wildcard) => {
+            segments.push(PathSegment::AttrName(first_id.to_string()));
+            segments.push(PathSegment::Wildcard);
+        }
+        Some(_) => unreachable!(),
+        None => {
+            segments.push(PathSegment::AttrName(first_id.to_string()));
+        }
+    }
+
+    // Trailing segments
+    for seg in trailing {
+        match seg {
+            TrailingSegment::DotWildcardAttr => {
+                segments.push(PathSegment::WildcardAttr);
+            }
+            TrailingSegment::DotAttr(name, bracket) => match bracket {
+                Some(PathSegment::ArrayIndex(_, idx)) => {
+                    segments.push(PathSegment::ArrayIndex(name, idx));
+                }
+                Some(PathSegment::Wildcard) => {
+                    segments.push(PathSegment::AttrName(name));
+                    segments.push(PathSegment::Wildcard);
+                }
+                Some(_) => unreachable!(),
+                None => {
+                    segments.push(PathSegment::AttrName(name));
+                }
+            },
+            TrailingSegment::Bracket(b) => match b {
+                PathSegment::ArrayIndex(_, idx) => {
+                    // Attach to previous AttrName if possible
+                    if let Some(last) = segments.last_mut() {
+                        if let PathSegment::AttrName(name) = last {
+                            let name = name.clone();
+                            *last = PathSegment::ArrayIndex(name, idx);
+                        } else {
+                            segments.push(PathSegment::ArrayIndex(String::new(), idx));
+                        }
+                    }
+                }
+                PathSegment::Wildcard => {
+                    segments.push(PathSegment::Wildcard);
+                }
+                _ => unreachable!(),
+            },
+        }
+    }
+
+    Ok((rest, PathExpr::new(segments)))
 }
 
 fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&str>> {
@@ -733,31 +812,39 @@ fn select_clause_expression_list(i: &str) -> IResult<&str, ast::SelectClause, Ve
 }
 
 pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, VerboseError<&str>> {
-    map(
-        preceded(
-            tag_no_case("select"),
-            tuple((
-                alt((value_constructor, select_clause_expression_list)),
-                from_clause,
-                opt(where_expression),
-                opt(group_by_expression),
-                opt(having_expression),
-                opt(order_by_clause),
-                opt(limit_expression),
-            )),
+    let (i, _) = tag_no_case("select")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, distinct) = opt(|i| {
+        let (i, _) = tag_no_case("distinct")(i)?;
+        let (i, _) = multispace1(i)?;
+        Ok((i, true))
+    })(i)?;
+    let distinct = distinct.unwrap_or(false);
+
+    let (i, (select_clause, table_references, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)) =
+        tuple((
+            alt((value_constructor, select_clause_expression_list)),
+            from_clause,
+            opt(where_expression),
+            opt(group_by_expression),
+            opt(having_expression),
+            opt(order_by_clause),
+            opt(limit_expression),
+        ))(i)?;
+
+    Ok((
+        i,
+        ast::SelectStatement::new(
+            distinct,
+            select_clause,
+            table_references,
+            where_expr,
+            group_by_expr,
+            having_expr,
+            order_by_expr,
+            limit_expr,
         ),
-        |(select_clause, table_references, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)| {
-            ast::SelectStatement::new(
-                select_clause,
-                table_references,
-                where_expr,
-                group_by_expr,
-                having_expr,
-                order_by_expr,
-                limit_expr,
-            )
-        },
-    )(i)
+    ))
 }
 
 #[cfg(test)]
@@ -1025,6 +1112,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::ValueConstructor(ast::ValueConstructor::Expression(select_expr)),
             vec![table_reference],
             Some(where_expr),
@@ -1057,6 +1145,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1091,6 +1180,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1187,6 +1277,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             Some(where_expr),
@@ -1218,6 +1309,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
@@ -1289,6 +1381,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
@@ -1332,6 +1425,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
@@ -1381,6 +1475,7 @@ mod test {
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let ans = ast::SelectStatement::new(
+            false,
             SelectClause::SelectExpressions(select_exprs),
             vec![table_reference],
             None,
@@ -1406,7 +1501,7 @@ mod test {
                         nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha)
                     ),
                     (
-                        " select from it",
+                        "select from it",
                         nom::error::VerboseErrorKind::Context("select_expression_list")
                     )
                 ]
@@ -1419,6 +1514,22 @@ mod test {
                 errors: vec![(" 1", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
             }))
         );
+    }
+
+    #[test]
+    fn test_select_distinct_parsing() {
+        let result = select_query("select distinct a from it");
+        assert!(result.is_ok());
+        let (_, stmt) = result.unwrap();
+        assert!(stmt.distinct);
+    }
+
+    #[test]
+    fn test_select_without_distinct() {
+        let result = select_query("select a from it");
+        assert!(result.is_ok());
+        let (_, stmt) = result.unwrap();
+        assert!(!stmt.distinct);
     }
 
     #[test]
@@ -1485,6 +1596,49 @@ mod test {
         ];
         let expected = ast::PathExpr::new(path_segments);
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_wildcard_array_path() {
+        let result = path_expr("a[*]");
+        assert!(result.is_ok());
+        let (_, pe) = result.unwrap();
+        assert_eq!(pe.path_segments.len(), 2);
+        assert_eq!(pe.path_segments[0], ast::PathSegment::AttrName("a".to_string()));
+        assert_eq!(pe.path_segments[1], ast::PathSegment::Wildcard);
+    }
+
+    #[test]
+    fn test_wildcard_attr_path() {
+        let result = path_expr("a.*");
+        assert!(result.is_ok());
+        let (_, pe) = result.unwrap();
+        assert_eq!(pe.path_segments.len(), 2);
+        assert_eq!(pe.path_segments[0], ast::PathSegment::AttrName("a".to_string()));
+        assert_eq!(pe.path_segments[1], ast::PathSegment::WildcardAttr);
+    }
+
+    #[test]
+    fn test_wildcard_array_path_nested() {
+        let result = path_expr("a.b[*].c");
+        assert!(result.is_ok());
+        let (_, pe) = result.unwrap();
+        assert_eq!(pe.path_segments.len(), 4);
+        assert_eq!(pe.path_segments[0], ast::PathSegment::AttrName("a".to_string()));
+        assert_eq!(pe.path_segments[1], ast::PathSegment::AttrName("b".to_string()));
+        assert_eq!(pe.path_segments[2], ast::PathSegment::Wildcard);
+        assert_eq!(pe.path_segments[3], ast::PathSegment::AttrName("c".to_string()));
+    }
+
+    #[test]
+    fn test_wildcard_attr_path_nested() {
+        let result = path_expr("a.b.*");
+        assert!(result.is_ok());
+        let (_, pe) = result.unwrap();
+        assert_eq!(pe.path_segments.len(), 3);
+        assert_eq!(pe.path_segments[0], ast::PathSegment::AttrName("a".to_string()));
+        assert_eq!(pe.path_segments[1], ast::PathSegment::AttrName("b".to_string()));
+        assert_eq!(pe.path_segments[2], ast::PathSegment::WildcardAttr);
     }
 
     #[test]

@@ -275,6 +275,66 @@ pub(crate) type Tuple = Vec<Value>;
 pub(crate) type VariableName = String;
 pub(crate) type Variables = LinkedHashMap<String, Value>;
 
+/// Apply remaining path segments (starting at index `from`) to a single Value.
+fn apply_path_to_value(path_expr: &ast::PathExpr, from: usize, value: &Value) -> Value {
+    if from >= path_expr.path_segments.len() {
+        return value.clone();
+    }
+
+    match &path_expr.path_segments[from] {
+        ast::PathSegment::AttrName(attr_name) => {
+            match value {
+                Value::Object(o) => {
+                    if let Some(v) = o.get(attr_name) {
+                        apply_path_to_value(path_expr, from + 1, v)
+                    } else {
+                        Value::Missing
+                    }
+                }
+                _ => Value::Missing,
+            }
+        }
+        ast::PathSegment::ArrayIndex(_attr_name, idx) => {
+            match value {
+                Value::Array(a) => {
+                    if *idx < a.len() {
+                        apply_path_to_value(path_expr, from + 1, &a[*idx])
+                    } else {
+                        Value::Missing
+                    }
+                }
+                _ => Value::Missing,
+            }
+        }
+        ast::PathSegment::Wildcard => {
+            // [*] — iterate all elements of an array
+            match value {
+                Value::Array(arr) => {
+                    let results: Vec<Value> = arr
+                        .iter()
+                        .map(|elem| apply_path_to_value(path_expr, from + 1, elem))
+                        .collect();
+                    Value::Array(results)
+                }
+                _ => Value::Missing,
+            }
+        }
+        ast::PathSegment::WildcardAttr => {
+            // .* — iterate all values of a tuple/object
+            match value {
+                Value::Object(obj) => {
+                    let results: Vec<Value> = obj
+                        .values()
+                        .map(|v| apply_path_to_value(path_expr, from + 1, v))
+                        .collect();
+                    Value::Array(results)
+                }
+                _ => Value::Missing,
+            }
+        }
+    }
+}
+
 pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Variables) -> Value {
     if i >= path_expr.path_segments.len() {
         return Value::Missing;
@@ -286,10 +346,8 @@ pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variab
                 if i + 1 == path_expr.path_segments.len() {
                     return val.clone();
                 } else {
-                    match val {
-                        Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
-                        _ => Value::Missing,
-                    }
+                    // Use apply_path_to_value for remaining segments (handles wildcards too)
+                    return apply_path_to_value(path_expr, i + 1, val);
                 }
             } else {
                 Value::Missing
@@ -297,29 +355,36 @@ pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variab
         }
         ast::PathSegment::ArrayIndex(attr_name, idx) => {
             if let Some(val) = variables.get(attr_name) {
-                if i + 1 == path_expr.path_segments.len() {
-                    match val {
-                        Value::Array(a) => {
-                            let a = &a[*idx];
-                            return a.clone();
-                        }
-                        _ => Value::Missing,
-                    }
-                } else {
-                    match val {
-                        Value::Array(a) => {
-                            let a = &a[*idx];
-                            match a {
-                                Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
-                                _ => Value::Missing,
+                match val {
+                    Value::Array(a) => {
+                        if *idx < a.len() {
+                            if i + 1 == path_expr.path_segments.len() {
+                                return a[*idx].clone();
+                            } else {
+                                return apply_path_to_value(path_expr, i + 1, &a[*idx]);
                             }
+                        } else {
+                            Value::Missing
                         }
-                        _ => Value::Missing,
                     }
+                    _ => Value::Missing,
                 }
             } else {
                 Value::Missing
             }
+        }
+        ast::PathSegment::Wildcard => {
+            // [*] at the top level doesn't make sense without a preceding lookup,
+            // but handle gracefully
+            Value::Missing
+        }
+        ast::PathSegment::WildcardAttr => {
+            // .* at the top level — iterate all values in variables
+            let results: Vec<Value> = variables
+                .values()
+                .map(|v| apply_path_to_value(path_expr, i + 1, v))
+                .collect();
+            Value::Array(results)
         }
     }
 }
@@ -393,5 +458,94 @@ mod tests {
         };
 
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_wildcard_array_path_expr() {
+        // Given: variables = { "a": [1, 2, 3] }
+        // Path: a[*]
+        // Expected: Array([Int(1), Int(2), Int(3)])
+        let mut variables = Variables::default();
+        variables.insert(
+            "a".to_string(),
+            Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        );
+        let path = ast::PathExpr::new(vec![
+            ast::PathSegment::AttrName("a".to_string()),
+            ast::PathSegment::Wildcard,
+        ]);
+        let result = get_value_by_path_expr(&path, 0, &variables);
+        assert_eq!(result, Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]));
+    }
+
+    #[test]
+    fn test_wildcard_array_on_non_array() {
+        // Given: variables = { "a": Int(42) }
+        // Path: a[*]
+        // Expected: Missing
+        let mut variables = Variables::default();
+        variables.insert("a".to_string(), Value::Int(42));
+        let path = ast::PathExpr::new(vec![
+            ast::PathSegment::AttrName("a".to_string()),
+            ast::PathSegment::Wildcard,
+        ]);
+        let result = get_value_by_path_expr(&path, 0, &variables);
+        assert_eq!(result, Value::Missing);
+    }
+
+    #[test]
+    fn test_wildcard_attr_path_expr() {
+        // Given: variables = { "a": { "x": 1, "y": 2 } }
+        // Path: a.*
+        // Expected: Array([Int(1), Int(2)])
+        let mut variables = Variables::default();
+        let mut obj = LinkedHashMap::default();
+        obj.insert("x".to_string(), Value::Int(1));
+        obj.insert("y".to_string(), Value::Int(2));
+        variables.insert("a".to_string(), Value::Object(obj));
+        let path = ast::PathExpr::new(vec![
+            ast::PathSegment::AttrName("a".to_string()),
+            ast::PathSegment::WildcardAttr,
+        ]);
+        let result = get_value_by_path_expr(&path, 0, &variables);
+        assert_eq!(result, Value::Array(vec![Value::Int(1), Value::Int(2)]));
+    }
+
+    #[test]
+    fn test_wildcard_attr_on_non_object() {
+        // Given: variables = { "a": Int(42) }
+        // Path: a.*
+        // Expected: Missing
+        let mut variables = Variables::default();
+        variables.insert("a".to_string(), Value::Int(42));
+        let path = ast::PathExpr::new(vec![
+            ast::PathSegment::AttrName("a".to_string()),
+            ast::PathSegment::WildcardAttr,
+        ]);
+        let result = get_value_by_path_expr(&path, 0, &variables);
+        assert_eq!(result, Value::Missing);
+    }
+
+    #[test]
+    fn test_wildcard_array_nested_path() {
+        // Given: variables = { "a": [ { "b": 10 }, { "b": 20 } ] }
+        // Path: a[*].b
+        // Expected: Array([Int(10), Int(20)])
+        let mut variables = Variables::default();
+        let mut obj1 = LinkedHashMap::default();
+        obj1.insert("b".to_string(), Value::Int(10));
+        let mut obj2 = LinkedHashMap::default();
+        obj2.insert("b".to_string(), Value::Int(20));
+        variables.insert(
+            "a".to_string(),
+            Value::Array(vec![Value::Object(obj1), Value::Object(obj2)]),
+        );
+        let path = ast::PathExpr::new(vec![
+            ast::PathSegment::AttrName("a".to_string()),
+            ast::PathSegment::Wildcard,
+            ast::PathSegment::AttrName("b".to_string()),
+        ]);
+        let result = get_value_by_path_expr(&path, 0, &variables);
+        assert_eq!(result, Value::Array(vec![Value::Int(10), Value::Int(20)]));
     }
 }

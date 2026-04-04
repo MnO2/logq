@@ -7,6 +7,7 @@ use super::ast::*;
 /// - NULLIF(a, b) → CASE WHEN a = b THEN NULL ELSE a END
 pub(crate) fn desugar_statement(stmt: SelectStatement) -> SelectStatement {
     SelectStatement {
+        distinct: stmt.distinct,
         select_clause: desugar_select_clause(stmt.select_clause),
         table_references: stmt.table_references,
         where_expr_opt: stmt.where_expr_opt.map(|w| WhereExpression::new(desugar_expr(w.expr))),
