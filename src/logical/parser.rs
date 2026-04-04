@@ -125,6 +125,10 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
         ast::Expression::Between(_, _, _) | ast::Expression::NotBetween(_, _, _) => {
             unreachable!("BETWEEN/NOT BETWEEN should be desugared before reaching the logical planner")
         }
+        ast::Expression::Cast(inner, cast_type) => {
+            let expr = parse_value_expression(ctx, &ast::Expression::Cast(inner.clone(), cast_type.clone()))?;
+            Ok(Box::new(types::Formula::ExpressionPredicate(expr)))
+        }
         ast::Expression::FuncCall(_, _, _)
         | ast::Expression::CaseWhenExpression(_)
         | ast::Expression::Column(_) => {
@@ -301,6 +305,10 @@ fn parse_value_expression(
         }
         ast::Expression::Between(_, _, _) | ast::Expression::NotBetween(_, _, _) => {
             unreachable!("BETWEEN/NOT BETWEEN should be desugared before reaching the logical planner")
+        }
+        ast::Expression::Cast(inner, cast_type) => {
+            let expr = parse_value_expression(ctx, inner)?;
+            Ok(Box::new(types::Expression::Cast(expr, cast_type.clone())))
         }
     }
 }

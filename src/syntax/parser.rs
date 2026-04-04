@@ -165,11 +165,25 @@ fn integral(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
 }
 
 fn null_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
-    map(tag_no_case("null"), |_| ast::Value::Null)(i)
+    let (i, _) = tag_no_case("null")(i)?;
+    // Ensure "null" is not followed by alphanumeric/underscore (e.g., "nullif")
+    if i.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+        return Err(nom::Err::Error(VerboseError {
+            errors: vec![(i, nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Tag))],
+        }));
+    }
+    Ok((i, ast::Value::Null))
 }
 
 fn missing_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
-    map(tag_no_case("missing"), |_| ast::Value::Missing)(i)
+    let (i, _) = tag_no_case("missing")(i)?;
+    // Ensure "missing" is not followed by alphanumeric/underscore
+    if i.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+        return Err(nom::Err::Error(VerboseError {
+            errors: vec![(i, nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Tag))],
+        }));
+    }
+    Ok((i, ast::Value::Missing))
 }
 
 fn value(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
@@ -442,9 +456,34 @@ fn from_clause(i: &str) -> IResult<&str, Vec<TableReference>, VerboseError<&str>
     terminated(preceded(tuple((tag_no_case("from"), space1)), table_reference_list), space0)(i)
 }
 
+fn cast_expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+    let (i, _) = space0(i)?;
+    let (i, _) = tag_no_case("cast")(i)?;
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag("(")(i)?;
+    let (i, _) = multispace0(i)?;
+    let (i, expr) = expression(i)?;
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag_no_case("as")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, cast_type) = alt((
+        map(tag_no_case("integer"), |_| ast::CastType::Int),
+        map(tag_no_case("int"), |_| ast::CastType::Int),
+        map(tag_no_case("float"), |_| ast::CastType::Float),
+        map(tag_no_case("varchar"), |_| ast::CastType::Varchar),
+        map(tag_no_case("string"), |_| ast::CastType::Varchar),
+        map(tag_no_case("boolean"), |_| ast::CastType::Boolean),
+        map(tag_no_case("bool"), |_| ast::CastType::Boolean),
+    ))(i)?;
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag(")")(i)?;
+    Ok((i, ast::Expression::Cast(Box::new(expr), cast_type)))
+}
+
 fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     alt((
         map(case_when_expression, |n| ast::Expression::CaseWhenExpression(n)),
+        cast_expression,
         expression_term_opt_not,
     ))(i)
 }
@@ -1839,5 +1878,171 @@ mod test {
     fn test_in_with_and() {
         let result = select_query("select a from it where a in (1, 2, 3) and b = 1");
         assert!(result.is_ok(), "IN with AND should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_coalesce_parsing() {
+        // coalesce parses as a FuncCall through the existing func_call parser
+        let result = expression("coalesce(a, b)");
+        assert!(result.is_ok(), "coalesce(a, b) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::FuncCall(name, args, _) => {
+                assert_eq!(name, "coalesce");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected FuncCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_coalesce_three_args_parsing() {
+        let result = expression("coalesce(a, b, c)");
+        assert!(result.is_ok(), "coalesce(a, b, c) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::FuncCall(name, args, _) => {
+                assert_eq!(name, "coalesce");
+                assert_eq!(args.len(), 3);
+            }
+            other => panic!("Expected FuncCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_nullif_parsing() {
+        let result = expression("nullif(a, b)");
+        assert!(result.is_ok(), "nullif(a, b) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::FuncCall(name, args, _) => {
+                assert_eq!(name, "nullif");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected FuncCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_coalesce_in_select() {
+        let result = select_query("select coalesce(a, b) from it");
+        assert!(result.is_ok(), "COALESCE in SELECT should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_nullif_in_select() {
+        let result = select_query("select nullif(a, b) from it");
+        assert!(result.is_ok(), "NULLIF in SELECT should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_coalesce_in_where() {
+        let result = select_query("select a from it where coalesce(a, 0) > 1");
+        assert!(result.is_ok(), "COALESCE in WHERE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_nullif_in_where() {
+        let result = select_query("select a from it where nullif(a, 0) > 1");
+        assert!(result.is_ok(), "NULLIF in WHERE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_cast_parsing() {
+        let result = expression("cast(a as int)");
+        assert!(result.is_ok(), "cast(a as int) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::Cast(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            ast::CastType::Int,
+        );
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_cast_parsing_uppercase() {
+        let result = expression("CAST(a AS VARCHAR)");
+        assert!(result.is_ok(), "CAST(a AS VARCHAR) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::Cast(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            ast::CastType::Varchar,
+        );
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_cast_float_type() {
+        let result = expression("cast(a as float)");
+        assert!(result.is_ok(), "cast(a as float) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::Cast(_, ast::CastType::Float) => {}
+            other => panic!("Expected Cast with Float, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cast_boolean_type() {
+        let result = expression("cast(a as boolean)");
+        assert!(result.is_ok(), "cast(a as boolean) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::Cast(_, ast::CastType::Boolean) => {}
+            other => panic!("Expected Cast with Boolean, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cast_bool_alias() {
+        let result = expression("cast(a as bool)");
+        assert!(result.is_ok(), "cast(a as bool) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::Cast(_, ast::CastType::Boolean) => {}
+            other => panic!("Expected Cast with Boolean, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cast_integer_alias() {
+        let result = expression("cast(a as integer)");
+        assert!(result.is_ok(), "cast(a as integer) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::Cast(_, ast::CastType::Int) => {}
+            other => panic!("Expected Cast with Int, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cast_string_alias() {
+        let result = expression("cast(a as string)");
+        assert!(result.is_ok(), "cast(a as string) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        match expr {
+            ast::Expression::Cast(_, ast::CastType::Varchar) => {}
+            other => panic!("Expected Cast with Varchar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cast_in_select() {
+        let result = select_query("select cast(a as int) from it");
+        assert!(result.is_ok(), "CAST in SELECT should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_cast_in_where() {
+        let result = select_query("select a from it where cast(a as int) > 1");
+        assert!(result.is_ok(), "CAST in WHERE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_cast_with_expression() {
+        let result = expression("cast(a + b as varchar)");
+        assert!(result.is_ok(), "cast(a + b as varchar) should parse, got: {:?}", result);
     }
 }

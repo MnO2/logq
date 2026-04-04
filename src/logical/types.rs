@@ -134,6 +134,7 @@ pub(crate) enum Expression {
     Logic(Box<Formula>),
     Function(String, Vec<Named>),
     Branch(Vec<(Box<Formula>, Box<Expression>)>, Option<Box<Expression>>),
+    Cast(Box<Expression>, ast::CastType),
 }
 
 impl Expression {
@@ -203,6 +204,13 @@ impl Expression {
                         variables,
                     ))
                 }
+            }
+            Expression::Cast(inner, cast_type) => {
+                let (physical_inner, variables) = inner.physical(physical_plan_creator)?;
+                Ok((
+                    Box::new(execution::Expression::Cast(physical_inner, cast_type.clone())),
+                    variables,
+                ))
             }
         }
     }

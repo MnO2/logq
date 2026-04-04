@@ -3,8 +3,8 @@ use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, Lo
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
-use crate::syntax::ast::PathExpr;
-use chrono::Timelike;
+use crate::syntax::ast::{CastType, PathExpr};
+use chrono::{Datelike, Timelike};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use pdatastructs::hyperloglog::HyperLogLog;
@@ -126,6 +126,7 @@ pub(crate) enum Expression {
     Variable(PathExpr),
     Function(String, Vec<Named>),
     Branch(Vec<(Box<Formula>, Box<Expression>)>, Option<Box<Expression>>),
+    Cast(Box<Expression>, CastType),
 }
 
 impl Expression {
@@ -170,6 +171,41 @@ impl Expression {
                 match else_expr {
                     Some(expr) => expr.expression_value(variables),
                     None => Ok(Value::Null),
+                }
+            }
+            Expression::Cast(inner, cast_type) => {
+                let val = inner.expression_value(variables)?;
+                match (&val, cast_type) {
+                    (Value::Null, _) => Ok(Value::Null),
+                    (Value::Missing, _) => Ok(Value::Missing),
+                    // To Int
+                    (Value::Int(_), CastType::Int) => Ok(val),
+                    (Value::Float(f), CastType::Int) => Ok(Value::Int(f.into_inner() as i32)),
+                    (Value::String(s), CastType::Int) => {
+                        s.parse::<i32>().map(Value::Int).map_err(|_| ExpressionError::TypeMismatch)
+                    }
+                    (Value::Boolean(b), CastType::Int) => Ok(Value::Int(if *b { 1 } else { 0 })),
+                    // To Float
+                    (Value::Float(_), CastType::Float) => Ok(val),
+                    (Value::Int(i), CastType::Float) => Ok(Value::Float(OrderedFloat::from(*i as f32))),
+                    (Value::String(s), CastType::Float) => {
+                        s.parse::<f32>().map(|f| Value::Float(OrderedFloat::from(f))).map_err(|_| ExpressionError::TypeMismatch)
+                    }
+                    // To String (Varchar)
+                    (Value::String(_), CastType::Varchar) => Ok(val),
+                    (Value::Int(i), CastType::Varchar) => Ok(Value::String(i.to_string())),
+                    (Value::Float(f), CastType::Varchar) => Ok(Value::String(f.to_string())),
+                    (Value::Boolean(b), CastType::Varchar) => Ok(Value::String(b.to_string())),
+                    // To Boolean
+                    (Value::Boolean(_), CastType::Boolean) => Ok(val),
+                    (Value::String(s), CastType::Boolean) => {
+                        match s.to_lowercase().as_str() {
+                            "true" => Ok(Value::Boolean(true)),
+                            "false" => Ok(Value::Boolean(false)),
+                            _ => Err(ExpressionError::TypeMismatch),
+                        }
+                    }
+                    _ => Err(ExpressionError::TypeMismatch),
                 }
             }
         }
@@ -442,7 +478,10 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                     match date_part_unit {
                         common::types::DatePartUnit::Second => Ok(Value::Float(OrderedFloat::from(dt.second() as f32))),
                         common::types::DatePartUnit::Minute => Ok(Value::Float(OrderedFloat::from(dt.minute() as f32))),
-                        _ => Err(ExpressionError::DatePartUnitNotSupported),
+                        common::types::DatePartUnit::Hour => Ok(Value::Float(OrderedFloat::from(dt.hour() as f32))),
+                        common::types::DatePartUnit::Day => Ok(Value::Float(OrderedFloat::from(dt.day() as f32))),
+                        common::types::DatePartUnit::Month => Ok(Value::Float(OrderedFloat::from(dt.month() as f32))),
+                        common::types::DatePartUnit::Year => Ok(Value::Float(OrderedFloat::from(dt.year() as f32))),
                     }
                 }
                 _ => Err(ExpressionError::InvalidArguments),
@@ -559,7 +598,85 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
-        _ => Err(ExpressionError::UnknownFunction),
+        _ => {
+            // Case-insensitive match for user-facing functions
+            match func_name.to_ascii_lowercase().as_str() {
+                "upper" => {
+                    if arguments.len() != 1 {
+                        return Err(ExpressionError::InvalidArguments);
+                    }
+                    match &arguments[0] {
+                        Value::Null => Ok(Value::Null),
+                        Value::Missing => Ok(Value::Missing),
+                        Value::String(s) => Ok(Value::String(s.to_uppercase())),
+                        _ => Err(ExpressionError::InvalidArguments),
+                    }
+                }
+                "lower" => {
+                    if arguments.len() != 1 {
+                        return Err(ExpressionError::InvalidArguments);
+                    }
+                    match &arguments[0] {
+                        Value::Null => Ok(Value::Null),
+                        Value::Missing => Ok(Value::Missing),
+                        Value::String(s) => Ok(Value::String(s.to_lowercase())),
+                        _ => Err(ExpressionError::InvalidArguments),
+                    }
+                }
+                "char_length" | "character_length" => {
+                    if arguments.len() != 1 {
+                        return Err(ExpressionError::InvalidArguments);
+                    }
+                    match &arguments[0] {
+                        Value::Null => Ok(Value::Null),
+                        Value::Missing => Ok(Value::Missing),
+                        Value::String(s) => Ok(Value::Int(s.len() as i32)),
+                        _ => Err(ExpressionError::InvalidArguments),
+                    }
+                }
+                "substring" => {
+                    // SUBSTRING(str, start) or SUBSTRING(str, start, length)
+                    // Note: SQL SUBSTRING is 1-based
+                    if arguments.len() < 2 || arguments.len() > 3 {
+                        return Err(ExpressionError::InvalidArguments);
+                    }
+                    match &arguments[0] {
+                        Value::Null => Ok(Value::Null),
+                        Value::Missing => Ok(Value::Missing),
+                        Value::String(s) => {
+                            let start = match &arguments[1] {
+                                Value::Int(i) => (*i - 1).max(0) as usize, // 1-based to 0-based
+                                _ => return Err(ExpressionError::InvalidArguments),
+                            };
+                            if arguments.len() == 3 {
+                                let len = match &arguments[2] {
+                                    Value::Int(i) => (*i).max(0) as usize,
+                                    _ => return Err(ExpressionError::InvalidArguments),
+                                };
+                                let result: String = s.chars().skip(start).take(len).collect();
+                                Ok(Value::String(result))
+                            } else {
+                                let result: String = s.chars().skip(start).collect();
+                                Ok(Value::String(result))
+                            }
+                        }
+                        _ => Err(ExpressionError::InvalidArguments),
+                    }
+                }
+                "trim" => {
+                    if arguments.len() != 1 {
+                        return Err(ExpressionError::InvalidArguments);
+                    }
+                    match &arguments[0] {
+                        Value::Null => Ok(Value::Null),
+                        Value::Missing => Ok(Value::Missing),
+                        Value::String(s) => Ok(Value::String(s.trim().to_string())),
+                        _ => Err(ExpressionError::InvalidArguments),
+                    }
+                }
+                _ => Err(ExpressionError::UnknownFunction),
+            }
+        }
     }
 }
 
@@ -2178,5 +2295,276 @@ mod tests {
             ],
         );
         assert_eq!(f.evaluate(&vars), Ok(None));
+    }
+
+    #[test]
+    fn test_upper() {
+        assert_eq!(
+            evaluate("upper", &vec![Value::String("hello".to_string())]),
+            Ok(Value::String("HELLO".to_string()))
+        );
+        // Case-insensitive function name
+        assert_eq!(
+            evaluate("UPPER", &vec![Value::String("hello".to_string())]),
+            Ok(Value::String("HELLO".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_lower() {
+        assert_eq!(
+            evaluate("lower", &vec![Value::String("HELLO".to_string())]),
+            Ok(Value::String("hello".to_string()))
+        );
+        // Case-insensitive function name
+        assert_eq!(
+            evaluate("LOWER", &vec![Value::String("HELLO".to_string())]),
+            Ok(Value::String("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_char_length() {
+        assert_eq!(
+            evaluate("char_length", &vec![Value::String("hello".to_string())]),
+            Ok(Value::Int(5))
+        );
+        assert_eq!(
+            evaluate("character_length", &vec![Value::String("hello".to_string())]),
+            Ok(Value::Int(5))
+        );
+        assert_eq!(
+            evaluate("CHAR_LENGTH", &vec![Value::String("hello".to_string())]),
+            Ok(Value::Int(5))
+        );
+    }
+
+    #[test]
+    fn test_substring() {
+        assert_eq!(
+            evaluate("substring", &vec![Value::String("hello".to_string()), Value::Int(2)]),
+            Ok(Value::String("ello".to_string()))
+        );
+        assert_eq!(
+            evaluate("substring", &vec![Value::String("hello".to_string()), Value::Int(2), Value::Int(3)]),
+            Ok(Value::String("ell".to_string()))
+        );
+        // Case-insensitive
+        assert_eq!(
+            evaluate("SUBSTRING", &vec![Value::String("hello".to_string()), Value::Int(1)]),
+            Ok(Value::String("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_trim() {
+        assert_eq!(
+            evaluate("trim", &vec![Value::String("  hello  ".to_string())]),
+            Ok(Value::String("hello".to_string()))
+        );
+        assert_eq!(
+            evaluate("TRIM", &vec![Value::String("  hello  ".to_string())]),
+            Ok(Value::String("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_string_functions_null_propagation() {
+        assert_eq!(evaluate("upper", &vec![Value::Null]), Ok(Value::Null));
+        assert_eq!(evaluate("lower", &vec![Value::Missing]), Ok(Value::Missing));
+        assert_eq!(evaluate("char_length", &vec![Value::Null]), Ok(Value::Null));
+        assert_eq!(evaluate("substring", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(evaluate("substring", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
+        assert_eq!(evaluate("trim", &vec![Value::Null]), Ok(Value::Null));
+        assert_eq!(evaluate("trim", &vec![Value::Missing]), Ok(Value::Missing));
+    }
+
+    #[test]
+    fn test_date_part_all_units() {
+        let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
+        assert_eq!(
+            evaluate("date_part", &vec![Value::String("second".to_string()), dt.clone()]),
+            Ok(Value::Float(OrderedFloat::from(37.0)))
+        );
+        assert_eq!(
+            evaluate("date_part", &vec![Value::String("minute".to_string()), dt.clone()]),
+            Ok(Value::Float(OrderedFloat::from(45.0)))
+        );
+        assert_eq!(
+            evaluate("date_part", &vec![Value::String("hour".to_string()), dt.clone()]),
+            Ok(Value::Float(OrderedFloat::from(18.0)))
+        );
+        assert_eq!(
+            evaluate("date_part", &vec![Value::String("day".to_string()), dt.clone()]),
+            Ok(Value::Float(OrderedFloat::from(7.0)))
+        );
+        assert_eq!(
+            evaluate("date_part", &vec![Value::String("month".to_string()), dt.clone()]),
+            Ok(Value::Float(OrderedFloat::from(11.0)))
+        );
+        assert_eq!(
+            evaluate("date_part", &vec![Value::String("year".to_string()), dt.clone()]),
+            Ok(Value::Float(OrderedFloat::from(2015.0)))
+        );
+    }
+
+    #[test]
+    fn test_cast_int_to_string() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Int(42))),
+            CastType::Varchar,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::String("42".to_string())));
+    }
+
+    #[test]
+    fn test_cast_string_to_int() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("123".to_string()))),
+            CastType::Int,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Int(123)));
+    }
+
+    #[test]
+    fn test_cast_string_to_int_invalid() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("abc".to_string()))),
+            CastType::Int,
+        );
+        assert_eq!(expr.expression_value(&vars), Err(ExpressionError::TypeMismatch));
+    }
+
+    #[test]
+    fn test_cast_float_to_int() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Float(OrderedFloat::from(3.7f32)))),
+            CastType::Int,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_cast_int_to_float() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Int(5))),
+            CastType::Float,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Float(OrderedFloat::from(5.0f32))));
+    }
+
+    #[test]
+    fn test_cast_string_to_float() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("3.14".to_string()))),
+            CastType::Float,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Float(OrderedFloat::from(3.14f32))));
+    }
+
+    #[test]
+    fn test_cast_bool_to_int() {
+        let vars = Variables::default();
+        let expr_true = Expression::Cast(
+            Box::new(Expression::Constant(Value::Boolean(true))),
+            CastType::Int,
+        );
+        assert_eq!(expr_true.expression_value(&vars), Ok(Value::Int(1)));
+
+        let expr_false = Expression::Cast(
+            Box::new(Expression::Constant(Value::Boolean(false))),
+            CastType::Int,
+        );
+        assert_eq!(expr_false.expression_value(&vars), Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn test_cast_bool_to_string() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Boolean(true))),
+            CastType::Varchar,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::String("true".to_string())));
+    }
+
+    #[test]
+    fn test_cast_string_to_bool() {
+        let vars = Variables::default();
+        let expr_true = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("true".to_string()))),
+            CastType::Boolean,
+        );
+        assert_eq!(expr_true.expression_value(&vars), Ok(Value::Boolean(true)));
+
+        let expr_false = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("FALSE".to_string()))),
+            CastType::Boolean,
+        );
+        assert_eq!(expr_false.expression_value(&vars), Ok(Value::Boolean(false)));
+    }
+
+    #[test]
+    fn test_cast_string_to_bool_invalid() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("yes".to_string()))),
+            CastType::Boolean,
+        );
+        assert_eq!(expr.expression_value(&vars), Err(ExpressionError::TypeMismatch));
+    }
+
+    #[test]
+    fn test_cast_null_propagation() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Null)),
+            CastType::Int,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Null));
+    }
+
+    #[test]
+    fn test_cast_missing_propagation() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Missing)),
+            CastType::Varchar,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Missing));
+    }
+
+    #[test]
+    fn test_cast_identity() {
+        let vars = Variables::default();
+        // Casting Int to Int should be identity
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Int(42))),
+            CastType::Int,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::Int(42)));
+
+        // Casting String to Varchar should be identity
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            CastType::Varchar,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::String("hello".to_string())));
+    }
+
+    #[test]
+    fn test_cast_float_to_string() {
+        let vars = Variables::default();
+        let expr = Expression::Cast(
+            Box::new(Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)))),
+            CastType::Varchar,
+        );
+        assert_eq!(expr.expression_value(&vars), Ok(Value::String("2.5".to_string())));
     }
 }

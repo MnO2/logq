@@ -151,6 +151,15 @@ pub(crate) enum Expression {
     NotIn(Box<Expression>, Vec<Expression>),
     Between(Box<Expression>, Box<Expression>, Box<Expression>),      // expr BETWEEN lo AND hi
     NotBetween(Box<Expression>, Box<Expression>, Box<Expression>),   // expr NOT BETWEEN lo AND hi
+    Cast(Box<Expression>, CastType),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum CastType {
+    Int,
+    Float,
+    Varchar,
+    Boolean,
 }
 
 pub(crate) type FuncName = String;
