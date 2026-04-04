@@ -106,6 +106,7 @@ pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
+    let select_stmt = syntax::desugar::desugar_statement(select_stmt);
 
     let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
@@ -121,6 +122,7 @@ pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, outpu
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
+    let select_stmt = syntax::desugar::desugar_statement(select_stmt);
 
     let node = logical::parser::parse_query(select_stmt, data_source.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
