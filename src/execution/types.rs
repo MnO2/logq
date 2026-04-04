@@ -134,7 +134,10 @@ impl Expression {
             Expression::Constant(value) => Ok(value.clone()),
             Expression::Logic(formula) => {
                 let out = formula.evaluate(variables)?;
-                Ok(Value::Boolean(out))
+                match out {
+                    Some(b) => Ok(Value::Boolean(b)),
+                    None => Ok(Value::Null),
+                }
             }
             Expression::Variable(path_expr) => {
                 let v = common::types::get_value_by_path_expr(path_expr, 0, variables);
@@ -160,7 +163,7 @@ impl Expression {
             Expression::Branch(condition, then_expr, else_expr) => {
                 let choose_then_branch = condition.evaluate(variables)?;
 
-                if choose_then_branch {
+                if choose_then_branch == Some(true) {
                     then_expr.expression_value(variables)
                 } else {
                     if let Some(e) = else_expr {
@@ -556,52 +559,52 @@ pub(crate) enum Relation {
 }
 
 impl Relation {
-    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression) -> ExpressionResult<bool> {
+    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression) -> ExpressionResult<Option<bool>> {
         let left_result = left.expression_value(variables)?;
         let right_result = right.expression_value(variables)?;
 
-        // NULL/MISSING: any comparison involving Null or Missing returns false
+        // NULL/MISSING: any comparison involving Null or Missing returns None (unknown)
         if matches!(&left_result, Value::Null | Value::Missing) || matches!(&right_result, Value::Null | Value::Missing) {
-            return Ok(false);
+            return Ok(None);
         }
 
         match self {
-            Relation::Equal => Ok(left_result == right_result),
-            Relation::NotEqual => Ok(left_result != right_result),
+            Relation::Equal => Ok(Some(left_result == right_result)),
+            Relation::NotEqual => Ok(Some(left_result != right_result)),
             Relation::GreaterEqual => match (left_result, right_result) {
-                (Value::Int(l), Value::Int(r)) => Ok(l >= r),
-                (Value::Float(l), Value::Float(r)) => Ok(l >= r),
-                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) >= r),
-                (Value::Float(l), Value::Int(r)) => Ok(l >= OrderedFloat::from(r as f32)),
-                (Value::String(l), Value::String(r)) => Ok(l >= r),
-                (Value::DateTime(l), Value::DateTime(r)) => Ok(l >= r),
+                (Value::Int(l), Value::Int(r)) => Ok(Some(l >= r)),
+                (Value::Float(l), Value::Float(r)) => Ok(Some(l >= r)),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) >= r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(l >= OrderedFloat::from(r as f32))),
+                (Value::String(l), Value::String(r)) => Ok(Some(l >= r)),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l >= r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
             Relation::LessEqual => match (left_result, right_result) {
-                (Value::Int(l), Value::Int(r)) => Ok(l <= r),
-                (Value::Float(l), Value::Float(r)) => Ok(l <= r),
-                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) <= r),
-                (Value::Float(l), Value::Int(r)) => Ok(l <= OrderedFloat::from(r as f32)),
-                (Value::String(l), Value::String(r)) => Ok(l <= r),
-                (Value::DateTime(l), Value::DateTime(r)) => Ok(l <= r),
+                (Value::Int(l), Value::Int(r)) => Ok(Some(l <= r)),
+                (Value::Float(l), Value::Float(r)) => Ok(Some(l <= r)),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) <= r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(l <= OrderedFloat::from(r as f32))),
+                (Value::String(l), Value::String(r)) => Ok(Some(l <= r)),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l <= r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
             Relation::MoreThan => match (left_result, right_result) {
-                (Value::Int(l), Value::Int(r)) => Ok(l > r),
-                (Value::Float(l), Value::Float(r)) => Ok(l > r),
-                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) > r),
-                (Value::Float(l), Value::Int(r)) => Ok(l > OrderedFloat::from(r as f32)),
-                (Value::String(l), Value::String(r)) => Ok(l > r),
-                (Value::DateTime(l), Value::DateTime(r)) => Ok(l > r),
+                (Value::Int(l), Value::Int(r)) => Ok(Some(l > r)),
+                (Value::Float(l), Value::Float(r)) => Ok(Some(l > r)),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) > r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(l > OrderedFloat::from(r as f32))),
+                (Value::String(l), Value::String(r)) => Ok(Some(l > r)),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l > r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
             Relation::LessThan => match (left_result, right_result) {
-                (Value::Int(l), Value::Int(r)) => Ok(l < r),
-                (Value::Float(l), Value::Float(r)) => Ok(l < r),
-                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) < r),
-                (Value::Float(l), Value::Int(r)) => Ok(l < OrderedFloat::from(r as f32)),
-                (Value::String(l), Value::String(r)) => Ok(l < r),
-                (Value::DateTime(l), Value::DateTime(r)) => Ok(l < r),
+                (Value::Int(l), Value::Int(r)) => Ok(Some(l < r)),
+                (Value::Float(l), Value::Float(r)) => Ok(Some(l < r)),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) < r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(l < OrderedFloat::from(r as f32))),
+                (Value::String(l), Value::String(r)) => Ok(Some(l < r)),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l < r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
         }
@@ -624,27 +627,37 @@ pub(crate) enum Formula {
 }
 
 impl Formula {
-    pub(crate) fn evaluate(&self, variables: &Variables) -> EvaluateResult<bool> {
+    pub(crate) fn evaluate(&self, variables: &Variables) -> EvaluateResult<Option<bool>> {
         match self {
             Formula::And(left_formula, right_formula) => {
                 let left = left_formula.evaluate(variables)?;
                 let right = right_formula.evaluate(variables)?;
-                Ok(left && right)
+                // Three-valued AND: false dominates unknown
+                match (left, right) {
+                    (Some(false), _) | (_, Some(false)) => Ok(Some(false)),
+                    (Some(true), Some(true)) => Ok(Some(true)),
+                    _ => Ok(None),
+                }
             }
             Formula::Or(left_formula, right_formula) => {
                 let left = left_formula.evaluate(variables)?;
                 let right = right_formula.evaluate(variables)?;
-                Ok(left || right)
+                // Three-valued OR: true dominates unknown
+                match (left, right) {
+                    (Some(true), _) | (_, Some(true)) => Ok(Some(true)),
+                    (Some(false), Some(false)) => Ok(Some(false)),
+                    _ => Ok(None),
+                }
             }
             Formula::Not(child_formula) => {
                 let child = child_formula.evaluate(variables)?;
-                Ok(!child)
+                Ok(child.map(|b| !b))
             }
             Formula::Predicate(relation, left_formula, right_formula) => {
                 let result = relation.apply(variables, left_formula, right_formula)?;
                 Ok(result)
             }
-            Formula::Constant(value) => Ok(*value),
+            Formula::Constant(value) => Ok(Some(*value)),
         }
     }
 }
@@ -1602,24 +1615,112 @@ mod tests {
         let rel = Relation::MoreThan;
         let left = Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)));
         let right = Expression::Constant(Value::Int(1));
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(true));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(Some(true)));
 
         let rel = Relation::LessThan;
         let left = Expression::Constant(Value::Int(1));
         let right = Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)));
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(true));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(Some(true)));
     }
 
     #[test]
-    fn test_comparison_null_returns_false() {
+    fn test_comparison_null_returns_none() {
         let vars = Variables::default();
         let rel = Relation::Equal;
         let left = Expression::Constant(Value::Null);
         let right = Expression::Constant(Value::Int(1));
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(false));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(None));
 
         let left = Expression::Constant(Value::Null);
         let right = Expression::Constant(Value::Null);
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(false));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(None));
+    }
+
+    #[test]
+    fn test_three_valued_and() {
+        let vars = Variables::default();
+        // TRUE AND TRUE = TRUE
+        let f = Formula::And(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(true)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // FALSE AND TRUE = FALSE
+        let f = Formula::And(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(true)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // TRUE AND FALSE = FALSE
+        let f = Formula::And(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(false)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // FALSE AND FALSE = FALSE
+        let f = Formula::And(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(false)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+    }
+
+    #[test]
+    fn test_three_valued_or() {
+        let vars = Variables::default();
+        // TRUE OR FALSE = TRUE
+        let f = Formula::Or(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(false)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // FALSE OR FALSE = FALSE
+        let f = Formula::Or(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(false)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        // FALSE OR TRUE = TRUE
+        let f = Formula::Or(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(true)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // TRUE OR TRUE = TRUE
+        let f = Formula::Or(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(true)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+    }
+
+    #[test]
+    fn test_three_valued_not() {
+        let vars = Variables::default();
+        let f = Formula::Not(Box::new(Formula::Constant(true)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        let f = Formula::Not(Box::new(Formula::Constant(false)));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+    }
+
+    #[test]
+    fn test_three_valued_and_with_null() {
+        let vars = Variables::default();
+        // NULL comparison produces None; TRUE AND None = None
+        let null_pred = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Constant(Value::Null)),
+            Box::new(Expression::Constant(Value::Int(1))),
+        );
+        let f = Formula::And(Box::new(Formula::Constant(true)), Box::new(null_pred.clone()));
+        assert_eq!(f.evaluate(&vars), Ok(None));
+        // FALSE AND None = FALSE (false dominates)
+        let f = Formula::And(Box::new(Formula::Constant(false)), Box::new(null_pred));
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+    }
+
+    #[test]
+    fn test_three_valued_or_with_null() {
+        let vars = Variables::default();
+        let null_pred = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Constant(Value::Null)),
+            Box::new(Expression::Constant(Value::Int(1))),
+        );
+        // TRUE OR None = TRUE (true dominates)
+        let f = Formula::Or(Box::new(Formula::Constant(true)), Box::new(null_pred.clone()));
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        // FALSE OR None = None
+        let f = Formula::Or(Box::new(Formula::Constant(false)), Box::new(null_pred));
+        assert_eq!(f.evaluate(&vars), Ok(None));
+    }
+
+    #[test]
+    fn test_three_valued_not_with_null() {
+        let vars = Variables::default();
+        let null_pred = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Constant(Value::Null)),
+            Box::new(Expression::Constant(Value::Int(1))),
+        );
+        // NOT None = None
+        let f = Formula::Not(Box::new(null_pred));
+        assert_eq!(f.evaluate(&vars), Ok(None));
     }
 }

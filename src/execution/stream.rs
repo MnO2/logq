@@ -227,7 +227,7 @@ impl RecordStream for FilterStream {
             let variables = common::types::merge(&self.variables, record.to_variables());
             let predicate = self.formula.evaluate(&variables)?;
 
-            if predicate {
+            if predicate == Some(true) {
                 return Ok(Some(record));
             }
         }
