@@ -646,6 +646,8 @@ pub(crate) enum Formula {
     ExpressionPredicate(Box<Expression>),
     Like(Box<Expression>, Box<Expression>),
     NotLike(Box<Expression>, Box<Expression>),
+    In(Box<Expression>, Vec<Expression>),
+    NotIn(Box<Expression>, Vec<Expression>),
 }
 
 fn like_pattern_to_regex(pattern: &str) -> String {
@@ -749,6 +751,35 @@ impl Formula {
                     }
                     _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
                 }
+            }
+            Formula::In(expr, list) => {
+                let val = expr.expression_value(variables)?;
+                match &val {
+                    Value::Null | Value::Missing => Ok(None),
+                    _ => {
+                        let mut has_null = false;
+                        for item_expr in list {
+                            let item = item_expr.expression_value(variables)?;
+                            if item == Value::Null || item == Value::Missing {
+                                has_null = true;
+                                continue;
+                            }
+                            if val == item {
+                                return Ok(Some(true));
+                            }
+                        }
+                        if has_null {
+                            Ok(None)
+                        } else {
+                            Ok(Some(false))
+                        }
+                    }
+                }
+            }
+            Formula::NotIn(expr, list) => {
+                // NOT IN is the negation of IN
+                let in_result = Formula::In(expr.clone(), list.clone()).evaluate(variables)?;
+                Ok(in_result.map(|b| !b))
             }
         }
     }
@@ -2008,6 +2039,143 @@ mod tests {
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::Missing)),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+    }
+
+    #[test]
+    fn test_in_evaluation() {
+        let vars = Variables::default();
+        // 2 IN (1, 2, 3) => true
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::Int(2))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+
+        // 4 IN (1, 2, 3) => false
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::Int(4))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+
+        // String IN check: "b" IN ("a", "b", "c") => true
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::String("b".to_string()))),
+            vec![
+                Expression::Constant(Value::String("a".to_string())),
+                Expression::Constant(Value::String("b".to_string())),
+                Expression::Constant(Value::String("c".to_string())),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+    }
+
+    #[test]
+    fn test_not_in_evaluation() {
+        let vars = Variables::default();
+        // 4 NOT IN (1, 2, 3) => true
+        let f = Formula::NotIn(
+            Box::new(Expression::Constant(Value::Int(4))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+
+        // 2 NOT IN (1, 2, 3) => false
+        let f = Formula::NotIn(
+            Box::new(Expression::Constant(Value::Int(2))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+    }
+
+    #[test]
+    fn test_in_null_propagation() {
+        let vars = Variables::default();
+        // NULL IN (1, 2, 3) => None (unknown)
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::Null)),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+
+        // 2 IN (1, NULL, 3) where x=2 => None (unknown, because NULL could be 2)
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::Int(2))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Null),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+
+        // 1 IN (1, NULL, 3) => true (found match before considering NULL)
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::Int(1))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Null),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+
+        // MISSING IN (1, 2, 3) => None (unknown)
+        let f = Formula::In(
+            Box::new(Expression::Constant(Value::Missing)),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+    }
+
+    #[test]
+    fn test_not_in_null_propagation() {
+        let vars = Variables::default();
+        // NULL NOT IN (1, 2, 3) => None
+        let f = Formula::NotIn(
+            Box::new(Expression::Constant(Value::Null)),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Int(2)),
+                Expression::Constant(Value::Int(3)),
+            ],
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+
+        // 2 NOT IN (1, NULL, 3) => None (because IN returns None)
+        let f = Formula::NotIn(
+            Box::new(Expression::Constant(Value::Int(2))),
+            vec![
+                Expression::Constant(Value::Int(1)),
+                Expression::Constant(Value::Null),
+                Expression::Constant(Value::Int(3)),
+            ],
         );
         assert_eq!(f.evaluate(&vars), Ok(None));
     }

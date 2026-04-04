@@ -147,6 +147,10 @@ pub(crate) enum Expression {
     IsNotMissing(Box<Expression>),
     Like(Box<Expression>, Box<Expression>),
     NotLike(Box<Expression>, Box<Expression>),
+    In(Box<Expression>, Vec<Expression>),
+    NotIn(Box<Expression>, Vec<Expression>),
+    Between(Box<Expression>, Box<Expression>, Box<Expression>),      // expr BETWEEN lo AND hi
+    NotBetween(Box<Expression>, Box<Expression>, Box<Expression>),   // expr NOT BETWEEN lo AND hi
 }
 
 pub(crate) type FuncName = String;

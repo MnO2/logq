@@ -106,6 +106,25 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
             let right = parse_value_expression(ctx, pattern)?;
             Ok(Box::new(types::Formula::NotLike(left, right)))
         }
+        ast::Expression::In(inner_expr, list) => {
+            let expr = parse_value_expression(ctx, inner_expr)?;
+            let list_exprs: Vec<types::Expression> = list
+                .iter()
+                .map(|e| parse_value_expression(ctx, e).map(|boxed| *boxed))
+                .collect::<ParseResult<Vec<_>>>()?;
+            Ok(Box::new(types::Formula::In(expr, list_exprs)))
+        }
+        ast::Expression::NotIn(inner_expr, list) => {
+            let expr = parse_value_expression(ctx, inner_expr)?;
+            let list_exprs: Vec<types::Expression> = list
+                .iter()
+                .map(|e| parse_value_expression(ctx, e).map(|boxed| *boxed))
+                .collect::<ParseResult<Vec<_>>>()?;
+            Ok(Box::new(types::Formula::NotIn(expr, list_exprs)))
+        }
+        ast::Expression::Between(_, _, _) | ast::Expression::NotBetween(_, _, _) => {
+            unreachable!("BETWEEN/NOT BETWEEN should be desugared before reaching the logical planner")
+        }
         ast::Expression::FuncCall(_, _, _)
         | ast::Expression::CaseWhenExpression(_)
         | ast::Expression::Column(_) => {
@@ -261,6 +280,27 @@ fn parse_value_expression(
             let right = parse_value_expression(ctx, pattern)?;
             let formula = Box::new(types::Formula::NotLike(left, right));
             Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::In(inner_expr, list) => {
+            let expr = parse_value_expression(ctx, inner_expr)?;
+            let list_exprs: Vec<types::Expression> = list
+                .iter()
+                .map(|e| parse_value_expression(ctx, e).map(|boxed| *boxed))
+                .collect::<ParseResult<Vec<_>>>()?;
+            let formula = Box::new(types::Formula::In(expr, list_exprs));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::NotIn(inner_expr, list) => {
+            let expr = parse_value_expression(ctx, inner_expr)?;
+            let list_exprs: Vec<types::Expression> = list
+                .iter()
+                .map(|e| parse_value_expression(ctx, e).map(|boxed| *boxed))
+                .collect::<ParseResult<Vec<_>>>()?;
+            let formula = Box::new(types::Formula::NotIn(expr, list_exprs));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::Between(_, _, _) | ast::Expression::NotBetween(_, _, _) => {
+            unreachable!("BETWEEN/NOT BETWEEN should be desugared before reaching the logical planner")
         }
     }
 }

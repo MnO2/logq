@@ -221,6 +221,8 @@ pub(crate) enum Formula {
     ExpressionPredicate(Box<Expression>),
     Like(Box<Expression>, Box<Expression>),
     NotLike(Box<Expression>, Box<Expression>),
+    In(Box<Expression>, Vec<Expression>),
+    NotIn(Box<Expression>, Vec<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +306,26 @@ impl Formula {
                 let (physical_pattern, pattern_variables) = pattern.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&expr_variables, &pattern_variables);
                 Ok((Box::new(execution::Formula::NotLike(physical_expr, physical_pattern)), return_variables))
+            }
+            Formula::In(expr, list) => {
+                let (physical_expr, mut variables) = expr.physical(physical_plan_creator)?;
+                let mut physical_list = Vec::new();
+                for item in list {
+                    let (physical_item, item_variables) = item.physical(physical_plan_creator)?;
+                    variables = common::merge(&variables, &item_variables);
+                    physical_list.push(*physical_item);
+                }
+                Ok((Box::new(execution::Formula::In(physical_expr, physical_list)), variables))
+            }
+            Formula::NotIn(expr, list) => {
+                let (physical_expr, mut variables) = expr.physical(physical_plan_creator)?;
+                let mut physical_list = Vec::new();
+                for item in list {
+                    let (physical_item, item_variables) = item.physical(physical_plan_creator)?;
+                    variables = common::merge(&variables, &item_variables);
+                    physical_list.push(*physical_item);
+                }
+                Ok((Box::new(execution::Formula::NotIn(physical_expr, physical_list)), variables))
             }
         }
     }

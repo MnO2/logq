@@ -69,6 +69,34 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
         }
         Expression::Like(l, r) => Expression::Like(Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r))),
         Expression::NotLike(l, r) => Expression::NotLike(Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r))),
+        Expression::In(expr, list) => {
+            Expression::In(Box::new(desugar_expr(*expr)), list.into_iter().map(desugar_expr).collect())
+        }
+        Expression::NotIn(expr, list) => {
+            Expression::NotIn(Box::new(desugar_expr(*expr)), list.into_iter().map(desugar_expr).collect())
+        }
+        Expression::Between(expr, lo, hi) => {
+            // BETWEEN(x, lo, hi) → x >= lo AND x <= hi
+            let x = desugar_expr(*expr);
+            let lo = desugar_expr(*lo);
+            let hi = desugar_expr(*hi);
+            Expression::BinaryOperator(
+                BinaryOperator::And,
+                Box::new(Expression::BinaryOperator(BinaryOperator::GreaterEqual, Box::new(x.clone()), Box::new(lo))),
+                Box::new(Expression::BinaryOperator(BinaryOperator::LessEqual, Box::new(x), Box::new(hi))),
+            )
+        }
+        Expression::NotBetween(expr, lo, hi) => {
+            // NOT BETWEEN(x, lo, hi) → x < lo OR x > hi
+            let x = desugar_expr(*expr);
+            let lo = desugar_expr(*lo);
+            let hi = desugar_expr(*hi);
+            Expression::BinaryOperator(
+                BinaryOperator::Or,
+                Box::new(Expression::BinaryOperator(BinaryOperator::LessThan, Box::new(x.clone()), Box::new(lo))),
+                Box::new(Expression::BinaryOperator(BinaryOperator::MoreThan, Box::new(x), Box::new(hi))),
+            )
+        }
         // Leaf nodes — no children to recurse into
         Expression::Column(_) | Expression::Value(_) => expr,
     }
@@ -95,5 +123,37 @@ mod tests {
         );
         let result = desugar_expr(expr.clone());
         assert_eq!(result, expr);
+    }
+
+    #[test]
+    fn test_desugar_between() {
+        // x BETWEEN 1 AND 10 → x >= 1 AND x <= 10
+        let x = Expression::Column(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]));
+        let lo = Expression::Value(Value::Integral(1));
+        let hi = Expression::Value(Value::Integral(10));
+        let between = Expression::Between(Box::new(x.clone()), Box::new(lo.clone()), Box::new(hi.clone()));
+        let result = desugar_expr(between);
+        let expected = Expression::BinaryOperator(
+            BinaryOperator::And,
+            Box::new(Expression::BinaryOperator(BinaryOperator::GreaterEqual, Box::new(x.clone()), Box::new(lo))),
+            Box::new(Expression::BinaryOperator(BinaryOperator::LessEqual, Box::new(x), Box::new(hi))),
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_desugar_not_between() {
+        // x NOT BETWEEN 1 AND 10 → x < 1 OR x > 10
+        let x = Expression::Column(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]));
+        let lo = Expression::Value(Value::Integral(1));
+        let hi = Expression::Value(Value::Integral(10));
+        let not_between = Expression::NotBetween(Box::new(x.clone()), Box::new(lo.clone()), Box::new(hi.clone()));
+        let result = desugar_expr(not_between);
+        let expected = Expression::BinaryOperator(
+            BinaryOperator::Or,
+            Box::new(Expression::BinaryOperator(BinaryOperator::LessThan, Box::new(x.clone()), Box::new(lo))),
+            Box::new(Expression::BinaryOperator(BinaryOperator::MoreThan, Box::new(x), Box::new(hi))),
+        );
+        assert_eq!(result, expected);
     }
 }

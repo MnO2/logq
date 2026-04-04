@@ -8,7 +8,7 @@ use nom::{
     character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
-    multi::{many1, separated_list0},
+    multi::{many0, many1, separated_list0},
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult, InputTakeAtPosition,
@@ -512,6 +512,77 @@ fn parse_postfix_like<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a 
     Ok((input, expr))
 }
 
+fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+    // Check NOT IN first
+    let (i, negated) = if let Ok((i2, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
+        if let Ok((i3, _)) = multispace1::<&str, VerboseError<&str>>(i2) {
+            if let Ok((i4, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("in")(i3) {
+                (i4, true)
+            } else {
+                return Ok((input, expr));
+            }
+        } else {
+            return Ok((input, expr));
+        }
+    } else if let Ok((i2, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("in")(i) {
+        (i2, false)
+    } else {
+        return Ok((input, expr));
+    };
+
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag("(")(i)?;
+    let (i, _) = multispace0(i)?;
+    // Parse comma-separated list of expressions
+    let (i, first) = expression(i)?;
+    let (i, rest) = many0(|i: &'a str| {
+        let (i, _) = multispace0(i)?;
+        let (i, _) = tag(",")(i)?;
+        let (i, _) = multispace0(i)?;
+        expression(i)
+    })(i)?;
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag(")")(i)?;
+
+    let mut list = vec![first];
+    list.extend(rest);
+
+    if negated {
+        Ok((i, ast::Expression::NotIn(Box::new(expr), list)))
+    } else {
+        Ok((i, ast::Expression::In(Box::new(expr), list)))
+    }
+}
+
+fn parse_postfix_between<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+    // Check for NOT BETWEEN first
+    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
+        if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("between")(i) {
+                let (i, _) = multispace1(i)?;
+                let (i, lo) = parse_expression_atom(i)?;
+                let (i, _) = multispace0(i)?;
+                let (i, _) = tag_no_case("and")(i)?;
+                let (i, _) = multispace0(i)?;
+                let (i, hi) = parse_expression_atom(i)?;
+                return Ok((i, ast::Expression::NotBetween(Box::new(expr), Box::new(lo), Box::new(hi))));
+            }
+        }
+    }
+    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("between")(i) {
+        let (i, _) = multispace1::<&str, VerboseError<&str>>(i)?;
+        let (i, lo) = parse_expression_atom(i)?;
+        let (i, _) = multispace0(i)?;
+        let (i, _) = tag_no_case("and")(i)?;
+        let (i, _) = multispace0(i)?;
+        let (i, hi) = parse_expression_atom(i)?;
+        return Ok((i, ast::Expression::Between(Box::new(expr), Box::new(lo), Box::new(hi))));
+    }
+    Ok((input, expr))
+}
+
 fn parse_expression_at_precedence<'a>(
     i0: &'a str,
     current_precedence: u32,
@@ -519,7 +590,9 @@ fn parse_expression_at_precedence<'a>(
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     let (i1, expr) = parse_expression_atom(i0)?;
     let (i1, expr) = parse_postfix_is(i1, expr)?;
-    let (mut i1, mut expr) = parse_postfix_like(i1, expr)?;
+    let (i1, expr) = parse_postfix_like(i1, expr)?;
+    let (i1, expr) = parse_postfix_in(i1, expr)?;
+    let (mut i1, mut expr) = parse_postfix_between(i1, expr)?;
     while let Ok((i2, op)) = parse_expression_op(i1) {
         let (op_precedence, op_left_associative) = *precedence_table.get(op.to_ascii_lowercase().as_str()).unwrap();
 
@@ -1653,5 +1726,118 @@ mod test {
         // LIKE should work with AND/OR
         let result = select_query("select a from it where a like \"%foo%\" and b = 1");
         assert!(result.is_ok(), "LIKE with AND should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_between_parsing() {
+        let result = select_query("select a from it where a between 1 and 10");
+        assert!(result.is_ok(), "BETWEEN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_not_between_parsing() {
+        let result = select_query("select a from it where a not between 1 and 10");
+        assert!(result.is_ok(), "NOT BETWEEN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_between_case_insensitive() {
+        let result = select_query("SELECT a FROM it WHERE a BETWEEN 1 AND 10");
+        assert!(result.is_ok(), "BETWEEN uppercase should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_between_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::Between(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+            Box::new(ast::Expression::Value(ast::Value::Integral(10))),
+        );
+        let result = expression("a between 1 and 10");
+        assert!(result.is_ok(), "a between 1 and 10 should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_not_between_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::NotBetween(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+            Box::new(ast::Expression::Value(ast::Value::Integral(10))),
+        );
+        let result = expression("a not between 1 and 10");
+        assert!(result.is_ok(), "a not between 1 and 10 should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_between_with_logical_and() {
+        // The AND inside BETWEEN should not be consumed as a logical AND
+        let result = select_query("select a from it where a between 1 and 10 and b = 1");
+        assert!(result.is_ok(), "BETWEEN with trailing AND should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_in_parsing() {
+        let result = select_query("select a from it where a in (1, 2, 3)");
+        assert!(result.is_ok(), "IN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_not_in_parsing() {
+        let result = select_query("select a from it where a not in (1, 2, 3)");
+        assert!(result.is_ok(), "NOT IN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_in_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::In(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            vec![
+                ast::Expression::Value(ast::Value::Integral(1)),
+                ast::Expression::Value(ast::Value::Integral(2)),
+                ast::Expression::Value(ast::Value::Integral(3)),
+            ],
+        );
+        let result = expression("a in (1, 2, 3)");
+        assert!(result.is_ok(), "a in (1, 2, 3) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_not_in_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::NotIn(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            vec![
+                ast::Expression::Value(ast::Value::Integral(1)),
+                ast::Expression::Value(ast::Value::Integral(2)),
+                ast::Expression::Value(ast::Value::Integral(3)),
+            ],
+        );
+        let result = expression("a not in (1, 2, 3)");
+        assert!(result.is_ok(), "a not in (1, 2, 3) should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_in_case_insensitive() {
+        let result = select_query("select a from it where a IN (1, 2)");
+        assert!(result.is_ok(), "IN uppercase should parse, got: {:?}", result);
+        let result = select_query("select a from it where a NOT IN (1, 2)");
+        assert!(result.is_ok(), "NOT IN uppercase should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_in_with_and() {
+        let result = select_query("select a from it where a in (1, 2, 3) and b = 1");
+        assert!(result.is_ok(), "IN with AND should parse, got: {:?}", result);
     }
 }
