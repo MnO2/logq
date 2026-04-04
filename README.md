@@ -244,12 +244,9 @@ Also, in the use case of web-traffic analytics, the questions you would to be an
 
 - [ ] Using cmdline flag to specify the table names and their the backing files.
 - [ ] Spin-off the syntax parser as a separate cargo crate.
-- [ ] Support complete [PartiQL](https://partiql.org/assets/PartiQL-Specification.pdf) specification, tutorial [here](https://partiql.org/tutorial.html#running-the-partiql-repl).
 - [ ] Performance optimization, avoid unnecessary parsing
 - [ ] More supported functions
 - [ ] time_bucket with arbitrary interval (begin from epoch)
-- [ ] Polish the parser to be [SQL-92-compatible](https://jakewheat.github.io/sql-overview/sql-2016-foundation-grammar.html#_5_lexical_elements)
-- [ ] Streaming mode to work with `tail -f`
 - [ ] Customizable Reader, to follow GoAccess's style
 - [ ] More supported log format
 - [ ] Plugin quickjs for user-defined functions
