@@ -9,12 +9,26 @@ pub(crate) fn desugar_statement(stmt: SelectStatement) -> SelectStatement {
     SelectStatement {
         distinct: stmt.distinct,
         select_clause: desugar_select_clause(stmt.select_clause),
-        table_references: stmt.table_references,
+        from_clause: desugar_from_clause(stmt.from_clause),
         where_expr_opt: stmt.where_expr_opt.map(|w| WhereExpression::new(desugar_expr(w.expr))),
         group_by_exprs_opt: stmt.group_by_exprs_opt,
         having_expr_opt: stmt.having_expr_opt.map(|h| WhereExpression::new(desugar_expr(h.expr))),
         order_by_expr_opt: stmt.order_by_expr_opt,
         limit_expr_opt: stmt.limit_expr_opt,
+    }
+}
+
+fn desugar_from_clause(from: FromClause) -> FromClause {
+    match from {
+        FromClause::Tables(_) => from,
+        FromClause::Join { left, right, join_type, condition } => {
+            FromClause::Join {
+                left: Box::new(desugar_from_clause(*left)),
+                right,
+                join_type,
+                condition: condition.map(desugar_expr),
+            }
+        }
     }
 }
 

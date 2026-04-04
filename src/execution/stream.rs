@@ -677,6 +677,135 @@ impl RecordStream for CrossJoinStream {
     }
 }
 
+pub(crate) struct LeftJoinStream {
+    left: Box<dyn RecordStream>,
+    right_node: Node,
+    right_variables: Variables,
+    condition: Formula,
+    current_left: Option<Record>,
+    right_stream: Option<Box<dyn RecordStream>>,
+    matched: bool,
+    right_field_names: Option<Vec<String>>,
+}
+
+impl LeftJoinStream {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        right_node: Node,
+        right_variables: Variables,
+        condition: Formula,
+    ) -> Self {
+        LeftJoinStream {
+            left,
+            right_node,
+            right_variables,
+            condition,
+            current_left: None,
+            right_stream: None,
+            matched: false,
+            right_field_names: None,
+        }
+    }
+
+    fn null_padded_right_record(&self) -> Record {
+        let mut variables = common::types::Variables::default();
+        if let Some(ref names) = self.right_field_names {
+            for name in names {
+                variables.insert(name.clone(), Value::Null);
+            }
+        }
+        Record::new_with_variables(variables)
+    }
+}
+
+impl RecordStream for LeftJoinStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        loop {
+            // If we have a right stream, try to get next right record
+            if let Some(ref mut right) = self.right_stream {
+                if let Some(right_record) = right.next()? {
+                    // Cache right field names from first right record seen
+                    if self.right_field_names.is_none() {
+                        self.right_field_names = Some(
+                            right_record
+                                .to_variables()
+                                .keys()
+                                .cloned()
+                                .collect(),
+                        );
+                    }
+
+                    let left = self.current_left.as_ref().unwrap();
+                    let merged = left.merge(&right_record);
+
+                    // Evaluate ON condition
+                    let merged_vars = common::types::merge(&self.right_variables, merged.to_variables());
+                    let predicate = self.condition.evaluate(&merged_vars)?;
+
+                    if predicate == Some(true) {
+                        self.matched = true;
+                        return Ok(Some(merged));
+                    }
+                    // Condition didn't match; continue to next right row
+                    continue;
+                }
+                // Right stream exhausted for this left row
+            }
+
+            // If we just finished scanning right for a left row and found no match,
+            // emit left row with NULL padding for right columns
+            if self.current_left.is_some() && !self.matched {
+                let left = self.current_left.take().unwrap();
+                let null_right = self.null_padded_right_record();
+                let merged = left.merge(&null_right);
+                // Reset state before returning
+                self.right_stream = None;
+                // Now fall through to get next left row on next call
+                // But first return this result
+                return Ok(Some(merged));
+            }
+
+            // Get next left record and reset right stream
+            match self.left.next()? {
+                Some(left_record) => {
+                    self.current_left = Some(left_record);
+                    self.matched = false;
+                    // Re-create right stream from scratch
+                    let right_stream = self
+                        .right_node
+                        .get(self.right_variables.clone())
+                        .map_err(|e| super::types::StreamError::Get(e))?;
+                    self.right_stream = Some(right_stream);
+
+                    // If we don't have right_field_names yet, peek at first right record
+                    // to learn them (needed for NULL padding if no match at all)
+                    if self.right_field_names.is_none() {
+                        // Create a temporary stream to discover field names
+                        let mut peek_stream = self
+                            .right_node
+                            .get(self.right_variables.clone())
+                            .map_err(|e| super::types::StreamError::Get(e))?;
+                        if let Some(peek_record) = peek_stream.next()? {
+                            self.right_field_names = Some(
+                                peek_record
+                                    .to_variables()
+                                    .keys()
+                                    .cloned()
+                                    .collect(),
+                            );
+                        }
+                    }
+                }
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn close(&self) {
+        self.left.close();
+    }
+}
+
 pub(crate) struct DistinctStream {
     source: Box<dyn RecordStream>,
     seen: std::collections::HashSet<Vec<(VariableName, Value)>>,

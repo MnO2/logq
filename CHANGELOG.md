@@ -33,10 +33,16 @@ Phase 2 complete. Starting Phase 3: Clauses & Query Structure.
 - **Step 21:** COALESCE/NULLIF desugared to CASE WHEN.
 - **Step 22:** String functions (UPPER, LOWER, CHAR_LENGTH, SUBSTRING, TRIM) + date_part extended to Hour/Day/Month/Year.
 
+### Phase 3: Clauses & Query Structure (2026-04-04)
+- **Step 23:** SELECT VALUE for scalar/tuple/array value constructors.
+- **Step 24:** DISTINCT via DistinctStream with HashSet dedup.
+- **Step 25:** Path wildcards ([*] and .*) for array/tuple iteration.
+- **Step 26:** CROSS JOIN (explicit and comma syntax) with nested-loop stream.
+- **Step 27:** LEFT [OUTER] JOIN ... ON with NULL-padded non-matching rows. Refactored AST to use FromClause enum (Tables | Join) instead of Vec<TableReference>.
+
 ## Failed Approaches
 - Worktree isolation caused branch confusion when two agents ran in parallel. Avoided worktrees after that.
 
 ## Known Limitations
-- No JOINs, subqueries, DISTINCT, SELECT VALUE (parsed but unimplemented)
+- No subqueries
 - No UNION/INTERSECT/EXCEPT
-- No path wildcards ([*], .*)

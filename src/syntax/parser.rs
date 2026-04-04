@@ -15,7 +15,8 @@ use nom::{
 };
 
 use crate::syntax::ast::{
-    ArrayConstructor, PathExpr, PathSegment, SelectClause, SelectExpression, TableReference, TupleConstructor,
+    ArrayConstructor, FromClause, JoinType, PathExpr, PathSegment, SelectClause, SelectExpression, TableReference,
+    TupleConstructor,
 };
 use hashbrown::hash_map::HashMap;
 
@@ -487,14 +488,36 @@ fn table_reference_separator(i: &str) -> IResult<&str, (), VerboseError<&str>> {
     ))(i)
 }
 
-fn table_reference_list(i: &str) -> IResult<&str, Vec<ast::TableReference>, VerboseError<&str>> {
+/// Parse a comma-separated or CROSS JOIN separated list of table references into FromClause::Tables.
+fn table_reference_list(i: &str) -> IResult<&str, FromClause, VerboseError<&str>> {
     context(
         "table_reference_list",
-        terminated(
-            separated_list0(table_reference_separator, preceded(space0, table_reference)),
-            space0,
+        map(
+            terminated(
+                separated_list0(table_reference_separator, preceded(space0, table_reference)),
+                space0,
+            ),
+            FromClause::Tables,
         ),
     )(i)
+}
+
+/// Parse LEFT [OUTER] JOIN ... ON ... returning (JoinType, TableReference, Expression)
+fn left_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, ast::Expression), VerboseError<&str>> {
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag_no_case("left")(i)?;
+    let (i, _) = multispace1(i)?;
+    // Optional "OUTER" keyword
+    let (i, _) = opt(terminated(tag_no_case("outer"), multispace1))(i)?;
+    let (i, _) = tag_no_case("join")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, right_ref) = table_reference(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, _) = tag_no_case("on")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, on_condition) = expression(i)?;
+
+    Ok((i, (JoinType::Left, right_ref, on_condition)))
 }
 
 fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
@@ -546,8 +569,25 @@ fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseErro
     )(i)
 }
 
-fn from_clause(i: &str) -> IResult<&str, Vec<TableReference>, VerboseError<&str>> {
-    terminated(preceded(tuple((tag_no_case("from"), space1)), table_reference_list), space0)(i)
+fn from_clause(i: &str) -> IResult<&str, FromClause, VerboseError<&str>> {
+    let (i, _) = tag_no_case("from")(i)?;
+    let (i, _) = space1(i)?;
+    let (i, base) = table_reference_list(i)?;
+
+    // Try to parse zero or more LEFT JOIN clauses chained after the base
+    let (i, joins) = many0(left_join_clause)(i)?;
+
+    let result = joins.into_iter().fold(base, |acc, (join_type, right_ref, on_expr)| {
+        FromClause::Join {
+            left: Box::new(acc),
+            right: right_ref,
+            join_type,
+            condition: Some(on_expr),
+        }
+    });
+
+    let (i, _) = space0(i)?;
+    Ok((i, result))
 }
 
 fn cast_expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
@@ -836,7 +876,7 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
     })(i)?;
     let distinct = distinct.unwrap_or(false);
 
-    let (i, (select_clause, table_references, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)) =
+    let (i, (select_clause, from_cl, where_expr, group_by_expr, having_expr, order_by_expr, limit_expr)) =
         tuple((
             alt((value_constructor, select_clause_expression_list)),
             from_clause,
@@ -852,7 +892,7 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
         ast::SelectStatement::new(
             distinct,
             select_clause,
-            table_references,
+            from_cl,
             where_expr,
             group_by_expr,
             having_expr,
@@ -1129,7 +1169,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::ValueConstructor(ast::ValueConstructor::Expression(select_expr)),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
             None,
@@ -1162,7 +1202,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
             None,
@@ -1197,7 +1237,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             Some(group_by_expr),
             Some(having_expr),
@@ -1294,7 +1334,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
             None,
@@ -1326,7 +1366,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             None,
             None,
             None,
@@ -1398,7 +1438,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             None,
             None,
             None,
@@ -1442,7 +1482,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             None,
             Some(group_by_expr),
             None,
@@ -1492,7 +1532,7 @@ mod test {
         let ans = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             None,
             None,
             None,
@@ -2220,9 +2260,14 @@ mod test {
         let result = select_query("select a.x, b.y from it as a cross join it as b");
         assert!(result.is_ok(), "CROSS JOIN should parse, got: {:?}", result);
         let (_, stmt) = result.unwrap();
-        assert_eq!(stmt.table_references.len(), 2);
-        assert_eq!(stmt.table_references[0].as_clause, Some("a".to_string()));
-        assert_eq!(stmt.table_references[1].as_clause, Some("b".to_string()));
+        match &stmt.from_clause {
+            FromClause::Tables(refs) => {
+                assert_eq!(refs.len(), 2);
+                assert_eq!(refs[0].as_clause, Some("a".to_string()));
+                assert_eq!(refs[1].as_clause, Some("b".to_string()));
+            }
+            other => panic!("Expected FromClause::Tables, got: {:?}", other),
+        }
     }
 
     #[test]
@@ -2230,7 +2275,10 @@ mod test {
         let result = select_query("select a.x from it as a CROSS JOIN it as b");
         assert!(result.is_ok(), "CROSS JOIN (uppercase) should parse, got: {:?}", result);
         let (_, stmt) = result.unwrap();
-        assert_eq!(stmt.table_references.len(), 2);
+        match &stmt.from_clause {
+            FromClause::Tables(refs) => assert_eq!(refs.len(), 2),
+            other => panic!("Expected FromClause::Tables, got: {:?}", other),
+        }
     }
 
     #[test]
@@ -2239,13 +2287,19 @@ mod test {
         let result1 = select_query("select a.x from it as a, it as b");
         assert!(result1.is_ok(), "Comma-separated FROM should parse, got: {:?}", result1);
         let (_, stmt1) = result1.unwrap();
-        assert_eq!(stmt1.table_references.len(), 2);
+        match &stmt1.from_clause {
+            FromClause::Tables(refs) => assert_eq!(refs.len(), 2),
+            other => panic!("Expected FromClause::Tables, got: {:?}", other),
+        }
 
         // Explicit CROSS JOIN
         let result2 = select_query("select a.x from it as a cross join it as b");
         assert!(result2.is_ok(), "CROSS JOIN should parse, got: {:?}", result2);
         let (_, stmt2) = result2.unwrap();
-        assert_eq!(stmt2.table_references.len(), 2);
+        match &stmt2.from_clause {
+            FromClause::Tables(refs) => assert_eq!(refs.len(), 2),
+            other => panic!("Expected FromClause::Tables, got: {:?}", other),
+        }
     }
 
     #[test]
@@ -2259,6 +2313,37 @@ mod test {
         let result = select_query("select * from it as a cross join it as b cross join it as c");
         assert!(result.is_ok(), "Three-way CROSS JOIN should parse, got: {:?}", result);
         let (_, stmt) = result.unwrap();
-        assert_eq!(stmt.table_references.len(), 3);
+        match &stmt.from_clause {
+            FromClause::Tables(refs) => assert_eq!(refs.len(), 3),
+            other => panic!("Expected FromClause::Tables, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_left_join_parsing() {
+        let result = select_query("select a.x, b.x from it as a left join it as b on a.x = b.x");
+        assert!(result.is_ok(), "LEFT JOIN should parse, got: {:?}", result);
+        let (_, stmt) = result.unwrap();
+        match &stmt.from_clause {
+            FromClause::Join { join_type, condition, .. } => {
+                assert_eq!(*join_type, JoinType::Left);
+                assert!(condition.is_some());
+            }
+            other => panic!("Expected FromClause::Join, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_left_outer_join_parsing() {
+        let result = select_query("select a.x, b.x from it as a left outer join it as b on a.x = b.x");
+        assert!(result.is_ok(), "LEFT OUTER JOIN should parse, got: {:?}", result);
+        let (_, stmt) = result.unwrap();
+        match &stmt.from_clause {
+            FromClause::Join { join_type, condition, .. } => {
+                assert_eq!(*join_type, JoinType::Left);
+                assert!(condition.is_some());
+            }
+            other => panic!("Expected FromClause::Join, got: {:?}", other),
+        }
     }
 }

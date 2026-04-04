@@ -5,10 +5,43 @@ use std::result;
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum JoinType {
+    Cross,
+    Left,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum FromClause {
+    /// Single table or comma-separated tables (existing behavior)
+    Tables(Vec<TableReference>),
+    /// JOIN: left source, right table, join type, ON condition
+    Join {
+        left: Box<FromClause>,
+        right: TableReference,
+        join_type: JoinType,
+        condition: Option<Expression>, // None for CROSS JOIN, Some for LEFT JOIN
+    },
+}
+
+impl FromClause {
+    /// Collect all table references from the FromClause tree (for env checking).
+    pub(crate) fn collect_table_references(&self) -> Vec<&TableReference> {
+        match self {
+            FromClause::Tables(refs) => refs.iter().collect(),
+            FromClause::Join { left, right, .. } => {
+                let mut refs = left.collect_table_references();
+                refs.push(right);
+                refs
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct SelectStatement {
     pub(crate) distinct: bool,
     pub(crate) select_clause: SelectClause,
-    pub(crate) table_references: Vec<TableReference>,
+    pub(crate) from_clause: FromClause,
     pub(crate) where_expr_opt: Option<WhereExpression>,
     pub(crate) group_by_exprs_opt: Option<GroupByExpression>,
     pub(crate) having_expr_opt: Option<WhereExpression>,
@@ -20,7 +53,7 @@ impl SelectStatement {
     pub fn new(
         distinct: bool,
         select_clause: SelectClause,
-        table_references: Vec<TableReference>,
+        from_clause: FromClause,
         where_expr_opt: Option<WhereExpression>,
         group_by_exprs_opt: Option<GroupByExpression>,
         having_expr_opt: Option<WhereExpression>,
@@ -30,7 +63,7 @@ impl SelectStatement {
         SelectStatement {
             distinct,
             select_clause,
-            table_references: table_references,
+            from_clause,
             where_expr_opt,
             group_by_exprs_opt,
             having_expr_opt,

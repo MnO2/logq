@@ -25,6 +25,7 @@ pub(crate) enum Node {
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
     Distinct(Box<Node>),
     CrossJoin(Box<Node>, Box<Node>),
+    LeftJoin(Box<Node>, Box<Node>, Box<Formula>), // left, right, ON condition
 }
 
 impl Node {
@@ -111,6 +112,14 @@ impl Node {
                 let (right_child, right_variables) = right.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&left_variables, &right_variables);
                 let node = execution::Node::CrossJoin(left_child, right_child);
+                Ok((Box::new(node), return_variables))
+            }
+            Node::LeftJoin(left, right, condition) => {
+                let (left_child, left_variables) = left.physical(physical_plan_creator)?;
+                let (right_child, right_variables) = right.physical(physical_plan_creator)?;
+                let (physical_condition, condition_variables) = condition.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&left_variables, &common::merge(&right_variables, &condition_variables));
+                let node = execution::Node::LeftJoin(left_child, right_child, physical_condition);
                 Ok((Box::new(node), return_variables))
             }
         }

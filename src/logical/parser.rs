@@ -4,7 +4,7 @@ use crate::common::types::ParsingContext;
 use crate::execution;
 use crate::logical::types::Named;
 use crate::syntax::ast;
-use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
+use crate::syntax::ast::{FromClause, JoinType, PathExpr, PathSegment, TableReference};
 use hashbrown::HashSet;
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
@@ -461,27 +461,33 @@ fn check_contains_group_as_var(named_list: &[types::Named], group_as_var: &Strin
     false
 }
 
-fn check_env(table_name: &String, table_references: &Vec<TableReference>) -> ParseResult<()> {
-    for table_reference in table_references.iter() {
-        match &table_reference.path_expr.path_segments[0] {
-            PathSegment::AttrName(s) => {
-                if !s.eq(table_name) {
-                    return Err(ParseError::FromClausePathInvalidTableReference);
-                }
+fn check_env_ref(table_name: &String, table_reference: &TableReference) -> ParseResult<()> {
+    match &table_reference.path_expr.path_segments[0] {
+        PathSegment::AttrName(s) => {
+            if !s.eq(table_name) {
+                return Err(ParseError::FromClausePathInvalidTableReference);
             }
-            _ => return Err(ParseError::FromClausePathInvalidTableReference),
         }
-        let path_expr = &table_reference.path_expr;
+        _ => return Err(ParseError::FromClausePathInvalidTableReference),
+    }
+    let path_expr = &table_reference.path_expr;
 
-        if path_expr.path_segments.is_empty() {
-            return Err(ParseError::FromClausePathInvalidTableReference);
-        }
-
-        if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
-            return Err(ParseError::FromClauseMissingAsForPathExpr);
-        }
+    if path_expr.path_segments.is_empty() {
+        return Err(ParseError::FromClausePathInvalidTableReference);
     }
 
+    if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
+        return Err(ParseError::FromClauseMissingAsForPathExpr);
+    }
+
+    Ok(())
+}
+
+fn check_env(table_name: &String, from_clause: &FromClause) -> ParseResult<()> {
+    let refs = from_clause.collect_table_references();
+    for table_reference in refs {
+        check_env_ref(table_name, table_reference)?;
+    }
     Ok(())
 }
 
@@ -556,34 +562,62 @@ fn check_group_by_vars(named: &Named, group_by_vars: &HashSet<String>) -> bool {
     }
 }
 
+fn build_from_node(
+    ctx: &ParsingContext,
+    from_clause: &FromClause,
+    data_source: &common::DataSource,
+    table_name: &String,
+) -> ParseResult<types::Node> {
+    match from_clause {
+        FromClause::Tables(table_references) => {
+            if table_references.len() == 1 {
+                let bindings = to_bindings(table_name, table_references);
+                Ok(types::Node::DataSource(data_source.clone(), bindings))
+            } else {
+                // Multiple table references: build a cross join tree
+                let first_bindings = to_bindings_for_ref(table_name, &table_references[0]);
+                let mut node = types::Node::DataSource(data_source.clone(), first_bindings);
+                for table_ref in table_references.iter().skip(1) {
+                    let ref_bindings = to_bindings_for_ref(table_name, table_ref);
+                    let right = types::Node::DataSource(data_source.clone(), ref_bindings);
+                    node = types::Node::CrossJoin(Box::new(node), Box::new(right));
+                }
+                Ok(node)
+            }
+        }
+        FromClause::Join { left, right, join_type, condition } => {
+            let left_node = build_from_node(ctx, left, data_source, table_name)?;
+            let right_bindings = to_bindings_for_ref(table_name, right);
+            let right_node = types::Node::DataSource(data_source.clone(), right_bindings);
+            match join_type {
+                JoinType::Cross => {
+                    Ok(types::Node::CrossJoin(Box::new(left_node), Box::new(right_node)))
+                }
+                JoinType::Left => {
+                    let on_expr = condition.as_ref().expect("LEFT JOIN requires ON condition");
+                    let formula = parse_logic(ctx, on_expr)?;
+                    Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
-    let table_references = &query.table_references;
+    let from_clause = &query.from_clause;
 
     let (file_format, table_name) = match &data_source {
         common::DataSource::File(_, file_format, table_name) => (file_format.clone(), table_name.clone()),
         common::DataSource::Stdin(file_format, table_name) => (file_format.clone(), table_name.clone()),
     };
 
-    check_env(&table_name, table_references)?;
+    check_env(&table_name, from_clause)?;
 
     let parsing_context = ParsingContext {
         table_name: table_name.clone(),
     };
 
-    let mut root = if table_references.len() == 1 {
-        let bindings = to_bindings(&table_name, table_references);
-        types::Node::DataSource(data_source, bindings)
-    } else {
-        // Multiple table references: build a cross join tree
-        let first_bindings = to_bindings_for_ref(&table_name, &table_references[0]);
-        let mut node = types::Node::DataSource(data_source.clone(), first_bindings);
-        for table_ref in table_references.iter().skip(1) {
-            let ref_bindings = to_bindings_for_ref(&table_name, table_ref);
-            let right = types::Node::DataSource(data_source.clone(), ref_bindings);
-            node = types::Node::CrossJoin(Box::new(node), Box::new(right));
-        }
-        node
-    };
+    let mut root = build_from_node(&parsing_context, from_clause, &data_source, &table_name)?;
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -959,7 +993,7 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::syntax::ast::{PathSegment, SelectClause};
+    use crate::syntax::ast::{FromClause, PathSegment, SelectClause};
 
     #[test]
     fn test_parse_logic_expression() {
@@ -1107,7 +1141,7 @@ mod test {
         let before = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
             None,
@@ -1169,7 +1203,7 @@ mod test {
         let before = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
             None,
@@ -1233,7 +1267,7 @@ mod test {
         let before = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             Some(group_by_expr),
             None,
@@ -1307,7 +1341,7 @@ mod test {
         let before = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             Some(group_by_expr),
             None,
@@ -1349,7 +1383,7 @@ mod test {
         let before = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             None,
             Some(group_by_expr),
             None,
@@ -1501,7 +1535,7 @@ mod test {
             SelectClause::ValueConstructor(ast::ValueConstructor::Expression(
                 ast::Expression::Column(path_expr_a.clone()),
             )),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
             None,
@@ -1545,7 +1579,7 @@ mod test {
             SelectClause::ValueConstructor(ast::ValueConstructor::Expression(
                 ast::Expression::Value(ast::Value::Integral(42)),
             )),
-            vec![table_reference],
+            FromClause::Tables(vec![table_reference]),
             None,
             None,
             None,
@@ -1588,7 +1622,7 @@ mod test {
         let stmt = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_ref_a, table_ref_b],
+            FromClause::Tables(vec![table_ref_a, table_ref_b]),
             None,
             None,
             None,
@@ -1643,7 +1677,7 @@ mod test {
         let stmt = ast::SelectStatement::new(
             false,
             SelectClause::SelectExpressions(select_exprs),
-            vec![table_ref],
+            FromClause::Tables(vec![table_ref]),
             None,
             None,
             None,
@@ -1662,6 +1696,82 @@ mod test {
                     // Good - single table reference goes straight to DataSource
                 }
                 other => panic!("Expected DataSource node for single FROM, got: {:?}", other),
+            },
+            other => panic!("Expected Map node at root, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_left_join_produces_left_join_node() {
+        let path_expr_ax = PathExpr::new(vec![
+            PathSegment::AttrName("a".to_string()),
+            PathSegment::AttrName("x".to_string()),
+        ]);
+        let path_expr_bx = PathExpr::new(vec![
+            PathSegment::AttrName("b".to_string()),
+            PathSegment::AttrName("x".to_string()),
+        ]);
+
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_ax.clone())), None),
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_bx.clone())), None),
+        ];
+
+        let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_ref_a = ast::TableReference::new(path_expr_it.clone(), Some("a".to_string()), None);
+        let table_ref_b = ast::TableReference::new(path_expr_it.clone(), Some("b".to_string()), None);
+
+        let on_condition = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(path_expr_ax.clone())),
+            Box::new(ast::Expression::Column(path_expr_bx.clone())),
+        );
+
+        let from_clause = FromClause::Join {
+            left: Box::new(FromClause::Tables(vec![table_ref_a])),
+            right: table_ref_b,
+            join_type: ast::JoinType::Left,
+            condition: Some(on_condition),
+        };
+
+        let stmt = ast::SelectStatement::new(
+            false,
+            SelectClause::SelectExpressions(select_exprs),
+            from_clause,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+
+        let result = parse_query(stmt, data_source.clone());
+        assert!(result.is_ok(), "Left join query should parse: {:?}", result);
+
+        let node = result.unwrap();
+        // The root should be Map -> LeftJoin(DataSource, DataSource, condition)
+        match node {
+            types::Node::Map(_, source) => match *source {
+                types::Node::LeftJoin(left, right, _condition) => {
+                    match *left {
+                        types::Node::DataSource(ds, bindings) => {
+                            assert_eq!(ds, data_source);
+                            assert_eq!(bindings.len(), 1);
+                            assert_eq!(bindings[0].name, "a");
+                        }
+                        other => panic!("Expected DataSource for left, got: {:?}", other),
+                    }
+                    match *right {
+                        types::Node::DataSource(ds, bindings) => {
+                            assert_eq!(ds, data_source);
+                            assert_eq!(bindings.len(), 1);
+                            assert_eq!(bindings[0].name, "b");
+                        }
+                        other => panic!("Expected DataSource for right, got: {:?}", other),
+                    }
+                }
+                other => panic!("Expected LeftJoin node, got: {:?}", other),
             },
             other => panic!("Expected Map node at root, got: {:?}", other),
         }

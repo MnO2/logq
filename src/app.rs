@@ -382,4 +382,80 @@ mod tests {
 
         dir.close().unwrap();
     }
+
+    #[test]
+    fn test_run_left_join_jsonl() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("left_join_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1, "y": "a"}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2, "y": "b"}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3, "y": "c"}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // LEFT JOIN with matching condition - all rows match themselves
+        let result = run(
+            r#"select a.x, b.x from it as a left join it as b on a.x = b.x"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_left_join_no_match() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("left_join_no_match.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // LEFT JOIN where nothing matches - all right sides should be NULL
+        let result = run(
+            r#"select a.x, b.x from it as a left join it as b on a.x != a.x"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_left_outer_join_jsonl() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("left_outer_join_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // LEFT OUTER JOIN - should work identically to LEFT JOIN
+        let result = run(
+            r#"select a.x, b.x from it as a left outer join it as b on a.x = b.x"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
 }

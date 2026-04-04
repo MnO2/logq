@@ -1,5 +1,5 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{CrossJoinStream, DistinctStream, FilterStream, GroupByStream, InMemoryStream, LimitStream, LogFileStream, MapStream, RecordStream};
+use super::stream::{CrossJoinStream, DistinctStream, FilterStream, GroupByStream, InMemoryStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
@@ -912,6 +912,7 @@ pub(crate) enum Node {
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
     Distinct(Box<Node>),
     CrossJoin(Box<Node>, Box<Node>),
+    LeftJoin(Box<Node>, Box<Node>, Box<Formula>),
 }
 
 impl Node {
@@ -1080,6 +1081,12 @@ impl Node {
                 let right_node = *right.clone();
                 let right_variables = variables;
                 Ok(Box::new(CrossJoinStream::new(left_stream, right_node, right_variables)))
+            }
+            Node::LeftJoin(left, right, condition) => {
+                let left_stream = left.get(variables.clone())?;
+                let right_node = *right.clone();
+                let right_variables = variables;
+                Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone())))
             }
         }
     }
