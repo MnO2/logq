@@ -1,20 +1,19 @@
-# logq - Analyzing log files in PartiQL with command-line toolkit, implemented in Rust
+# logq - Query server logs with PartiQL, implemented in Rust
 
 [![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
 [![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
 
+logq is a command-line tool for querying and analyzing server log files using [PartiQL](https://partiql.org/), a SQL-compatible query language designed for semi-structured data. It supports structured log formats (ELB, ALB, S3, Squid) and schema-free JSONL logs with nested field access, aggregations, JOINs, subqueries, and set operations.
 
-This project is in alpha stage, PRs are welcomed.
+## Supported Log Formats
 
-logq is a command line tool for easily analyzing, querying, aggregating web-server log files though PartiQL (which is compatible with SQL-92) inteface 
-Right now the supported formats are
-
-1. AWS classic elastic load balancer
-2. AWS application load balancer
-3. AWS S3 Access Log (preliminary support)
-4. Squid native format (preliminary support)
-
-More log formats would be supported in the future, and ideally it could be customized through configuration like what GoAccess does.
+| Format | Description |
+| --- | --- |
+| `elb` | AWS Classic Elastic Load Balancer access logs |
+| `alb` | AWS Application Load Balancer access logs |
+| `s3` | AWS S3 access logs |
+| `squid` | Squid proxy native format |
+| `jsonl` | Newline-delimited JSON (schema-free, nested data) |
 
 ## Installation
 
@@ -22,233 +21,346 @@ More log formats would be supported in the future, and ideally it could be custo
 cargo install logq
 ```
 
-## Examples on querying flat logs
+## Quick Start
 
-Project the columns of `timestamp` and `backend_and_port` fields from the log file and print the first three records out.
+```bash
+# Query ELB logs
+logq query 'select timestamp, backend_processing_time from it limit 3' \
+  --table it:elb=access.log
 
-```
-> logq query 'select timestamp, backend_processing_time from it order by timestamp asc limit 3' --table it:elb=data/AWSELB.log
+# Query JSONL logs with nested fields
+logq query 'select e.f.g, d[0] from it where a > 1' \
+  --table it:jsonl=data.jsonl
 
-+-----------------------------------+----------+
-| 2015-11-07 18:45:33.007671 +00:00 | 0.618779 |
-+-----------------------------------+----------+
-| 2015-11-07 18:45:33.054086 +00:00 | 0.654135 |
-+-----------------------------------+----------+
-| 2015-11-07 18:45:33.094266 +00:00 | 0.506634 |
-+-----------------------------------+----------+
-```
+# Read from stdin
+cat access.log | logq query 'select count(*) from it' --table it:elb=stdin
 
-Summing up the total sent bytes in 5 seconds time frame.
-```
-> logq query 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t' --table it:elb=data/AWSELB.log
-+----------------------------+----------+
-| 2015-11-07 18:45:30 +00:00 | 12256229 |
-+----------------------------+----------+
-| 2015-11-07 18:45:35 +00:00 | 33148328 |
-+----------------------------+----------+
+# Output as JSON or CSV
+logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output json
+logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output csv
 ```
 
-Select the 90th percentile backend_processsing_time with 5 second as the time frame.
-```
-> logq query 'select t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by time_bucket("5 seconds", timestamp) as t' --table it:elb=data/AWSELB.log
-+----------------------------+----------+
-| 2015-11-07 18:45:30 +00:00 | 0.112312 |
-+----------------------------+----------+
-| 2015-11-07 18:45:35 +00:00 | 0.088791 |
-+----------------------------+----------+
+## SQL Feature Reference
+
+### SELECT and Projection
+
+```sql
+-- Column selection and aliases
+select timestamp, backend_processing_time as bpt from it
+
+-- Expressions in SELECT
+select sent_bytes + received_bytes as total from it
+
+-- Star projection
+select * from it limit 10
+
+-- SELECT DISTINCT
+select distinct elb_status_code from it
+
+-- SELECT VALUE with constructors
+select value {'status': elb_status_code, 'time': backend_processing_time} from it
 ```
 
-To collapse the part of the url path so that they are mapping to the same Restful handler, you could use `url_path_bucket`
-```
-> logq query 'select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from it limit 10' --table it:elb=data/AWSELB.log
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /                                            |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /img/_/000000000000000000000000              |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /favicons/_                                  |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /images/_/devices.png                        |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /stylesheets/_/font-awesome.css              |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /favicons/_                                  |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /mobile/_/register-push                      |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /img/_/205/2r1/562e37d9208bee5b70f56836.anim |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /img/_/300/2r0/54558148eab71c6c2517f1d9.jpg  |
-+----------------------------+----------------------------------------------+
-| 2015-11-07 18:45:30 +00:00 | /                                            |
-+----------------------------+----------------------------------------------+
+### Filtering
+
+```sql
+-- Comparisons
+select * from it where backend_processing_time > 1.0
+
+-- Boolean logic with AND/OR/NOT
+select * from it where elb_status_code = '500' and sent_bytes > 1000
+
+-- LIKE pattern matching (% = any chars, _ = single char)
+select * from it where user_agent like '%Chrome%'
+
+-- BETWEEN
+select * from it where backend_processing_time between 0.1 and 0.5
+
+-- IN
+select * from it where elb_status_code in ('500', '502', '503')
+
+-- IS NULL / IS MISSING
+select * from it where c is missing
+
+-- CASE WHEN
+select case when elb_status_code = '200' then 'ok'
+            when elb_status_code = '500' then 'error'
+            else 'other' end as status
+from it
 ```
 
-Output in different format, you can specify the format by `--output`, it supports `json` and `csv` at this moment.
-```
-> logq query --output csv 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t' --table it:elb=data/AWSELB.log
-2015-11-07 18:45:35 +00:00,33148328
-2015-11-07 18:45:30 +00:00,12256229
+### Aggregation and Grouping
+
+```sql
+-- Aggregate functions
+select count(*), sum(sent_bytes), avg(backend_processing_time),
+       min(backend_processing_time), max(backend_processing_time)
+from it
+
+-- GROUP BY
+select elb_status_code, count(*) as cnt from it group by elb_status_code
+
+-- GROUP BY with time bucketing
+select time_bucket('5 seconds', timestamp) as t, sum(sent_bytes) as s
+from it group by time_bucket('5 seconds', timestamp) as t
+
+-- HAVING
+select elb_status_code, count(*) as cnt from it
+group by elb_status_code having count(*) > 10
+
+-- Percentiles
+select percentile_disc(0.9) within group (order by backend_processing_time asc) as p90
+from it
+
+-- Approximate count distinct (HyperLogLog)
+select approx_count_distinct(user_agent) from it
 ```
 
-```
-> logq query --output json 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t' --table it:elb=data/AWSELB.log
-[{"t":"2015-11-07 18:45:30 +00:00","s":12256229},{"t":"2015-11-07 18:45:35 +00:00","s":33148328}]
+### ORDER BY and LIMIT
+
+```sql
+select * from it order by backend_processing_time desc limit 10
 ```
 
-You can use graphing command-line tools to graph the data set in terminal. For example, [termgraph](https://github.com/mkaz/termgraph) would be a good choice for bar charts
-```
-> logq query --output csv 'select backend_and_port, sum(sent_bytes) from it group by backend_and_port' --table it:elb=data/AWSELB.log | termgraph
+### JOINs
 
-10.0.2.143:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 20014156.00
-10.0.0.215:80: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 25390392.00
-```
+```sql
+-- Cross join (explicit)
+select * from a cross join b
 
-Or you could use [spark](https://github.com/holman/spark) to draw the processing time over time
-```
-> logq query --output csv 'select host_name(backend_and_port) as h, backend_processing_time from it where h = "10.0.2.143"' --table it:elb=data/AWSELB.log | cut -d, -f2 | spark
-▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁██▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
-```
+-- Cross join (comma syntax)
+select * from a, b where a.id = b.id
 
-If you are unclear how the execution was running, the query plan could be explained.
-```
-> logq explain 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t'
-Query Plan:
-GroupBy(["t"], [NamedAggregate { aggregate: Sum(SumAggregate { sums: {} }, Expression(Variable("sent_bytes"), Some("sent_bytes"))), name_opt: Some("s") }], Map([Expression(Function("time_bucket", [Expression(Variable("const_000000000"), None), Expression(Variable("timestamp"), Some("timestamp"))]), Some("t")), Expression(Variable("sent_bytes"), Some("sent_bytes"))], DataSource(Stdin)))
+-- Left outer join
+select a.name, b.value from a left join b on a.id = b.aid
 ```
 
-To know what are the fields, here is the table schema.
-```
-> logq schema elb
-+--------------------------+-------------+
-| timestamp                | DateTime    |
-+--------------------------+-------------+
-| elbname                  | String      |
-+--------------------------+-------------+
-| client_and_port          | Host        |
-+--------------------------+-------------+
-| backend_and_port         | Host        |
-+--------------------------+-------------+
-| request_processing_time  | Float       |
-+--------------------------+-------------+
-| backend_processing_time  | Float       |
-+--------------------------+-------------+
-| response_processing_time | Float       |
-+--------------------------+-------------+
-| elb_status_code          | String      |
-+--------------------------+-------------+
-| backend_status_code      | String      |
-+--------------------------+-------------+
-| received_bytes           | Integral    |
-+--------------------------+-------------+
-| sent_bytes               | Integral    |
-+--------------------------+-------------+
-| request                  | HttpRequest |
-+--------------------------+-------------+
-| user_agent               | String      |
-+--------------------------+-------------+
-| ssl_cipher               | String      |
-+--------------------------+-------------+
-| ssl_protocol             | String      |
-+--------------------------+-------------+
-| target_group_arn         | String      |
-+--------------------------+-------------+
-| trace_id                 | String      |
-+--------------------------+-------------+
+### Subqueries
+
+```sql
+-- Scalar subquery in WHERE
+select * from it where sent_bytes > (select avg(sent_bytes) from it)
+
+-- Scalar subquery in SELECT
+select *, (select max(sent_bytes) from it) as max_bytes from it
 ```
 
-To know the supported log format at this moment.
-```
-> logq schema 
-The supported log format
-* elb
-```
+### Set Operations
 
-## Examples to query nested `jsonl` logs
+```sql
+-- Union (deduplicates)
+select a from t1 union select a from t2
 
-For the `jsonl` format like this
+-- Union all (preserves duplicates)
+select a from t1 union all select a from t2
 
-```
-{"a": 1, "b": "123", "c": 456.1, "d": [0, 1, 2], "e": {"f": {"g": 1}}}
-{"a": 1, "b": "123", "d": [1, 2, 3], "e": {"f": {"g": 2}}}
-{"a": 1, "b": "456", "d": [4, 5, 6], "e": {"f": {"g": 3}}}
+-- Intersect / Except
+select a from t1 intersect select a from t2
+select a from t1 except select a from t2
 ```
 
-We can query the log like this
+### JSONL Nested Data
 
-```
-logq run query 'select x, count(*) as x from it group by d[0] as x' --table it:jsonl=data/structured.log --output=json
-[{"x":1},{"x":1},{"x":1}]
-```
-
-```
-logq run query 'select b, e.f.g from it' --table it:jsonl=data/structured.log --output=json
-[{"b":"123","g":1},{"b":"123","g":2},{"b":"456","g":3}]
+For JSONL input like:
+```json
+{"a": 1, "b": "hello", "d": [0, 1, 2], "e": {"f": {"g": 1}}}
 ```
 
+```sql
+-- Nested field access
+select e.f.g from it
 
-## Available Functions
+-- Array indexing
+select d[0], d[1] from it
 
-| Function Name | Description | Input Type | Output Type | 
-| --- | --- | --- | --- |
-| url_host | To retrieve the host from the request | Request | String |
-| url_port | To retrieve the port from teh request | Request | String |
-| url_path | To retrieve the path from the request | Request | String |
-| url_fragment | To retrieve the fragment from the request | Request | String |
-| url_query | To retrive the query from the request | Request | String |
-| url_path_segments | To retrieve the path segments from the request | Request | String |
-| url_path_bucket | To map the path segments into given string | Request, Integral, String | String |
-| time_bucket | To bucket the timestamp into given interval | String, DateTime | DateTime |
-| date_part | To get the part of the datetime with the given unit | String, DateTime | Float |
-| host_name | To retreive the hostname from host | Host | String |
-| host_port | To retreive the port from host | Host | String |
+-- Path wildcards
+select d[*] from it       -- iterate array elements
+select e.* from it         -- iterate object fields
 
-## Aggregation Functions
+-- GROUP BY on nested fields
+select x, count(*) from it group by d[0] as x
+```
 
-| Function Name | Description | Input Type |
+### Type Casting and String Operations
+
+```sql
+-- CAST
+select cast(elb_status_code as int) from it
+
+-- String concatenation
+select 'status: ' || elb_status_code from it
+
+-- String functions
+select upper(user_agent), lower(elbname), char_length(user_agent) from it
+select substring(user_agent from 1 for 10) from it
+select trim(both ' ' from user_agent) from it
+
+-- COALESCE / NULLIF
+select coalesce(c, 0) from it
+select nullif(a, 0) from it
+```
+
+## Functions
+
+### Scalar Functions
+
+| Function | Description | Example |
 | --- | --- | --- |
-| avg | average the numbers | Integral or Float |
-| count | counting the number of records | Any |
-| first | get the first of the records | Any |
-| last | get the last of the records | Any |
-| min | get the min of the records | Any |
-| max | get the max of the records | Any |
-| sum | get the sum of the numbers | Integral or Float |
-| percentile_disc | calculate record at the percentile | Float |
-| approx_percentile | calculate approximate record at the percentile | Float |
+| `url_host(request)` | Extract host from HTTP request | `url_host(request)` |
+| `url_port(request)` | Extract port from HTTP request | `url_port(request)` |
+| `url_path(request)` | Extract path from HTTP request | `url_path(request)` |
+| `url_fragment(request)` | Extract fragment from HTTP request | `url_fragment(request)` |
+| `url_query(request)` | Extract query string from HTTP request | `url_query(request)` |
+| `url_path_segments(request)` | Extract path segments | `url_path_segments(request)` |
+| `url_path_bucket(request, depth, placeholder)` | Canonicalize URL path for grouping | `url_path_bucket(request, 1, "_")` |
+| `time_bucket(interval, datetime)` | Bucket timestamp into intervals | `time_bucket('5 seconds', timestamp)` |
+| `date_part(unit, datetime)` | Extract part of datetime | `date_part('hour', timestamp)` |
+| `host_name(host)` | Extract hostname from host field | `host_name(backend_and_port)` |
+| `host_port(host)` | Extract port from host field | `host_port(backend_and_port)` |
+| `upper(string)` | Convert to uppercase | `upper(user_agent)` |
+| `lower(string)` | Convert to lowercase | `lower(elbname)` |
+| `char_length(string)` | Length of string | `char_length(user_agent)` |
+| `substring(string from start for length)` | Extract substring | `substring(user_agent from 1 for 10)` |
+| `trim(both char from string)` | Trim characters | `trim(both ' ' from user_agent)` |
 
+### Aggregate Functions
+
+| Function | Description |
+| --- | --- |
+| `count(*)` / `count(expr)` | Count rows |
+| `sum(expr)` | Sum of numeric values |
+| `avg(expr)` | Average of numeric values |
+| `min(expr)` | Minimum value |
+| `max(expr)` | Maximum value |
+| `first(expr)` | First value in group |
+| `last(expr)` | Last value in group |
+| `percentile_disc(p) within group (order by expr)` | Exact percentile |
+| `approx_percentile(p) within group (order by expr)` | Approximate percentile (t-digest) |
+| `approx_count_distinct(expr)` | Approximate distinct count (HyperLogLog) |
+
+## Output Formats
+
+logq supports three output modes via `--output`:
+
+- **`table`** (default) -- formatted ASCII table
+- **`csv`** -- comma-separated values, pipe-friendly
+- **`json`** -- JSON array of objects
+
+### Piping to Visualization Tools
+
+```bash
+# Bar chart with termgraph
+logq query --output csv 'select backend_and_port, sum(sent_bytes) from it group by backend_and_port' \
+  --table it:elb=data/AWSELB.log | termgraph
+
+# Sparkline with spark
+logq query --output csv 'select backend_processing_time from it' \
+  --table it:elb=data/AWSELB.log | cut -d, -f1 | spark
+```
+
+## Other Commands
+
+### Explain
+
+Print the query plan without executing:
+
+```
+logq explain 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t'
+```
+
+### Schema
+
+Show field names and types for a log format:
+
+```
+logq schema elb
+logq schema alb
+```
+
+## Log Format Schemas
+
+### ELB (Classic Elastic Load Balancer)
+
+| Field | Type |
+| --- | --- |
+| `timestamp` | DateTime |
+| `elbname` | String |
+| `client_and_port` | Host |
+| `backend_and_port` | Host |
+| `request_processing_time` | Float |
+| `backend_processing_time` | Float |
+| `response_processing_time` | Float |
+| `elb_status_code` | String |
+| `backend_status_code` | String |
+| `received_bytes` | Int |
+| `sent_bytes` | Int |
+| `request` | HttpRequest |
+| `user_agent` | String |
+| `ssl_cipher` | String |
+| `ssl_protocol` | String |
+| `target_group_arn` | String |
+| `trace_id` | String |
+
+### ALB (Application Load Balancer)
+
+| Field | Type |
+| --- | --- |
+| `type` | String |
+| `timestamp` | DateTime |
+| `elb` | String |
+| `client_and_port` | Host |
+| `target_and_port` | Host |
+| `request_processing_time` | Float |
+| `target_processing_time` | Float |
+| `response_processing_time` | Float |
+| `elb_status_code` | String |
+| `target_status_code` | String |
+| `received_bytes` | Int |
+| `sent_bytes` | Int |
+| `request` | HttpRequest |
+| `user_agent` | String |
+| `ssl_cipher` | String |
+| `ssl_protocol` | String |
+| `target_group_arn` | String |
+| `trace_id` | String |
+| `domain_name` | String |
+| `chosen_cert_arn` | String |
+| `matched_rule_priority` | String |
+| `request_creation_time` | DateTime |
+| `actions_executed` | String |
+| `redirect_url` | String |
+| `error_reason` | String |
+
+### JSONL
+
+No fixed schema. Fields are auto-detected from each JSON line. Nested objects and arrays are supported with path access (`a.b.c`, `d[0]`).
 
 ## Motivation
 
-Often time in the daily work when you are troubleshooting the production issues, there are certain metrics that's not provided by AWS CloudWatch or in-house ELK. Then you would download the original access logs from your company's archive and write an one-off script to analyze it. However, this approach has a few drawbacks.
+When troubleshooting production issues, you often need metrics not provided by CloudWatch or ELK. Downloading access logs and writing one-off scripts has several drawbacks:
 
-1. You spend a lot of time to parse of the log format, but not focus on calculating the metrics helping to troubleshoot your production issues.
-2. Most of the log formats are commonly seen and we should ideally abstract it and have every one benefit from the shared abstraction
-3. For web-server log cases, the log volume usually is huge, it could be several hundred MB or even a few GB. Doing it in scripting langauges would make yourself impatiently waiting it is running at your local.
+1. **Time wasted on parsing** -- common log formats should be handled automatically
+2. **No reuse** -- each script is thrown away
+3. **Performance** -- scripting languages are too slow for multi-GB log files
 
-For sure you could finely tuned the analytical tooling like AWS Athena or ELK to analyze the large volume of data, but often times you just want to adhocly analyze logs and don't bother to set things up and cost extra money. Also, the modern laptop/PC is actually powerful enough to analyze gigabytes of log volumes, just that the implementation is not efficient enough for doing that. Implementing logq in Rust is in hope to resolve those inconvenience and concerns.
+logq addresses these by providing a fast, Rust-based query engine with built-in parsers for common formats. A modern laptop can comfortably analyze gigabytes of logs without setting up Athena or ELK.
 
+### Why not TextQL or SQLite?
 
-### Why not TextQL, or insert the space delimited fields into sqlite?
-
-TextQL is implemented in python ant it's ok for the smaller cases. In the case of high traffic AWS ELB log files, it often goes up to gigabytes in volume and it is slow
-regarding to the speed. Furthermore, either TextQL and sqlite are limited in their provided SQL functions and data types, it makes the domain processing like URL, and HTTP
-reuqests line and User-Agents tedious. 
-
-Another big reason is that we would like to support `jsonl` format (lines of `json`), which is nested semi-structured data that require the extension of SQL to be able to be queried effectively.
-
-Also, in the use case of web-traffic analytics, the questions you would to be answered are like "What is the 99th percentile in a given time frame to this Restful endpoint, by ignoring the user_id in the URL path segments". It would be easier to have a software providing handy functions to extract or canonicalize the information from the log.
-
+- **Performance** -- TextQL (Python) and SQLite are slow for GB-scale files
+- **Domain functions** -- logq provides URL parsing, HTTP request decomposition, time bucketing, and host extraction out of the box
+- **Semi-structured data** -- JSONL with nested objects requires PartiQL's path expressions, which standard SQL cannot handle
+- **Analytical functions** -- percentiles, approximate distinct counts, and time-series bucketing for common access log analysis patterns
 
 ## Roadmap
 
-- [ ] Using cmdline flag to specify the table names and their the backing files.
-- [ ] Spin-off the syntax parser as a separate cargo crate.
+- [ ] Customizable reader, to follow GoAccess's style
+- [ ] More supported log formats
+- [ ] Plugin quickjs for user-defined functions
+- [ ] Building index for repetitive queries
 - [ ] Performance optimization, avoid unnecessary parsing
 - [ ] More supported functions
-- [ ] time_bucket with arbitrary interval (begin from epoch)
-- [ ] Customizable Reader, to follow GoAccess's style
-- [ ] More supported log format
-- [ ] Plugin quickjs for user-defined functions
-- [ ] Implement APPROX_COUNT_DISTINCT with Hyperloglog
-- [ ] Building index for repetitive queries
+
+## License
+
+Apache-2.0 OR BSD-3-Clause
