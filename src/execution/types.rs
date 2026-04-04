@@ -3,7 +3,7 @@ use super::stream::{FilterStream, GroupByStream, InMemoryStream, LimitStream, Lo
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
-use crate::syntax::ast::{PathExpr, PathSegment};
+use crate::syntax::ast::PathExpr;
 use chrono::Timelike;
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
@@ -127,55 +127,6 @@ pub(crate) enum Expression {
     Branch(Box<Formula>, Box<Expression>, Option<Box<Expression>>),
 }
 
-fn get_value_by_path_expr(path_expr: &PathExpr, i: usize, variables: &Variables) -> Value {
-    if i >= path_expr.path_segments.len() {
-        return Value::Missing;
-    }
-
-    match &path_expr.path_segments[i] {
-        PathSegment::AttrName(attr_name) => {
-            if let Some(val) = variables.get(attr_name) {
-                if i + 1 == path_expr.path_segments.len() {
-                    return val.clone();
-                } else {
-                    match val {
-                        Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
-                        _ => Value::Missing,
-                    }
-                }
-            } else {
-                Value::Missing
-            }
-        }
-        PathSegment::ArrayIndex(attr_name, idx) => {
-            if let Some(val) = variables.get(attr_name) {
-                if i + 1 == path_expr.path_segments.len() {
-                    match val {
-                        Value::Array(a) => {
-                            let a = &a[*idx];
-                            return a.clone();
-                        }
-                        _ => Value::Missing,
-                    }
-                } else {
-                    match val {
-                        Value::Array(a) => {
-                            let a = &a[*idx];
-                            match a {
-                                Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
-                                _ => Value::Missing,
-                            }
-                        }
-                        _ => Value::Missing,
-                    }
-                }
-            } else {
-                Value::Missing
-            }
-        }
-    }
-}
-
 impl Expression {
     pub(crate) fn expression_value(&self, variables: &Variables) -> ExpressionResult<Value> {
         match self {
@@ -184,7 +135,7 @@ impl Expression {
                 Ok(Value::Boolean(out))
             }
             Expression::Variable(path_expr) => {
-                let v = get_value_by_path_expr(path_expr, 0, variables);
+                let v = common::types::get_value_by_path_expr(path_expr, 0, variables);
                 Ok(v.clone())
             }
             Expression::Function(name, arguments) => {

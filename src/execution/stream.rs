@@ -8,55 +8,6 @@ use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
 
-fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Variables) -> Value {
-    if i >= path_expr.path_segments.len() {
-        return Value::Missing;
-    }
-
-    match &path_expr.path_segments[i] {
-        ast::PathSegment::AttrName(attr_name) => {
-            if let Some(val) = variables.get(attr_name) {
-                if i + 1 == path_expr.path_segments.len() {
-                    return val.clone();
-                } else {
-                    match val {
-                        Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
-                        _ => Value::Missing,
-                    }
-                }
-            } else {
-                Value::Missing
-            }
-        }
-        ast::PathSegment::ArrayIndex(attr_name, idx) => {
-            if let Some(val) = variables.get(attr_name) {
-                if i + 1 == path_expr.path_segments.len() {
-                    match val {
-                        Value::Array(a) => {
-                            let a = &a[*idx];
-                            return a.clone();
-                        }
-                        _ => Value::Missing,
-                    }
-                } else {
-                    match val {
-                        Value::Array(a) => {
-                            let a = &a[*idx];
-                            match a {
-                                Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
-                                _ => Value::Missing,
-                            }
-                        }
-                        _ => Value::Missing,
-                    }
-                }
-            } else {
-                Value::Missing
-            }
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Record {
     variables: LinkedHashMap<String, Value>,
@@ -77,12 +28,12 @@ impl Record {
     }
 
     pub(crate) fn get(&self, field_name: &ast::PathExpr) -> Value {
-        get_value_by_path_expr(field_name, 0, &self.variables)
+        common::types::get_value_by_path_expr(field_name, 0, &self.variables)
     }
 
     pub(crate) fn alias(&mut self, bindings: &Vec<common::types::Binding>) {
         for binding in bindings.iter() {
-            let val = get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
+            let val = common::types::get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
             self.variables.insert(binding.name.clone(), val);
         }
     }
@@ -100,7 +51,7 @@ impl Record {
     pub(crate) fn get_many(&self, field_names: &[ast::PathExpr]) -> Vec<Value> {
         let mut ret = Vec::with_capacity(field_names.len());
         for name in field_names {
-            let v = get_value_by_path_expr(name, 0, &self.variables);
+            let v = common::types::get_value_by_path_expr(name, 0, &self.variables);
             ret.push(v);
         }
         ret

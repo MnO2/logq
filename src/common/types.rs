@@ -275,6 +275,55 @@ pub(crate) type Tuple = Vec<Value>;
 pub(crate) type VariableName = String;
 pub(crate) type Variables = LinkedHashMap<String, Value>;
 
+pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Variables) -> Value {
+    if i >= path_expr.path_segments.len() {
+        return Value::Missing;
+    }
+
+    match &path_expr.path_segments[i] {
+        ast::PathSegment::AttrName(attr_name) => {
+            if let Some(val) = variables.get(attr_name) {
+                if i + 1 == path_expr.path_segments.len() {
+                    return val.clone();
+                } else {
+                    match val {
+                        Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
+                        _ => Value::Missing,
+                    }
+                }
+            } else {
+                Value::Missing
+            }
+        }
+        ast::PathSegment::ArrayIndex(attr_name, idx) => {
+            if let Some(val) = variables.get(attr_name) {
+                if i + 1 == path_expr.path_segments.len() {
+                    match val {
+                        Value::Array(a) => {
+                            let a = &a[*idx];
+                            return a.clone();
+                        }
+                        _ => Value::Missing,
+                    }
+                } else {
+                    match val {
+                        Value::Array(a) => {
+                            let a = &a[*idx];
+                            match a {
+                                Value::Object(o) => get_value_by_path_expr(path_expr, i + 1, o as &Variables),
+                                _ => Value::Missing,
+                            }
+                        }
+                        _ => Value::Missing,
+                    }
+                }
+            } else {
+                Value::Missing
+            }
+        }
+    }
+}
+
 pub(crate) fn empty_variables() -> Variables {
     Variables::default()
 }
