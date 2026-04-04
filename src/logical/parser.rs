@@ -7,25 +7,25 @@ use crate::syntax::ast;
 use crate::syntax::ast::{PathExpr, PathSegment, TableReference};
 use hashbrown::HashSet;
 
-#[derive(Fail, Debug, Clone, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
-    #[fail(display = "Type Mismatch")]
+    #[error("Type Mismatch")]
     TypeMismatch,
-    #[fail(display = "Not Aggregate Function")]
+    #[error("Not Aggregate Function")]
     NotAggregateFunction,
-    #[fail(display = "Group By statement but no aggregate function provided")]
+    #[error("Group By statement but no aggregate function provided")]
     GroupByWithoutAggregateFunction,
-    #[fail(display = "Group By statement mismatch with the non-aggregate fields")]
+    #[error("Group By statement mismatch with the non-aggregate fields")]
     GroupByFieldsMismatch,
-    #[fail(display = "Invalid Arguments: {}", _0)]
+    #[error("Invalid Arguments: {0}")]
     InvalidArguments(String),
-    #[fail(display = "Invalid Arguments: {}", _0)]
+    #[error("Invalid Arguments: {0}")]
     UnknownFunction(String),
-    #[fail(display = "Having clause but no Group By clause provided")]
+    #[error("Having clause but no Group By clause provided")]
     HavingClauseWithoutGroupBy,
-    #[fail(display = "Invalid table reference in From Clause")]
+    #[error("Invalid table reference in From Clause")]
     FromClausePathInvalidTableReference,
-    #[fail(display = "Using 'as' to define an alias is required in From Clause for nested path expr")]
+    #[error("Using 'as' to define an alias is required in From Clause for nested path expr")]
     FromClauseMissingAsForPathExpr,
 }
 

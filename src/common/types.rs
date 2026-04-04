@@ -33,18 +33,12 @@ pub(crate) enum Value {
 
 pub(crate) type ParseHostResult<T> = result::Result<T, ParseHostError>;
 
-#[derive(Fail, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub(crate) enum ParseHostError {
-    #[fail(display = "Parse Host Error")]
+    #[error("Parse Host Error")]
     ParseHost,
-    #[fail(display = "{}", _0)]
-    ParsePort(#[cause] std::num::ParseIntError),
-}
-
-impl From<std::num::ParseIntError> for ParseHostError {
-    fn from(err: std::num::ParseIntError) -> ParseHostError {
-        ParseHostError::ParsePort(err)
-    }
+    #[error("{0}")]
+    ParsePort(#[from] std::num::ParseIntError),
 }
 
 pub(crate) type Hostname = String;
@@ -80,22 +74,16 @@ pub(crate) fn parse_host(s: &str) -> ParseHostResult<Host> {
 
 pub(crate) type ParseHttpRequestResult<T> = result::Result<T, ParseHttpRequestError>;
 
-#[derive(Fail, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub(crate) enum ParseHttpRequestError {
-    #[fail(display = "Parse Http Method Error")]
+    #[error("Parse Http Method Error")]
     ParseHttpMethod,
-    #[fail(display = "{}", _0)]
-    ParseUrl(#[cause] url::ParseError),
-    #[fail(display = "Parse Http Version Error")]
+    #[error("{0}")]
+    ParseUrl(#[from] url::ParseError),
+    #[error("Parse Http Version Error")]
     ParseHttpVersion,
-    #[fail(display = "Missing Field")]
+    #[error("Missing Field")]
     MissingField,
-}
-
-impl From<url::ParseError> for ParseHttpRequestError {
-    fn from(err: url::ParseError) -> ParseHttpRequestError {
-        ParseHttpRequestError::ParseUrl(err)
-    }
 }
 
 pub(crate) type HttpMethod = String;
@@ -174,20 +162,14 @@ pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest>
 
 pub(crate) type ParseTimeIntervalResult<T> = result::Result<T, ParseTimeIntervalError>;
 
-#[derive(Fail, PartialEq, Eq, Clone, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Clone, Debug)]
 pub(crate) enum ParseTimeIntervalError {
-    #[fail(display = "Parse Integral Error: {}", _0)]
-    ParseIntegral(#[cause] std::num::ParseIntError),
-    #[fail(display = "Missing Part")]
+    #[error("Parse Integral Error: {0}")]
+    ParseIntegral(#[from] std::num::ParseIntError),
+    #[error("Missing Part")]
     MissingPart,
-    #[fail(display = "Unknown Time Unit")]
+    #[error("Unknown Time Unit")]
     UnknownTimeUnit,
-}
-
-impl From<std::num::ParseIntError> for ParseTimeIntervalError {
-    fn from(err: std::num::ParseIntError) -> ParseTimeIntervalError {
-        ParseTimeIntervalError::ParseIntegral(err)
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -208,9 +190,9 @@ pub(crate) struct TimeInterval {
 
 pub(crate) type ParseDatePartResult<T> = result::Result<T, ParseDatePartError>;
 
-#[derive(Fail, PartialEq, Eq, Clone, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Clone, Debug)]
 pub(crate) enum ParseDatePartError {
-    #[fail(display = "Unknown DatePart Unit")]
+    #[error("Unknown DatePart Unit")]
     UnknownDatePartUnit,
 }
 

@@ -586,72 +586,24 @@ impl SquidLogField {
 
 pub(crate) type ReaderResult<T> = result::Result<T, ReaderError>;
 
-#[derive(Fail, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub(crate) enum ReaderError {
-    #[fail(display = "{}", _0)]
-    Io(#[cause] io::Error),
-    #[fail(display = "{}", _0)]
-    ParseDateTime(#[cause] chrono::format::ParseError),
-    #[fail(display = "{}", _0)]
-    ParseIntegral(#[cause] std::num::ParseIntError),
-    #[fail(display = "{}", _0)]
-    ParseFloat(#[cause] std::num::ParseFloatError),
-    #[fail(display = "{}", _0)]
-    ParseUrl(#[cause] url::ParseError),
-    #[fail(display = "{}", _0)]
-    ParseHost(#[cause] common::types::ParseHostError),
-    #[fail(display = "{}", _0)]
-    ParseHttpRequest(#[cause] common::types::ParseHttpRequestError),
-    #[fail(display = "{}", _0)]
-    ParseJson(#[cause] json::JsonError),
-}
-
-impl From<io::Error> for ReaderError {
-    fn from(err: io::Error) -> ReaderError {
-        ReaderError::Io(err)
-    }
-}
-
-impl From<chrono::format::ParseError> for ReaderError {
-    fn from(err: chrono::format::ParseError) -> ReaderError {
-        ReaderError::ParseDateTime(err)
-    }
-}
-
-impl From<std::num::ParseIntError> for ReaderError {
-    fn from(err: std::num::ParseIntError) -> ReaderError {
-        ReaderError::ParseIntegral(err)
-    }
-}
-
-impl From<std::num::ParseFloatError> for ReaderError {
-    fn from(err: std::num::ParseFloatError) -> ReaderError {
-        ReaderError::ParseFloat(err)
-    }
-}
-
-impl From<common::types::ParseHostError> for ReaderError {
-    fn from(err: common::types::ParseHostError) -> ReaderError {
-        ReaderError::ParseHost(err)
-    }
-}
-
-impl From<common::types::ParseHttpRequestError> for ReaderError {
-    fn from(err: common::types::ParseHttpRequestError) -> ReaderError {
-        ReaderError::ParseHttpRequest(err)
-    }
-}
-
-impl From<url::ParseError> for ReaderError {
-    fn from(err: url::ParseError) -> ReaderError {
-        ReaderError::ParseUrl(err)
-    }
-}
-
-impl From<json::JsonError> for ReaderError {
-    fn from(err: json::JsonError) -> ReaderError {
-        ReaderError::ParseJson(err)
-    }
+    #[error("{0}")]
+    Io(#[from] io::Error),
+    #[error("{0}")]
+    ParseDateTime(#[from] chrono::format::ParseError),
+    #[error("{0}")]
+    ParseIntegral(#[from] std::num::ParseIntError),
+    #[error("{0}")]
+    ParseFloat(#[from] std::num::ParseFloatError),
+    #[error("{0}")]
+    ParseUrl(#[from] url::ParseError),
+    #[error("{0}")]
+    ParseHost(#[from] common::types::ParseHostError),
+    #[error("{0}")]
+    ParseHttpRequest(#[from] common::types::ParseHttpRequestError),
+    #[error("{0}")]
+    ParseJson(#[from] json::JsonError),
 }
 
 #[derive(Debug)]

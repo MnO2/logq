@@ -15,27 +15,21 @@ use tdigest::TDigest;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub(crate) enum EvaluateError {
-    #[fail(display = "{}", _0)]
-    Expression(#[cause] ExpressionError),
-}
-
-impl From<ExpressionError> for EvaluateError {
-    fn from(err: ExpressionError) -> EvaluateError {
-        EvaluateError::Expression(err)
-    }
+    #[error("{0}")]
+    Expression(#[from] ExpressionError),
 }
 
 pub(crate) type CreateStreamResult<T> = result::Result<T, CreateStreamError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub enum CreateStreamError {
-    #[fail(display = "Io Error")]
+    #[error("Io Error")]
     Io,
-    #[fail(display = "Reader Error")]
+    #[error("Reader Error")]
     Reader,
-    #[fail(display = "Stream Error")]
+    #[error("Stream Error")]
     Stream,
 }
 
@@ -59,36 +53,18 @@ impl From<StreamError> for CreateStreamError {
 
 pub(crate) type StreamResult<T> = result::Result<T, StreamError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub(crate) enum StreamError {
-    #[fail(display = "{}", _0)]
-    Get(#[cause] CreateStreamError),
-    #[fail(display = "{}", _0)]
-    Evaluate(#[cause] EvaluateError),
-    #[fail(display = "{}", _0)]
-    Expression(#[cause] ExpressionError),
-    #[fail(display = "Reader Error")]
+    #[error("{0}")]
+    Get(#[from] CreateStreamError),
+    #[error("{0}")]
+    Evaluate(#[from] EvaluateError),
+    #[error("{0}")]
+    Expression(#[from] ExpressionError),
+    #[error("Reader Error")]
     Reader,
-    #[fail(display = "Aggregate Error")]
+    #[error("Aggregate Error")]
     Aggregate,
-}
-
-impl From<CreateStreamError> for StreamError {
-    fn from(err: CreateStreamError) -> StreamError {
-        StreamError::Get(err)
-    }
-}
-
-impl From<EvaluateError> for StreamError {
-    fn from(err: EvaluateError) -> StreamError {
-        StreamError::Evaluate(err)
-    }
-}
-
-impl From<ExpressionError> for StreamError {
-    fn from(err: ExpressionError) -> StreamError {
-        StreamError::Expression(err)
-    }
 }
 
 impl From<ReaderError> for StreamError {
@@ -105,47 +81,35 @@ impl From<AggregateError> for StreamError {
 
 pub(crate) type ExpressionResult<T> = result::Result<T, ExpressionError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub(crate) enum ExpressionError {
-    #[fail(display = "Key Not Found")]
+    #[error("Key Not Found")]
     KeyNotFound,
-    #[fail(display = "Invalid Arguments")]
+    #[error("Invalid Arguments")]
     InvalidArguments,
-    #[fail(display = "Unknown Function")]
+    #[error("Unknown Function")]
     UnknownFunction,
-    #[fail(display = "Invalid Star")]
+    #[error("Invalid Star")]
     InvalidStar,
-    #[fail(display = "Missing Else")]
+    #[error("Missing Else")]
     MissingElse,
-    #[fail(display = "Type Mismatch")]
+    #[error("Type Mismatch")]
     TypeMismatch,
-    #[fail(display = "{}", _0)]
-    ParseTimeInterval(#[cause] common::types::ParseTimeIntervalError),
-    #[fail(display = "TimeInterval Not Supported Yet")]
+    #[error("{0}")]
+    ParseTimeInterval(#[from] common::types::ParseTimeIntervalError),
+    #[error("TimeInterval Not Supported Yet")]
     TimeIntervalNotSupported,
-    #[fail(display = "Zero TimeInterval")]
+    #[error("Zero TimeInterval")]
     TimeIntervalZero,
-    #[fail(display = "DatePartUnit Not Supported Yet")]
+    #[error("DatePartUnit Not Supported Yet")]
     DatePartUnitNotSupported,
-    #[fail(display = "{}", _0)]
-    ParseDatePart(#[cause] common::types::ParseDatePartError),
+    #[error("{0}")]
+    ParseDatePart(#[from] common::types::ParseDatePartError),
 }
 
 impl From<EvaluateError> for ExpressionError {
     fn from(_: EvaluateError) -> ExpressionError {
         ExpressionError::KeyNotFound
-    }
-}
-
-impl From<common::types::ParseTimeIntervalError> for ExpressionError {
-    fn from(e: common::types::ParseTimeIntervalError) -> ExpressionError {
-        ExpressionError::ParseTimeInterval(e)
-    }
-}
-
-impl From<common::types::ParseDatePartError> for ExpressionError {
-    fn from(e: common::types::ParseDatePartError) -> ExpressionError {
-        ExpressionError::ParseDatePart(e)
     }
 }
 
@@ -823,11 +787,11 @@ impl Node {
 
 pub(crate) type AggregateResult<T> = result::Result<T, AggregateError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub enum AggregateError {
-    #[fail(display = "Key Not Found")]
+    #[error("Key Not Found")]
     KeyNotFound,
-    #[fail(display = "Invalid Type")]
+    #[error("Invalid Type")]
     InvalidType,
 }
 

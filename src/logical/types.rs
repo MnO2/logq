@@ -8,9 +8,9 @@ use std::result;
 
 pub(crate) type PhysicalResult<T> = result::Result<T, PhysicalPlanError>;
 
-#[derive(Fail, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub enum PhysicalPlanError {
-    #[fail(display = "Type Mismatch")]
+    #[error("Type Mismatch")]
     #[allow(dead_code)]
     TypeMisMatch,
 }

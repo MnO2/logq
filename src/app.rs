@@ -11,28 +11,28 @@ use crate::syntax;
 
 pub(crate) type AppResult<T> = result::Result<T, AppError>;
 
-#[derive(Fail, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub(crate) enum AppError {
-    #[fail(display = "Syntax Error: {}", _0)]
+    #[error("Syntax Error: {0}")]
     Syntax(String),
-    #[fail(display = "Input is fully consumed, the leftover are \"{}\"", _0)]
+    #[error("Input is fully consumed, the leftover are \"{0}\"")]
     InputNotAllConsumed(String),
-    #[fail(display = "{}", _0)]
-    Parse(#[cause] logical::parser::ParseError),
-    #[fail(display = "{}", _0)]
-    PhysicalPlan(#[cause] logical::types::PhysicalPlanError),
-    #[fail(display = "{}", _0)]
-    CreateStream(#[cause] execution::types::CreateStreamError),
-    #[fail(display = "{}", _0)]
-    Stream(#[cause] execution::types::StreamError),
-    #[fail(display = "Invalid Log File Format")]
+    #[error("{0}")]
+    Parse(#[from] logical::parser::ParseError),
+    #[error("{0}")]
+    PhysicalPlan(#[from] logical::types::PhysicalPlanError),
+    #[error("{0}")]
+    CreateStream(#[from] execution::types::CreateStreamError),
+    #[error("{0}")]
+    Stream(#[from] execution::types::StreamError),
+    #[error("Invalid Log File Format")]
     InvalidLogFileFormat,
-    #[fail(display = "Invalid Table Spec String")]
+    #[error("Invalid Table Spec String")]
     InvalidTableSpecString,
-    #[fail(display = "{}", _0)]
-    WriteCsv(#[cause] csv::Error),
-    #[fail(display = "{}", _0)]
-    WriteJson(#[cause] json::Error),
+    #[error("{0}")]
+    WriteCsv(#[from] csv::Error),
+    #[error("{0}")]
+    WriteJson(#[from] json::Error),
 }
 
 impl PartialEq for AppError {
@@ -81,41 +81,6 @@ impl From<nom::Err<VerboseError<&str>>> for AppError {
     }
 }
 
-impl From<logical::parser::ParseError> for AppError {
-    fn from(e: logical::parser::ParseError) -> AppError {
-        AppError::Parse(e)
-    }
-}
-
-impl From<logical::types::PhysicalPlanError> for AppError {
-    fn from(err: logical::types::PhysicalPlanError) -> AppError {
-        AppError::PhysicalPlan(err)
-    }
-}
-
-impl From<execution::types::CreateStreamError> for AppError {
-    fn from(err: execution::types::CreateStreamError) -> AppError {
-        AppError::CreateStream(err)
-    }
-}
-
-impl From<execution::types::StreamError> for AppError {
-    fn from(err: execution::types::StreamError) -> AppError {
-        AppError::Stream(err)
-    }
-}
-
-impl From<csv::Error> for AppError {
-    fn from(err: csv::Error) -> AppError {
-        AppError::WriteCsv(err)
-    }
-}
-
-impl From<json::Error> for AppError {
-    fn from(err: json::Error) -> AppError {
-        AppError::WriteJson(err)
-    }
-}
 
 pub(crate) enum OutputMode {
     Table,
