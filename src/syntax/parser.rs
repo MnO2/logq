@@ -24,6 +24,8 @@ lazy_static! {
         vec![
             "select", "value", "from", "where", "group", "by", "limit", "order", "true", "false", "case", "when",
             "then", "as", "at", "not", "and", "or", "asc", "desc", "having", "within", "else", "end",
+            "distinct", "join", "cross", "left", "inner", "on", "lateral", "like", "between", "in", "is", "null",
+            "missing", "cast", "union", "intersect", "except", "all", "exists",
         ]
     };
 }
@@ -450,7 +452,7 @@ fn parse_expression_at_precedence<'a>(
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     let (mut i1, mut expr) = parse_expression_atom(i0)?;
     while let Ok((i2, op)) = parse_expression_op(i1) {
-        let (op_precedence, op_left_associative) = *precedence_table.get(op).unwrap();
+        let (op_precedence, op_left_associative) = *precedence_table.get(op.to_ascii_lowercase().as_str()).unwrap();
 
         if op_precedence < current_precedence {
             break;
@@ -1374,5 +1376,13 @@ mod test {
         assert!(identifier::<VerboseError<&str>>("From").is_err());
         assert!(identifier::<VerboseError<&str>>("WHERE").is_err());
         assert!(identifier::<VerboseError<&str>>("having").is_err());
+    }
+
+    #[test]
+    fn test_uppercase_logical_operators() {
+        let result = select_query("SELECT a FROM it WHERE a = 1 AND b = 2");
+        assert!(result.is_ok(), "Uppercase AND should parse successfully, got: {:?}", result);
+        let result = select_query("SELECT a FROM it WHERE a = 1 OR b = 2");
+        assert!(result.is_ok(), "Uppercase OR should parse successfully, got: {:?}", result);
     }
 }
