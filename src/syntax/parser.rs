@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use nom::{
     branch::alt,
-    bytes::complete::{escaped, tag},
+    bytes::complete::{escaped, tag, tag_no_case},
     character::complete::{char, digit1, multispace0, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
     error::{context, VerboseError},
@@ -23,19 +23,19 @@ lazy_static! {
     static ref KEYWORDS: Vec<&'static str> = {
         vec![
             "select", "value", "from", "where", "group", "by", "limit", "order", "true", "false", "case", "when",
-            "then",
+            "then", "as", "at", "not", "and", "or", "asc", "desc", "having", "within", "else", "end",
         ]
     };
 }
 
 fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, VerboseError<&str>> {
     let (remaining_input, (_, condition, _, then_expr, else_expr, _)) = tuple((
-        tuple((tag("case"), space1, tag("when"), space1)),
+        tuple((tag_no_case("case"), space1, tag_no_case("when"), space1)),
         expression,
-        tuple((multispace0, tag("then"), space1)),
+        tuple((multispace0, tag_no_case("then"), space1)),
         factor,
-        opt(delimited(terminated(tag("else"), space1), factor, multispace0)),
-        tag("end"),
+        opt(delimited(terminated(tag_no_case("else"), space1), factor, multispace0)),
+        tag_no_case("end"),
     ))(i)?;
 
     Ok((
@@ -114,7 +114,7 @@ where
 
     match result {
         Ok((i, o)) => {
-            if start_with_number(o) || all_underscore(o) || KEYWORDS.contains(&o) {
+            if start_with_number(o) || all_underscore(o) || KEYWORDS.contains(&o.to_ascii_lowercase().as_str()) {
                 Err(nom::Err::Failure(nom::error::ParseError::from_error_kind(
                     i,
                     nom::error::ErrorKind::Alpha, //FIXME: customize error
@@ -129,8 +129,8 @@ where
 
 fn boolean(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     alt((
-        map(tag("true"), |_| ast::Value::Boolean(true)),
-        map(tag("false"), |_| ast::Value::Boolean(false)),
+        map(tag_no_case("true"), |_| ast::Value::Boolean(true)),
+        map(tag_no_case("false"), |_| ast::Value::Boolean(false)),
     ))(i)
 }
 
@@ -160,7 +160,7 @@ fn parens(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
 
 fn order_by_clause_for_within_group(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseError<&str>> {
     map(
-        preceded(tuple((tag("order"), space1, tag("by"), space1)), ordering_term),
+        preceded(tuple((tag_no_case("order"), space1, tag_no_case("by"), space1)), ordering_term),
         |item| ast::OrderByExpression::new(vec![item]),
     )(i)
 }
@@ -168,7 +168,7 @@ fn order_by_clause_for_within_group(i: &str) -> IResult<&str, ast::OrderByExpres
 fn within_group_clause(i: &str) -> IResult<&str, ast::WithinGroupClause, VerboseError<&str>> {
     map(
         preceded(
-            tuple((space1, tag("within"), space1, tag("group"), space1)),
+            tuple((space1, tag_no_case("within"), space1, tag_no_case("group"), space1)),
             delimited(tag("("), order_by_clause_for_within_group, tag(")")),
         ),
         ast::WithinGroupClause::new,
@@ -211,7 +211,7 @@ fn factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
 
 fn expression_term_opt_not(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     map(
-        pair(opt(tuple((space1, tag("not"), space1))), factor),
+        pair(opt(tuple((space1, tag_no_case("not"), space1))), factor),
         |(opt_not, factor)| {
             if opt_not.is_some() {
                 ast::Expression::UnaryOperator(ast::UnaryOperator::Not, Box::new(factor))
@@ -249,7 +249,7 @@ fn select_expression(i: &str) -> IResult<&str, ast::SelectExpression, VerboseErr
             map(
                 pair(
                     expression,
-                    opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
+                    opt(preceded(tuple((space0, tag_no_case("as"), space1)), identifier)),
                 ),
                 |(e, name_opt)| ast::SelectExpression::Expression(Box::new(e), name_opt.map(|s| s.to_string())),
             ),
@@ -265,7 +265,7 @@ fn select_expression_list(i: &str) -> IResult<&str, Vec<SelectExpression>, Verbo
 }
 
 fn where_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
-    map(preceded(tag("where"), expression), ast::WhereExpression::new)(i)
+    map(preceded(tag_no_case("where"), expression), ast::WhereExpression::new)(i)
 }
 
 fn column_name_in_group_by(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
@@ -289,7 +289,7 @@ fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, VerboseErro
     map(
         tuple((
             column_factor,
-            opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
+            opt(preceded(tuple((space0, tag_no_case("as"), space1)), identifier)),
         )),
         |(column_expr, as_clasue)| ast::GroupByReference::new(column_expr, as_clasue.map(|s| s.to_string())),
     )(i)
@@ -343,8 +343,8 @@ fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&
     map(
         tuple((
             path_expr,
-            opt(preceded(tuple((space0, tag("as"), space1)), identifier)),
-            opt(preceded(tuple((space0, tag("at"), space1)), identifier)),
+            opt(preceded(tuple((space0, tag_no_case("as"), space1)), identifier)),
+            opt(preceded(tuple((space0, tag_no_case("at"), space1)), identifier)),
         )),
         |(path_expr, as_clasue, at_clause)| {
             ast::TableReference::new(
@@ -367,17 +367,17 @@ fn table_reference_list(i: &str) -> IResult<&str, Vec<ast::TableReference>, Verb
 }
 
 fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
-    map(preceded(tag("having"), expression), ast::WhereExpression::new)(i)
+    map(preceded(tag_no_case("having"), expression), ast::WhereExpression::new)(i)
 }
 
 fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, VerboseError<&str>> {
     map(
         preceded(
-            tuple((tag("group"), space1, tag("by"), space1)),
+            tuple((tag_no_case("group"), space1, tag_no_case("by"), space1)),
             pair(
                 column_expression_list,
                 opt(preceded(
-                    tuple((space0, tag("group"), space1, tag("as"), space1)),
+                    tuple((space0, tag_no_case("group"), space1, tag_no_case("as"), space1)),
                     identifier,
                 )),
             ),
@@ -389,7 +389,7 @@ fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, Verbose
 }
 
 fn limit_expression(i: &str) -> IResult<&str, ast::LimitExpression, VerboseError<&str>> {
-    map(preceded(tuple((tag("limit"), space1)), digit1), |s: &str| {
+    map(preceded(tuple((tag_no_case("limit"), space1)), digit1), |s: &str| {
         let v = s.parse::<u32>().unwrap();
         ast::LimitExpression::new(v)
     })(i)
@@ -399,7 +399,7 @@ fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, VerboseError<&str>
     map(
         pair(
             column_name_in_group_by,
-            preceded(space1, alt((tag("asc"), tag("desc")))),
+            preceded(space1, alt((tag_no_case("asc"), tag_no_case("desc")))),
         ),
         |(column_name, ordering)| ast::OrderingTerm::new(column_name, ordering),
     )(i)
@@ -408,7 +408,7 @@ fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, VerboseError<&str>
 fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseError<&str>> {
     map(
         preceded(
-            tuple((tag("order"), space1, tag("by"), space1)),
+            tuple((tag_no_case("order"), space1, tag_no_case("by"), space1)),
             terminated(separated_list0(preceded(space0, char(',')), ordering_term), space0),
         ),
         ast::OrderByExpression::new,
@@ -416,7 +416,7 @@ fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseErro
 }
 
 fn from_clause(i: &str) -> IResult<&str, Vec<TableReference>, VerboseError<&str>> {
-    terminated(preceded(tuple((tag("from"), space1)), table_reference_list), space0)(i)
+    terminated(preceded(tuple((tag_no_case("from"), space1)), table_reference_list), space0)(i)
 }
 
 fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
@@ -438,8 +438,8 @@ fn parse_expression_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
         tag("<"),
         tag(">="),
         tag("<="),
-        tag("and"),
-        tag("or"),
+        tag_no_case("and"),
+        tag_no_case("or"),
     ))(i)
 }
 
@@ -528,7 +528,7 @@ fn value_constructor(i: &str) -> IResult<&str, ast::SelectClause, VerboseError<&
     delimited(
         space0,
         preceded(
-            pair(tag("value"), space1),
+            pair(tag_no_case("value"), space1),
             alt((
                 map(tuple_constructor, |v| {
                     ast::SelectClause::ValueConstructor(ast::ValueConstructor::TupleConstructor(v))
@@ -552,7 +552,7 @@ fn select_clause_expression_list(i: &str) -> IResult<&str, ast::SelectClause, Ve
 pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, VerboseError<&str>> {
     map(
         preceded(
-            tag("select"),
+            tag_no_case("select"),
             tuple((
                 alt((value_constructor, select_clause_expression_list)),
                 from_clause,
@@ -1339,5 +1339,40 @@ mod test {
         let expr = ast::Expression::Column(ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())]));
         let expected = ast::SelectClause::ValueConstructor(ast::ValueConstructor::Expression(expr));
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_mixed_case_query() {
+        let result = select_query("SELECT a FROM it WHERE a = 1");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_string_literal_case_preserved() {
+        let result = select_query("select a from it where a = \"Alice\"");
+        match result {
+            Ok((_, stmt)) => {
+                if let Some(where_expr) = stmt.where_expr_opt {
+                    match where_expr.expr {
+                        ast::Expression::BinaryOperator(_, _, right) => match *right {
+                            ast::Expression::Value(ast::Value::StringLiteral(s)) => {
+                                assert_eq!(s, "Alice");
+                            }
+                            _ => panic!("Expected string literal"),
+                        },
+                        _ => panic!("Expected binary operator"),
+                    }
+                }
+            }
+            Err(e) => panic!("Parse failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_keyword_as_identifier_rejected_case_insensitive() {
+        assert!(identifier::<VerboseError<&str>>("SELECT").is_err());
+        assert!(identifier::<VerboseError<&str>>("From").is_err());
+        assert!(identifier::<VerboseError<&str>>("WHERE").is_err());
+        assert!(identifier::<VerboseError<&str>>("having").is_err());
     }
 }

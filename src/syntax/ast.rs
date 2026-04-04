@@ -166,7 +166,8 @@ impl FromStr for BinaryOperator {
     type Err = String;
 
     fn from_str(s: &str) -> result::Result<Self, Self::Err> {
-        match s {
+        let lower = s.to_ascii_lowercase();
+        match lower.as_str() {
             "+" => Ok(BinaryOperator::Plus),
             "-" => Ok(BinaryOperator::Minus),
             "*" => Ok(BinaryOperator::Times),
@@ -265,7 +266,8 @@ impl FromStr for Ordering {
     type Err = String;
 
     fn from_str(s: &str) -> result::Result<Self, Self::Err> {
-        match s {
+        let lower = s.to_ascii_lowercase();
+        match lower.as_str() {
             "asc" => Ok(Ordering::Asc),
             "desc" => Ok(Ordering::Desc),
             _ => Err("unknown ordering".to_string()),
