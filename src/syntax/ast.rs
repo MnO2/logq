@@ -145,6 +145,8 @@ pub(crate) enum Expression {
     IsNotNull(Box<Expression>),
     IsMissing(Box<Expression>),
     IsNotMissing(Box<Expression>),
+    Like(Box<Expression>, Box<Expression>),
+    NotLike(Box<Expression>, Box<Expression>),
 }
 
 pub(crate) type FuncName = String;
@@ -163,6 +165,7 @@ pub(crate) enum BinaryOperator {
     LessEqual,
     And,
     Or,
+    Concat,
 }
 
 impl FromStr for BinaryOperator {
@@ -183,6 +186,7 @@ impl FromStr for BinaryOperator {
             "<=" => Ok(BinaryOperator::LessEqual),
             "and" => Ok(BinaryOperator::And),
             "or" => Ok(BinaryOperator::Or),
+            "||" => Ok(BinaryOperator::Concat),
             _ => Err("unknown binary operator".to_string()),
         }
     }

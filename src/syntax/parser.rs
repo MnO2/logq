@@ -250,6 +250,7 @@ fn expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     precedence_table.insert("/".to_string(), (7, true));
     precedence_table.insert("+".to_string(), (6, true));
     precedence_table.insert("-".to_string(), (6, true));
+    precedence_table.insert("||".to_string(), (6, true));
     precedence_table.insert("<".to_string(), (4, true));
     precedence_table.insert("<=".to_string(), (4, true));
     precedence_table.insert(">".to_string(), (4, true));
@@ -450,6 +451,7 @@ fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError
 
 fn parse_expression_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     alt((
+        tag("||"),
         tag("+"),
         tag("-"),
         tag("*"),
@@ -490,13 +492,34 @@ fn parse_postfix_is<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a st
     Ok((input, expr))
 }
 
+fn parse_postfix_like<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+    // Check for NOT LIKE first (before LIKE)
+    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
+        if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("like")(i) {
+                let (i, _) = multispace1(i)?;
+                let (i, pattern) = parse_expression_atom(i)?;
+                return Ok((i, ast::Expression::NotLike(Box::new(expr), Box::new(pattern))));
+            }
+        }
+    }
+    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("like")(i) {
+        let (i, _) = multispace1::<&str, VerboseError<&str>>(i)?;
+        let (i, pattern) = parse_expression_atom(i)?;
+        return Ok((i, ast::Expression::Like(Box::new(expr), Box::new(pattern))));
+    }
+    Ok((input, expr))
+}
+
 fn parse_expression_at_precedence<'a>(
     i0: &'a str,
     current_precedence: u32,
     precedence_table: &HashMap<String, (u32, bool)>,
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     let (i1, expr) = parse_expression_atom(i0)?;
-    let (mut i1, mut expr) = parse_postfix_is(i1, expr)?;
+    let (i1, expr) = parse_postfix_is(i1, expr)?;
+    let (mut i1, mut expr) = parse_postfix_like(i1, expr)?;
     while let Ok((i2, op)) = parse_expression_op(i1) {
         let (op_precedence, op_left_associative) = *precedence_table.get(op.to_ascii_lowercase().as_str()).unwrap();
 
@@ -1312,6 +1335,7 @@ mod test {
         precedence_table.insert("/".to_string(), (7, true));
         precedence_table.insert("+".to_string(), (6, true));
         precedence_table.insert("-".to_string(), (6, true));
+        precedence_table.insert("||".to_string(), (6, true));
         precedence_table.insert("<".to_string(), (4, true));
         precedence_table.insert("<=".to_string(), (4, true));
         precedence_table.insert(">".to_string(), (4, true));
@@ -1540,5 +1564,94 @@ mod test {
         assert!(result.is_ok(), "a is not missing should parse, got: {:?}", result);
         let (_, expr) = result.unwrap();
         assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_string_concat_parsing() {
+        let result = expression("a || b");
+        assert!(result.is_ok(), "|| should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let expected = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Concat,
+            Box::new(ast::Expression::Column(path_expr_a)),
+            Box::new(ast::Expression::Column(path_expr_b)),
+        );
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_string_concat_chained() {
+        let result = expression("a || b || c");
+        assert!(result.is_ok(), "chained || should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        // Left-associative: (a || b) || c
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
+        let path_expr_c = PathExpr::new(vec![PathSegment::AttrName("c".to_string())]);
+        let expected = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Concat,
+            Box::new(ast::Expression::BinaryOperator(
+                ast::BinaryOperator::Concat,
+                Box::new(ast::Expression::Column(path_expr_a)),
+                Box::new(ast::Expression::Column(path_expr_b)),
+            )),
+            Box::new(ast::Expression::Column(path_expr_c)),
+        );
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_like_parsing() {
+        let result = select_query("select a from it where a like \"%foo%\"");
+        assert!(result.is_ok(), "LIKE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_not_like_parsing() {
+        let result = select_query("select a from it where a not like \"%foo%\"");
+        assert!(result.is_ok(), "NOT LIKE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_like_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::Like(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            Box::new(ast::Expression::Value(ast::Value::StringLiteral("%foo%".to_string()))),
+        );
+        let result = expression("a like \"%foo%\"");
+        assert!(result.is_ok(), "a like should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_not_like_expression_structure() {
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let expected = ast::Expression::NotLike(
+            Box::new(ast::Expression::Column(path_expr_a)),
+            Box::new(ast::Expression::Value(ast::Value::StringLiteral("%foo%".to_string()))),
+        );
+        let result = expression("a not like \"%foo%\"");
+        assert!(result.is_ok(), "a not like should parse, got: {:?}", result);
+        let (_, expr) = result.unwrap();
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_like_case_insensitive_keyword() {
+        let result = select_query("select a from it where a LIKE \"%foo%\"");
+        assert!(result.is_ok(), "LIKE uppercase should parse, got: {:?}", result);
+        let result = select_query("select a from it where a NOT LIKE \"%foo%\"");
+        assert!(result.is_ok(), "NOT LIKE uppercase should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_like_with_and() {
+        // LIKE should work with AND/OR
+        let result = select_query("select a from it where a like \"%foo%\" and b = 1");
+        assert!(result.is_ok(), "LIKE with AND should parse, got: {:?}", result);
     }
 }

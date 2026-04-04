@@ -67,6 +67,8 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
         Expression::IsNotMissing(inner) => {
             Expression::IsNotMissing(Box::new(desugar_expr(*inner)))
         }
+        Expression::Like(l, r) => Expression::Like(Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r))),
+        Expression::NotLike(l, r) => Expression::NotLike(Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r))),
         // Leaf nodes — no children to recurse into
         Expression::Column(_) | Expression::Value(_) => expr,
     }

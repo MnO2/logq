@@ -96,6 +96,16 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
             let inner_expr = parse_value_expression(ctx, inner)?;
             Ok(Box::new(types::Formula::IsNotMissing(inner_expr)))
         }
+        ast::Expression::Like(inner_expr, pattern) => {
+            let left = parse_value_expression(ctx, inner_expr)?;
+            let right = parse_value_expression(ctx, pattern)?;
+            Ok(Box::new(types::Formula::Like(left, right)))
+        }
+        ast::Expression::NotLike(inner_expr, pattern) => {
+            let left = parse_value_expression(ctx, inner_expr)?;
+            let right = parse_value_expression(ctx, pattern)?;
+            Ok(Box::new(types::Formula::NotLike(left, right)))
+        }
         ast::Expression::FuncCall(_, _, _)
         | ast::Expression::CaseWhenExpression(_)
         | ast::Expression::Column(_) => {
@@ -238,6 +248,18 @@ fn parse_value_expression(
         ast::Expression::IsNotMissing(inner) => {
             let inner_expr = parse_value_expression(ctx, inner)?;
             let formula = Box::new(types::Formula::IsNotMissing(inner_expr));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::Like(inner_expr, pattern) => {
+            let left = parse_value_expression(ctx, inner_expr)?;
+            let right = parse_value_expression(ctx, pattern)?;
+            let formula = Box::new(types::Formula::Like(left, right));
+            Ok(Box::new(types::Expression::Logic(formula)))
+        }
+        ast::Expression::NotLike(inner_expr, pattern) => {
+            let left = parse_value_expression(ctx, inner_expr)?;
+            let right = parse_value_expression(ctx, pattern)?;
+            let formula = Box::new(types::Formula::NotLike(left, right));
             Ok(Box::new(types::Expression::Logic(formula)))
         }
     }

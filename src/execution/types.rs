@@ -543,6 +543,22 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
+        "Concat" => {
+            if arguments.len() != 2 {
+                return Err(ExpressionError::InvalidArguments);
+            }
+            // NULL/MISSING propagation
+            match (&arguments[0], &arguments[1]) {
+                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+                (Value::Missing, _) | (_, Value::Missing) => Ok(Value::Missing),
+                (Value::String(a), Value::String(b)) => {
+                    let mut result = a.clone();
+                    result.push_str(b);
+                    Ok(Value::String(result))
+                }
+                _ => Err(ExpressionError::InvalidArguments),
+            }
+        }
         _ => Err(ExpressionError::UnknownFunction),
     }
 }
@@ -628,6 +644,26 @@ pub(crate) enum Formula {
     IsMissing(Box<Expression>),
     IsNotMissing(Box<Expression>),
     ExpressionPredicate(Box<Expression>),
+    Like(Box<Expression>, Box<Expression>),
+    NotLike(Box<Expression>, Box<Expression>),
+}
+
+fn like_pattern_to_regex(pattern: &str) -> String {
+    let mut regex = String::from("^");
+    for ch in pattern.chars() {
+        match ch {
+            '%' => regex.push_str(".*"),
+            '_' => regex.push('.'),
+            // Escape regex special characters
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' => {
+                regex.push('\\');
+                regex.push(ch);
+            }
+            _ => regex.push(ch),
+        }
+    }
+    regex.push('$');
+    regex
 }
 
 impl Formula {
@@ -684,6 +720,34 @@ impl Formula {
                     Value::Boolean(b) => Ok(Some(b)),
                     Value::Null | Value::Missing => Ok(None),
                     _ => Ok(Some(true)), // non-null, non-missing values are truthy
+                }
+            }
+            Formula::Like(expr, pattern_expr) => {
+                let val = expr.expression_value(variables)?;
+                let pattern = pattern_expr.expression_value(variables)?;
+                match (&val, &pattern) {
+                    (Value::Null, _) | (_, Value::Null) => Ok(None),
+                    (Value::Missing, _) | (_, Value::Missing) => Ok(None),
+                    (Value::String(s), Value::String(p)) => {
+                        let regex_pattern = like_pattern_to_regex(p);
+                        let re = regex::Regex::new(&regex_pattern).map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+                        Ok(Some(re.is_match(s)))
+                    }
+                    _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
+                }
+            }
+            Formula::NotLike(expr, pattern_expr) => {
+                let val = expr.expression_value(variables)?;
+                let pattern = pattern_expr.expression_value(variables)?;
+                match (&val, &pattern) {
+                    (Value::Null, _) | (_, Value::Null) => Ok(None),
+                    (Value::Missing, _) | (_, Value::Missing) => Ok(None),
+                    (Value::String(s), Value::String(p)) => {
+                        let regex_pattern = like_pattern_to_regex(p);
+                        let re = regex::Regex::new(&regex_pattern).map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+                        Ok(Some(!re.is_match(s)))
+                    }
+                    _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
                 }
             }
         }
@@ -1820,5 +1884,131 @@ mod tests {
         // IS NOT MISSING on Null => true
         let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Null)));
         assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+    }
+
+    #[test]
+    fn test_string_concat_evaluation() {
+        assert_eq!(
+            evaluate("Concat", &vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
+            Ok(Value::String("foobar".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_string_concat_null_propagation() {
+        assert_eq!(
+            evaluate("Concat", &vec![Value::Null, Value::String("bar".to_string())]),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            evaluate("Concat", &vec![Value::String("foo".to_string()), Value::Null]),
+            Ok(Value::Null)
+        );
+    }
+
+    #[test]
+    fn test_string_concat_missing_propagation() {
+        assert_eq!(
+            evaluate("Concat", &vec![Value::Missing, Value::String("bar".to_string())]),
+            Ok(Value::Missing)
+        );
+        assert_eq!(
+            evaluate("Concat", &vec![Value::String("foo".to_string()), Value::Missing]),
+            Ok(Value::Missing)
+        );
+    }
+
+    #[test]
+    fn test_like_pattern_to_regex() {
+        assert_eq!(like_pattern_to_regex("%"), "^.*$");
+        assert_eq!(like_pattern_to_regex("_"), "^.$");
+        assert_eq!(like_pattern_to_regex("%foo%"), "^.*foo.*$");
+        assert_eq!(like_pattern_to_regex("foo_bar"), "^foo.bar$");
+        assert_eq!(like_pattern_to_regex("hello"), "^hello$");
+        // Regex special chars should be escaped
+        assert_eq!(like_pattern_to_regex("a.b"), "^a\\.b$");
+        assert_eq!(like_pattern_to_regex("a+b"), "^a\\+b$");
+    }
+
+    #[test]
+    fn test_like_evaluation() {
+        let vars = Variables::default();
+        // Basic match: 'foobar' LIKE '%foo%' => true
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::String("foobar".to_string()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+
+        // No match: 'hello' LIKE '%foo%' => false
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+
+        // Underscore wildcard: 'abc' LIKE 'a_c' => true
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::String("abc".to_string()))),
+            Box::new(Expression::Constant(Value::String("a_c".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+
+        // Underscore wildcard: 'ac' LIKE 'a_c' => false (underscore matches exactly one char)
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::String("ac".to_string()))),
+            Box::new(Expression::Constant(Value::String("a_c".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+
+        // Exact match: 'hello' LIKE 'hello' => true
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+    }
+
+    #[test]
+    fn test_not_like_evaluation() {
+        let vars = Variables::default();
+        // 'hello' NOT LIKE '%foo%' => true
+        let f = Formula::NotLike(
+            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+
+        // 'foobar' NOT LIKE '%foo%' => false
+        let f = Formula::NotLike(
+            Box::new(Expression::Constant(Value::String("foobar".to_string()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+    }
+
+    #[test]
+    fn test_like_null_propagation() {
+        let vars = Variables::default();
+        // NULL LIKE '%foo%' => None
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::Null)),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+
+        // 'hello' LIKE NULL => None
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::Null)),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
+
+        // MISSING LIKE '%foo%' => None
+        let f = Formula::Like(
+            Box::new(Expression::Constant(Value::Missing)),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+        );
+        assert_eq!(f.evaluate(&vars), Ok(None));
     }
 }

@@ -219,6 +219,8 @@ pub(crate) enum Formula {
     IsMissing(Box<Expression>),
     IsNotMissing(Box<Expression>),
     ExpressionPredicate(Box<Expression>),
+    Like(Box<Expression>, Box<Expression>),
+    NotLike(Box<Expression>, Box<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +292,18 @@ impl Formula {
             Formula::ExpressionPredicate(expr) => {
                 let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
                 Ok((Box::new(execution::Formula::ExpressionPredicate(physical_expr)), variables))
+            }
+            Formula::Like(expr, pattern) => {
+                let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                let (physical_pattern, pattern_variables) = pattern.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&expr_variables, &pattern_variables);
+                Ok((Box::new(execution::Formula::Like(physical_expr, physical_pattern)), return_variables))
+            }
+            Formula::NotLike(expr, pattern) => {
+                let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
+                let (physical_pattern, pattern_variables) = pattern.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&expr_variables, &pattern_variables);
+                Ok((Box::new(execution::Formula::NotLike(physical_expr, physical_pattern)), return_variables))
             }
         }
     }
