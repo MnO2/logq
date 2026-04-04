@@ -1,7 +1,7 @@
 # CHANGELOG — PartiQL Implementation Progress
 
 ## Current Status
-Phase 2 complete. Starting Phase 3: Clauses & Query Structure.
+Phase 3 complete. Starting Phase 4: Set Operations.
 
 ## Completed Tasks
 
@@ -39,10 +39,11 @@ Phase 2 complete. Starting Phase 3: Clauses & Query Structure.
 - **Step 25:** Path wildcards ([*] and .*) for array/tuple iteration.
 - **Step 26:** CROSS JOIN (explicit and comma syntax) with nested-loop stream.
 - **Step 27:** LEFT [OUTER] JOIN ... ON with NULL-padded non-matching rows. Refactored AST to use FromClause enum (Tables | Join) instead of Vec<TableReference>.
+- **Step 28:** Non-correlated scalar subqueries in WHERE and SELECT. Added Expression::Subquery, recursive parse_query, data_source to ParsingContext.
 
 ## Failed Approaches
 - Worktree isolation caused branch confusion when two agents ran in parallel. Avoided worktrees after that.
 
 ## Known Limitations
-- No subqueries
+- No correlated subqueries (only non-correlated scalar subqueries supported)
 - No UNION/INTERSECT/EXCEPT
