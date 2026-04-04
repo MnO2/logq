@@ -1279,9 +1279,15 @@ pub(crate) struct ApproxCountDistinctAggregate {
 }
 
 impl PartialEq for ApproxCountDistinctAggregate {
-    fn eq(&self, _other: &Self) -> bool {
-        //Ignoring the detail since we only use Eq for unit test
-        true
+    fn eq(&self, other: &Self) -> bool {
+        if self.counts.len() != other.counts.len() {
+            return false;
+        }
+        self.counts.keys().all(|k| other.counts.contains_key(k))
+            && self
+                .counts
+                .iter()
+                .all(|(k, v)| other.counts.get(k).map_or(false, |ov| v.count() == ov.count()))
     }
 }
 
