@@ -96,7 +96,14 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
             let inner_expr = parse_value_expression(ctx, inner)?;
             Ok(Box::new(types::Formula::IsNotMissing(inner_expr)))
         }
-        _ => unreachable!(),
+        ast::Expression::FuncCall(_, _, _)
+        | ast::Expression::CaseWhenExpression(_)
+        | ast::Expression::Column(_) => {
+            // Expression used in boolean context — treat as a condition
+            // by wrapping in an ExpressionPredicate
+            let expr = parse_value_expression(ctx, expr)?;
+            Ok(Box::new(types::Formula::ExpressionPredicate(expr)))
+        }
     }
 }
 
@@ -256,7 +263,12 @@ fn parse_condition(ctx: &common::ParsingContext, condition: &ast::Expression) ->
             let rel_op = parse_relation(op)?;
             Ok(Box::new(types::Formula::Predicate(rel_op, left, right)))
         }
-        _ => unreachable!(),
+        _ => {
+            // Non-comparison expression in condition context (e.g., a function call
+            // or column reference used as a boolean predicate)
+            let expr = parse_value_expression(ctx, condition)?;
+            Ok(Box::new(types::Formula::ExpressionPredicate(expr)))
+        }
     }
 }
 
@@ -1213,5 +1225,126 @@ mod test {
         let ans = parse_query(before, data_source);
         let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_logic_func_call_in_boolean_context() {
+        // WHERE some_func(a) — a FuncCall used directly as the WHERE predicate
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let func_call = ast::Expression::FuncCall(
+            "some_func".to_string(),
+            vec![ast::SelectExpression::Expression(
+                Box::new(ast::Expression::Column(path_expr_a.clone())),
+                None,
+            )],
+            None,
+        );
+
+        let parsing_context = ParsingContext {
+            table_name: "it".to_string(),
+        };
+        let result = parse_logic(&parsing_context, &func_call);
+        assert!(result.is_ok());
+
+        let formula = result.unwrap();
+        match *formula {
+            types::Formula::ExpressionPredicate(ref expr) => {
+                match &**expr {
+                    types::Expression::Function(name, _) => {
+                        assert_eq!(name, "some_func");
+                    }
+                    _ => panic!("Expected Function expression"),
+                }
+            }
+            _ => panic!("Expected ExpressionPredicate formula"),
+        }
+    }
+
+    #[test]
+    fn test_parse_logic_column_in_boolean_context() {
+        // WHERE active — a column reference used directly as boolean
+        let path_expr = PathExpr::new(vec![PathSegment::AttrName("active".to_string())]);
+        let column_expr = ast::Expression::Column(path_expr.clone());
+
+        let parsing_context = ParsingContext {
+            table_name: "it".to_string(),
+        };
+        let result = parse_logic(&parsing_context, &column_expr);
+        assert!(result.is_ok());
+
+        let formula = result.unwrap();
+        match *formula {
+            types::Formula::ExpressionPredicate(ref expr) => {
+                match &**expr {
+                    types::Expression::Variable(p) => {
+                        assert_eq!(p, &path_expr);
+                    }
+                    _ => panic!("Expected Variable expression"),
+                }
+            }
+            _ => panic!("Expected ExpressionPredicate formula"),
+        }
+    }
+
+    #[test]
+    fn test_parse_logic_case_when_in_boolean_context() {
+        // WHERE CASE WHEN a = 1 THEN true ELSE false END
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let case_when = ast::Expression::CaseWhenExpression(ast::CaseWhenExpression {
+            branches: vec![(
+                ast::Expression::BinaryOperator(
+                    ast::BinaryOperator::Equal,
+                    Box::new(ast::Expression::Column(path_expr_a.clone())),
+                    Box::new(ast::Expression::Value(ast::Value::Integral(1))),
+                ),
+                ast::Expression::Value(ast::Value::Boolean(true)),
+            )],
+            else_expr: Some(Box::new(ast::Expression::Value(ast::Value::Boolean(false)))),
+        });
+
+        let parsing_context = ParsingContext {
+            table_name: "it".to_string(),
+        };
+        let result = parse_logic(&parsing_context, &case_when);
+        assert!(result.is_ok());
+
+        let formula = result.unwrap();
+        match *formula {
+            types::Formula::ExpressionPredicate(ref expr) => {
+                match &**expr {
+                    types::Expression::Branch(_, _) => {
+                        // Successfully parsed as Branch expression
+                    }
+                    _ => panic!("Expected Branch expression"),
+                }
+            }
+            _ => panic!("Expected ExpressionPredicate formula"),
+        }
+    }
+
+    #[test]
+    fn test_parse_condition_non_binary_expression() {
+        // parse_condition with a non-BinaryOperator expression should produce ExpressionPredicate
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+        let column_expr = ast::Expression::Column(path_expr_a.clone());
+
+        let parsing_context = ParsingContext {
+            table_name: "it".to_string(),
+        };
+        let result = parse_condition(&parsing_context, &column_expr);
+        assert!(result.is_ok());
+
+        let formula = result.unwrap();
+        match *formula {
+            types::Formula::ExpressionPredicate(ref expr) => {
+                match &**expr {
+                    types::Expression::Variable(p) => {
+                        assert_eq!(p, &path_expr_a);
+                    }
+                    _ => panic!("Expected Variable expression"),
+                }
+            }
+            _ => panic!("Expected ExpressionPredicate formula"),
+        }
     }
 }

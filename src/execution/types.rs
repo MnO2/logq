@@ -627,6 +627,7 @@ pub(crate) enum Formula {
     IsNotNull(Box<Expression>),
     IsMissing(Box<Expression>),
     IsNotMissing(Box<Expression>),
+    ExpressionPredicate(Box<Expression>),
 }
 
 impl Formula {
@@ -676,6 +677,14 @@ impl Formula {
             Formula::IsNotMissing(expr) => {
                 let val = expr.expression_value(variables)?;
                 Ok(Some(val != Value::Missing))
+            }
+            Formula::ExpressionPredicate(expr) => {
+                let val = expr.expression_value(variables)?;
+                match val {
+                    Value::Boolean(b) => Ok(Some(b)),
+                    Value::Null | Value::Missing => Ok(None),
+                    _ => Ok(Some(true)), // non-null, non-missing values are truthy
+                }
             }
         }
     }

@@ -218,6 +218,7 @@ pub(crate) enum Formula {
     IsNotNull(Box<Expression>),
     IsMissing(Box<Expression>),
     IsNotMissing(Box<Expression>),
+    ExpressionPredicate(Box<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,6 +286,10 @@ impl Formula {
             Formula::IsNotMissing(expr) => {
                 let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
                 Ok((Box::new(execution::Formula::IsNotMissing(physical_expr)), variables))
+            }
+            Formula::ExpressionPredicate(expr) => {
+                let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
+                Ok((Box::new(execution::Formula::ExpressionPredicate(physical_expr)), variables))
             }
         }
     }
