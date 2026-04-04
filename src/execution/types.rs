@@ -121,6 +121,7 @@ pub(crate) enum Ordering {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Expression {
+    Constant(Value),
     Logic(Box<Formula>),
     Variable(PathExpr),
     Function(String, Vec<Named>),
@@ -130,6 +131,7 @@ pub(crate) enum Expression {
 impl Expression {
     pub(crate) fn expression_value(&self, variables: &Variables) -> ExpressionResult<Value> {
         match self {
+            Expression::Constant(value) => Ok(value.clone()),
             Expression::Logic(formula) => {
                 let out = formula.evaluate(variables)?;
                 Ok(Value::Boolean(out))
@@ -344,8 +346,19 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 return Err(ExpressionError::InvalidArguments);
             }
 
+            // NULL/MISSING propagation: Missing takes precedence over Null
+            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
+                return Ok(Value::Missing);
+            }
+            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
+                return Ok(Value::Null);
+            }
+
             match (&arguments[0], &arguments[1]) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() + b.into_inner()))),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 + b.into_inner()))),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() + *b as f32))),
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
@@ -354,8 +367,18 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 return Err(ExpressionError::InvalidArguments);
             }
 
+            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
+                return Ok(Value::Missing);
+            }
+            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
+                return Ok(Value::Null);
+            }
+
             match (&arguments[0], &arguments[1]) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() - b.into_inner()))),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 - b.into_inner()))),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() - *b as f32))),
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
@@ -364,8 +387,18 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 return Err(ExpressionError::InvalidArguments);
             }
 
+            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
+                return Ok(Value::Missing);
+            }
+            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
+                return Ok(Value::Null);
+            }
+
             match (&arguments[0], &arguments[1]) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() * b.into_inner()))),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 * b.into_inner()))),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() * *b as f32))),
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
@@ -374,8 +407,24 @@ fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
                 return Err(ExpressionError::InvalidArguments);
             }
 
+            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
+                return Ok(Value::Missing);
+            }
+            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
+                return Ok(Value::Null);
+            }
+
             match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+                (Value::Int(a), Value::Int(b)) => {
+                    if *b == 0 {
+                        Ok(Value::Null)
+                    } else {
+                        Ok(Value::Int(a / b))
+                    }
+                }
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() / b.into_inner()))),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 / b.into_inner()))),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() / *b as f32))),
                 _ => Err(ExpressionError::InvalidArguments),
             }
         }
@@ -511,27 +560,48 @@ impl Relation {
         let left_result = left.expression_value(variables)?;
         let right_result = right.expression_value(variables)?;
 
+        // NULL/MISSING: any comparison involving Null or Missing returns false
+        if matches!(&left_result, Value::Null | Value::Missing) || matches!(&right_result, Value::Null | Value::Missing) {
+            return Ok(false);
+        }
+
         match self {
             Relation::Equal => Ok(left_result == right_result),
             Relation::NotEqual => Ok(left_result != right_result),
             Relation::GreaterEqual => match (left_result, right_result) {
                 (Value::Int(l), Value::Int(r)) => Ok(l >= r),
                 (Value::Float(l), Value::Float(r)) => Ok(l >= r),
+                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) >= r),
+                (Value::Float(l), Value::Int(r)) => Ok(l >= OrderedFloat::from(r as f32)),
+                (Value::String(l), Value::String(r)) => Ok(l >= r),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(l >= r),
                 _ => Err(ExpressionError::TypeMismatch),
             },
             Relation::LessEqual => match (left_result, right_result) {
                 (Value::Int(l), Value::Int(r)) => Ok(l <= r),
                 (Value::Float(l), Value::Float(r)) => Ok(l <= r),
+                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) <= r),
+                (Value::Float(l), Value::Int(r)) => Ok(l <= OrderedFloat::from(r as f32)),
+                (Value::String(l), Value::String(r)) => Ok(l <= r),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(l <= r),
                 _ => Err(ExpressionError::TypeMismatch),
             },
             Relation::MoreThan => match (left_result, right_result) {
                 (Value::Int(l), Value::Int(r)) => Ok(l > r),
                 (Value::Float(l), Value::Float(r)) => Ok(l > r),
+                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) > r),
+                (Value::Float(l), Value::Int(r)) => Ok(l > OrderedFloat::from(r as f32)),
+                (Value::String(l), Value::String(r)) => Ok(l > r),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(l > r),
                 _ => Err(ExpressionError::TypeMismatch),
             },
             Relation::LessThan => match (left_result, right_result) {
                 (Value::Int(l), Value::Int(r)) => Ok(l < r),
                 (Value::Float(l), Value::Float(r)) => Ok(l < r),
+                (Value::Int(l), Value::Float(r)) => Ok(OrderedFloat::from(l as f32) < r),
+                (Value::Float(l), Value::Int(r)) => Ok(l < OrderedFloat::from(r as f32)),
+                (Value::String(l), Value::String(r)) => Ok(l < r),
+                (Value::DateTime(l), Value::DateTime(r)) => Ok(l < r),
                 _ => Err(ExpressionError::TypeMismatch),
             },
         }
@@ -1497,5 +1567,59 @@ mod tests {
 
         let hour = evaluate("date_part", &vec![Value::String("second".to_string()), dt.clone()]).unwrap();
         assert_eq!(Value::Float(OrderedFloat::from(37.0)), hour);
+    }
+
+    #[test]
+    fn test_arithmetic_null_propagation() {
+        assert_eq!(evaluate("Plus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(evaluate("Plus", &vec![Value::Int(1), Value::Null]), Ok(Value::Null));
+        assert_eq!(evaluate("Plus", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
+        assert_eq!(evaluate("Minus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(evaluate("Times", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(evaluate("Divide", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+    }
+
+    #[test]
+    fn test_float_arithmetic() {
+        assert_eq!(
+            evaluate("Plus", &vec![Value::Float(OrderedFloat::from(1.5f32)), Value::Float(OrderedFloat::from(2.5f32))]),
+            Ok(Value::Float(OrderedFloat::from(4.0f32)))
+        );
+        // Mixed Int/Float promotion
+        assert_eq!(
+            evaluate("Plus", &vec![Value::Int(1), Value::Float(OrderedFloat::from(2.5f32))]),
+            Ok(Value::Float(OrderedFloat::from(3.5f32)))
+        );
+        assert_eq!(
+            evaluate("Plus", &vec![Value::Float(OrderedFloat::from(2.5f32)), Value::Int(1)]),
+            Ok(Value::Float(OrderedFloat::from(3.5f32)))
+        );
+    }
+
+    #[test]
+    fn test_comparison_int_float_coercion() {
+        let vars = Variables::default();
+        let rel = Relation::MoreThan;
+        let left = Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)));
+        let right = Expression::Constant(Value::Int(1));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(true));
+
+        let rel = Relation::LessThan;
+        let left = Expression::Constant(Value::Int(1));
+        let right = Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(true));
+    }
+
+    #[test]
+    fn test_comparison_null_returns_false() {
+        let vars = Variables::default();
+        let rel = Relation::Equal;
+        let left = Expression::Constant(Value::Null);
+        let right = Expression::Constant(Value::Int(1));
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(false));
+
+        let left = Expression::Constant(Value::Null);
+        let right = Expression::Constant(Value::Null);
+        assert_eq!(rel.apply(&vars, &left, &right), Ok(false));
     }
 }
