@@ -703,6 +703,10 @@ fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a st
     let (i, negated) = if let Ok((i2, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
         if let Ok((i3, _)) = multispace1::<&str, VerboseError<&str>>(i2) {
             if let Ok((i4, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("in")(i3) {
+                // Ensure "in" is not a prefix of another keyword (e.g., "intersect")
+                if i4.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    return Ok((input, expr));
+                }
                 (i4, true)
             } else {
                 return Ok((input, expr));

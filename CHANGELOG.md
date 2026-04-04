@@ -1,7 +1,7 @@
 # CHANGELOG — PartiQL Implementation Progress
 
 ## Current Status
-Phase 3 complete. Starting Phase 4: Set Operations.
+Phase 4 complete. All phases done.
 
 ## Completed Tasks
 
@@ -41,9 +41,16 @@ Phase 3 complete. Starting Phase 4: Set Operations.
 - **Step 27:** LEFT [OUTER] JOIN ... ON with NULL-padded non-matching rows. Refactored AST to use FromClause enum (Tables | Join) instead of Vec<TableReference>.
 - **Step 28:** Non-correlated scalar subqueries in WHERE and SELECT. Added Expression::Subquery, recursive parse_query, data_source to ParsingContext.
 
+### Phase 4: Set Operations (2026-04-04)
+- **Step 29:** UNION / UNION ALL — top-level Query enum wrapping SelectStatement + SetOp. UnionStream drains left then right. UNION uses Distinct for dedup.
+- **Step 30:** INTERSECT / EXCEPT (+ ALL variants) — materializes right query into multiset, filters left. Fixed IN/INTERSECT parser ambiguity with word boundary check.
+- **Step 31:** Comprehensive integration tests exercising full pipeline.
+
 ## Failed Approaches
 - Worktree isolation caused branch confusion when two agents ran in parallel. Avoided worktrees after that.
 
 ## Known Limitations
 - No correlated subqueries (only non-correlated scalar subqueries supported)
-- No UNION/INTERSECT/EXCEPT
+- No INNER JOIN (can simulate with CROSS JOIN + WHERE)
+- No window functions
+- No PIVOT, Ion literals, bag literals
