@@ -306,4 +306,80 @@ mod tests {
 
         dir.close().unwrap();
     }
+
+    #[test]
+    fn test_run_cross_join_jsonl() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("cross_join_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // Self cross join: FROM it AS a CROSS JOIN it AS b
+        let result = run(
+            r#"select a.x, b.x from it as a cross join it as b"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_cross_join_comma_syntax() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("cross_join_comma_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // Comma-separated FROM items (implicit cross join)
+        let result = run(
+            r#"select a.x, b.x from it as a, it as b"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_run_cross_join_with_where() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("cross_join_where_test.log");
+        let file_format = "jsonl".to_string();
+        let table_name = "it".to_string();
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file, r#"{{"x": 3}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+
+        // Cross join with filter
+        let result = run(
+            r#"select a.x, b.x from it as a cross join it as b where a.x < b.x"#,
+            data_source.clone(),
+            OutputMode::Csv,
+        );
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
 }

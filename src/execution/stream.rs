@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, StreamResult};
+use super::types::{Aggregate, Formula, Named, NamedAggregate, Node, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::syntax::ast;
@@ -82,6 +82,14 @@ impl Record {
                 Value::Array(_) => Cell::new("[...]"),
             })
             .collect()
+    }
+
+    pub(crate) fn merge(&self, other: &Record) -> Record {
+        let mut variables = self.variables.clone();
+        for (k, v) in other.variables.iter() {
+            variables.insert(k.clone(), v.clone());
+        }
+        Record { variables }
     }
 
     pub(crate) fn to_csv_record(&self) -> Vec<String> {
@@ -618,6 +626,57 @@ impl RecordStream for LogFileStream {
     fn close(&self) {}
 }
 
+pub(crate) struct CrossJoinStream {
+    left: Box<dyn RecordStream>,
+    right_node: Node,
+    right_variables: Variables,
+    current_left: Option<Record>,
+    right_stream: Option<Box<dyn RecordStream>>,
+}
+
+impl CrossJoinStream {
+    pub(crate) fn new(left: Box<dyn RecordStream>, right_node: Node, right_variables: Variables) -> Self {
+        CrossJoinStream {
+            left,
+            right_node,
+            right_variables,
+            current_left: None,
+            right_stream: None,
+        }
+    }
+}
+
+impl RecordStream for CrossJoinStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        loop {
+            // If we have a right stream, try to get next right record
+            if let Some(ref mut right) = self.right_stream {
+                if let Some(right_record) = right.next()? {
+                    // Merge left and right records
+                    let left = self.current_left.as_ref().unwrap();
+                    let merged = left.merge(&right_record);
+                    return Ok(Some(merged));
+                }
+            }
+            // Get next left record and reset right stream
+            match self.left.next()? {
+                Some(left_record) => {
+                    self.current_left = Some(left_record);
+                    // Re-create right stream from scratch
+                    let right_stream = self.right_node.get(self.right_variables.clone())
+                        .map_err(|e| super::types::StreamError::Get(e))?;
+                    self.right_stream = Some(right_stream);
+                }
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn close(&self) {
+        self.left.close();
+    }
+}
+
 pub(crate) struct DistinctStream {
     source: Box<dyn RecordStream>,
     seen: std::collections::HashSet<Vec<(VariableName, Value)>>,
@@ -901,5 +960,43 @@ mod tests {
 
         let result = distinct_stream.next().unwrap();
         assert_eq!(None, result);
+    }
+
+    #[test]
+    fn test_record_merge() {
+        let left = Record::new(
+            &vec!["a".to_string(), "b".to_string()],
+            vec![Value::Int(1), Value::Int(2)],
+        );
+        let right = Record::new(
+            &vec!["c".to_string(), "d".to_string()],
+            vec![Value::Int(3), Value::Int(4)],
+        );
+
+        let merged = left.merge(&right);
+        let expected = Record::new(
+            &vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()],
+            vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+        );
+
+        assert_eq!(expected, merged);
+    }
+
+    #[test]
+    fn test_record_merge_overlapping_keys() {
+        // When keys overlap, the right record's values should take precedence
+        let left = Record::new(
+            &vec!["a".to_string(), "b".to_string()],
+            vec![Value::Int(1), Value::Int(2)],
+        );
+        let right = Record::new(
+            &vec!["b".to_string(), "c".to_string()],
+            vec![Value::Int(99), Value::Int(3)],
+        );
+
+        let merged = left.merge(&right);
+        // b should be overwritten with 99
+        let path_b = ast::PathExpr::new(vec![ast::PathSegment::AttrName("b".to_string())]);
+        assert_eq!(Value::Int(99), merged.get(&path_b));
     }
 }

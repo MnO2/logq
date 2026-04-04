@@ -472,11 +472,26 @@ fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&
     )(i)
 }
 
+fn table_reference_separator(i: &str) -> IResult<&str, (), VerboseError<&str>> {
+    alt((
+        map(preceded(space0, char(',')), |_| ()),
+        map(
+            tuple((
+                multispace1,
+                tag_no_case("cross"),
+                multispace1,
+                tag_no_case("join"),
+            )),
+            |_| (),
+        ),
+    ))(i)
+}
+
 fn table_reference_list(i: &str) -> IResult<&str, Vec<ast::TableReference>, VerboseError<&str>> {
     context(
         "table_reference_list",
         terminated(
-            separated_list0(preceded(space0, char(',')), preceded(space0, table_reference)),
+            separated_list0(table_reference_separator, preceded(space0, table_reference)),
             space0,
         ),
     )(i)
@@ -2198,5 +2213,52 @@ mod test {
     fn test_cast_with_expression() {
         let result = expression("cast(a + b as varchar)");
         assert!(result.is_ok(), "cast(a + b as varchar) should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_cross_join_parsing() {
+        let result = select_query("select a.x, b.y from it as a cross join it as b");
+        assert!(result.is_ok(), "CROSS JOIN should parse, got: {:?}", result);
+        let (_, stmt) = result.unwrap();
+        assert_eq!(stmt.table_references.len(), 2);
+        assert_eq!(stmt.table_references[0].as_clause, Some("a".to_string()));
+        assert_eq!(stmt.table_references[1].as_clause, Some("b".to_string()));
+    }
+
+    #[test]
+    fn test_cross_join_case_insensitive() {
+        let result = select_query("select a.x from it as a CROSS JOIN it as b");
+        assert!(result.is_ok(), "CROSS JOIN (uppercase) should parse, got: {:?}", result);
+        let (_, stmt) = result.unwrap();
+        assert_eq!(stmt.table_references.len(), 2);
+    }
+
+    #[test]
+    fn test_cross_join_and_comma_both_work() {
+        // Comma-separated FROM items (implicit cross join)
+        let result1 = select_query("select a.x from it as a, it as b");
+        assert!(result1.is_ok(), "Comma-separated FROM should parse, got: {:?}", result1);
+        let (_, stmt1) = result1.unwrap();
+        assert_eq!(stmt1.table_references.len(), 2);
+
+        // Explicit CROSS JOIN
+        let result2 = select_query("select a.x from it as a cross join it as b");
+        assert!(result2.is_ok(), "CROSS JOIN should parse, got: {:?}", result2);
+        let (_, stmt2) = result2.unwrap();
+        assert_eq!(stmt2.table_references.len(), 2);
+    }
+
+    #[test]
+    fn test_cross_join_with_where() {
+        let result = select_query("select a.x, b.y from it as a cross join it as b where a.x = b.y");
+        assert!(result.is_ok(), "CROSS JOIN with WHERE should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_cross_join_three_way() {
+        let result = select_query("select * from it as a cross join it as b cross join it as c");
+        assert!(result.is_ok(), "Three-way CROSS JOIN should parse, got: {:?}", result);
+        let (_, stmt) = result.unwrap();
+        assert_eq!(stmt.table_references.len(), 3);
     }
 }

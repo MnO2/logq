@@ -462,16 +462,14 @@ fn check_contains_group_as_var(named_list: &[types::Named], group_as_var: &Strin
 }
 
 fn check_env(table_name: &String, table_references: &Vec<TableReference>) -> ParseResult<()> {
-    for (i, table_reference) in table_references.iter().enumerate() {
-        if i == 0 {
-            match &table_reference.path_expr.path_segments[0] {
-                PathSegment::AttrName(s) => {
-                    if !s.eq(table_name) {
-                        return Err(ParseError::FromClausePathInvalidTableReference);
-                    }
+    for table_reference in table_references.iter() {
+        match &table_reference.path_expr.path_segments[0] {
+            PathSegment::AttrName(s) => {
+                if !s.eq(table_name) {
+                    return Err(ParseError::FromClausePathInvalidTableReference);
                 }
-                _ => return Err(ParseError::FromClausePathInvalidTableReference),
             }
+            _ => return Err(ParseError::FromClausePathInvalidTableReference),
         }
         let path_expr = &table_reference.path_expr;
 
@@ -487,40 +485,41 @@ fn check_env(table_name: &String, table_references: &Vec<TableReference>) -> Par
     Ok(())
 }
 
+fn to_bindings_for_ref(table_name: &String, table_reference: &TableReference) -> Vec<common::Binding> {
+    let path_expr = match &table_reference.path_expr.path_segments[0] {
+        PathSegment::AttrName(s) => {
+            if s.eq(table_name) {
+                PathExpr::new(
+                    table_reference
+                        .path_expr
+                        .path_segments
+                        .iter()
+                        .skip(1)
+                        .cloned()
+                        .collect(),
+                )
+            } else {
+                table_reference.path_expr.clone()
+            }
+        }
+        _ => table_reference.path_expr.clone(),
+    };
+
+    if let Some(name) = table_reference.as_clause.clone() {
+        vec![common::Binding {
+            path_expr,
+            name,
+            idx_name: table_reference.at_clause.clone(),
+        }]
+    } else {
+        vec![]
+    }
+}
+
 fn to_bindings(table_name: &String, table_references: &Vec<TableReference>) -> Vec<common::Binding> {
     table_references
         .iter()
-        .map(|table_reference| {
-            let path_expr = match &table_reference.path_expr.path_segments[0] {
-                PathSegment::AttrName(s) => {
-                    if s.eq(table_name) {
-                        PathExpr::new(
-                            table_reference
-                                .path_expr
-                                .path_segments
-                                .iter()
-                                .skip(1)
-                                .cloned()
-                                .collect(),
-                        )
-                    } else {
-                        table_reference.path_expr.clone()
-                    }
-                }
-                _ => table_reference.path_expr.clone(),
-            };
-
-            if let Some(name) = table_reference.as_clause.clone() {
-                Some(common::Binding {
-                    path_expr,
-                    name,
-                    idx_name: table_reference.at_clause.clone(),
-                })
-            } else {
-                None
-            }
-        })
-        .filter_map(|x| x)
+        .flat_map(|table_reference| to_bindings_for_ref(table_name, table_reference))
         .collect()
 }
 
@@ -570,9 +569,21 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     let parsing_context = ParsingContext {
         table_name: table_name.clone(),
     };
-    let bindings = to_bindings(&table_name, table_references);
 
-    let mut root = types::Node::DataSource(data_source, bindings);
+    let mut root = if table_references.len() == 1 {
+        let bindings = to_bindings(&table_name, table_references);
+        types::Node::DataSource(data_source, bindings)
+    } else {
+        // Multiple table references: build a cross join tree
+        let first_bindings = to_bindings_for_ref(&table_name, &table_references[0]);
+        let mut node = types::Node::DataSource(data_source.clone(), first_bindings);
+        for table_ref in table_references.iter().skip(1) {
+            let ref_bindings = to_bindings_for_ref(&table_name, table_ref);
+            let right = types::Node::DataSource(data_source.clone(), ref_bindings);
+            node = types::Node::CrossJoin(Box::new(node), Box::new(right));
+        }
+        node
+    };
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -1557,5 +1568,102 @@ mod test {
 
         let ans = parse_query(before, data_source).unwrap();
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_query_cross_join_produces_cross_join_node() {
+        let path_expr_ax = PathExpr::new(vec![
+            PathSegment::AttrName("a".to_string()),
+            PathSegment::AttrName("x".to_string()),
+        ]);
+
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_ax.clone())), None),
+        ];
+
+        let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_ref_a = ast::TableReference::new(path_expr_it.clone(), Some("a".to_string()), None);
+        let table_ref_b = ast::TableReference::new(path_expr_it.clone(), Some("b".to_string()), None);
+
+        let stmt = ast::SelectStatement::new(
+            false,
+            SelectClause::SelectExpressions(select_exprs),
+            vec![table_ref_a, table_ref_b],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+
+        let result = parse_query(stmt, data_source.clone());
+        assert!(result.is_ok(), "Cross join query should parse: {:?}", result);
+
+        let node = result.unwrap();
+        // The root should be Map -> CrossJoin(DataSource, DataSource)
+        match node {
+            types::Node::Map(_, source) => match *source {
+                types::Node::CrossJoin(left, right) => {
+                    match *left {
+                        types::Node::DataSource(ds, bindings) => {
+                            assert_eq!(ds, data_source);
+                            assert_eq!(bindings.len(), 1);
+                            assert_eq!(bindings[0].name, "a");
+                        }
+                        other => panic!("Expected DataSource for left, got: {:?}", other),
+                    }
+                    match *right {
+                        types::Node::DataSource(ds, bindings) => {
+                            assert_eq!(ds, data_source);
+                            assert_eq!(bindings.len(), 1);
+                            assert_eq!(bindings[0].name, "b");
+                        }
+                        other => panic!("Expected DataSource for right, got: {:?}", other),
+                    }
+                }
+                other => panic!("Expected CrossJoin node, got: {:?}", other),
+            },
+            other => panic!("Expected Map node at root, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_single_from_no_cross_join() {
+        // A single table reference should NOT produce a CrossJoin node
+        let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
+
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
+        ];
+
+        let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_ref = ast::TableReference::new(path_expr_it, None, None);
+
+        let stmt = ast::SelectStatement::new(
+            false,
+            SelectClause::SelectExpressions(select_exprs),
+            vec![table_ref],
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+
+        let result = parse_query(stmt, data_source);
+        assert!(result.is_ok());
+
+        let node = result.unwrap();
+        match node {
+            types::Node::Map(_, source) => match *source {
+                types::Node::DataSource(_, _) => {
+                    // Good - single table reference goes straight to DataSource
+                }
+                other => panic!("Expected DataSource node for single FROM, got: {:?}", other),
+            },
+            other => panic!("Expected Map node at root, got: {:?}", other),
+        }
     }
 }

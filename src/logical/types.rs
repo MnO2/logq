@@ -24,6 +24,7 @@ pub(crate) enum Node {
     Limit(u32, Box<Node>),
     OrderBy(Vec<PathExpr>, Vec<Ordering>, Box<Node>),
     Distinct(Box<Node>),
+    CrossJoin(Box<Node>, Box<Node>),
 }
 
 impl Node {
@@ -104,6 +105,13 @@ impl Node {
                 let (child, child_variables) = source.physical(physical_plan_creator)?;
                 let node = execution::Node::Distinct(child);
                 Ok((Box::new(node), child_variables))
+            }
+            Node::CrossJoin(left, right) => {
+                let (left_child, left_variables) = left.physical(physical_plan_creator)?;
+                let (right_child, right_variables) = right.physical(physical_plan_creator)?;
+                let return_variables = common::merge(&left_variables, &right_variables);
+                let node = execution::Node::CrossJoin(left_child, right_child);
+                Ok((Box::new(node), return_variables))
             }
         }
     }
