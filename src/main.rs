@@ -8,6 +8,7 @@ extern crate pdatastructs;
 mod app;
 mod common;
 mod execution;
+mod functions;
 mod logical;
 mod syntax;
 
