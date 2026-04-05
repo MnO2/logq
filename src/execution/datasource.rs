@@ -770,14 +770,28 @@ pub struct Reader<R> {
     rdr: io::BufReader<R>,
     format: LogFormat,
     buf: String,
+    /// Cached field info to avoid per-record match dispatch
+    field_names: &'static Vec<String>,
+    datatypes: &'static Vec<DataType>,
+    field_count: usize,
 }
 
 impl<R: io::Read> Reader<R> {
     pub fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> Reader<R> {
+        let format = LogFormat::from_str(&file_format);
+        let (field_names, datatypes, field_count) = if !matches!(format, LogFormat::Jsonl) {
+            format.field_info()
+        } else {
+            // Dummy values for JSONL — not used in the JSONL path
+            (&*AWS_ELB_FIELD_NAMES, &*AWS_ELB_DATATYPES, 0)
+        };
         Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
-            format: LogFormat::from_str(&file_format),
+            format,
             buf: String::with_capacity(512),
+            field_names,
+            datatypes,
+            field_count,
         }
     }
 
@@ -791,7 +805,9 @@ impl<R: io::Read> RecordRead for Reader<R> {
         let more_data = self.rdr.read_line(&mut self.buf)?;
 
         if more_data > 0 && !matches!(self.format, LogFormat::Jsonl) {
-            let (field_names, datatypes, field_count) = self.format.field_info();
+            let field_names = self.field_names;
+            let datatypes = self.datatypes;
+            let field_count = self.field_count;
 
             let mut record_vars = common::types::Variables::with_capacity(field_count);
             let mut value_cnt: usize = 0;

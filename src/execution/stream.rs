@@ -157,7 +157,7 @@ impl MapStream {
             && named_list.len() == 1
             && matches!(&named_list[0], Named::Star);
         // Pre-compute (source_field, output_column) pairs for simple_projection
-        let projection_map = if simple_projection {
+        let projection_map: Vec<(String, String)> = if simple_projection {
             named_list.iter().enumerate().filter_map(|(idx, named)| {
                 if let Named::Expression(Expression::Variable(pe), _) = named {
                     if let PathSegment::AttrName(ref field_name) = pe.path_segments[0] {
