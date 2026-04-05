@@ -232,14 +232,61 @@
 | map_keys | 72.6 ns | 57.1 ns | **-21%** |
 | regexp_like | 2.82 us | 2.91 us | ~0% |
 
+## Round 6 Optimizations (2026-04-05)
+
+24. **Replace parse_host regex with rsplit_once**: Replaced `HOST_REGEX.captures()` with `s.rsplit_once(':')` for host:port parsing. Eliminates regex engine overhead for a trivial split operation.
+25. **Replace parse_http_request regex with splitn**: Replaced `SPLIT_HTTP_LINE_REGEX.find_iter()` with `s.splitn(3, ' ')` for HTTP request line parsing. Eliminates regex engine overhead.
+26. **Remove dead code**: Removed unused `KEYWORDS` lazy_static from parser (replaced by `is_keyword()`), removed unused `HOST_REGEX` and `SPLIT_HTTP_LINE_REGEX` lazy_statics from common/types.
+
+## Cumulative Results (Original Baseline → Current, Round 6)
+
+| Benchmark | Baseline | Current | Improvement |
+|---|---|---|---|
+| **Parser** | | | |
+| L1_trivial | 2.55 us | 744 ns | **-71%** |
+| L2_where | 8.09 us | 2.02 us | **-75%** |
+| L3_group_order_limit | 9.40 us | 2.51 us | **-73%** |
+| L4_having_like | 16.12 us | 4.15 us | **-74%** |
+| L5_casewhen_join | 18.52 us | 5.04 us | **-73%** |
+| L6_in_union | 8.70 us | 1.97 us | **-77%** |
+| **Execution (synthetic)** | | | |
+| execution_map/1K | 754 us | 259 us | **-66%** |
+| execution_map/10K | 7.71 ms | 2.59 ms | **-66%** |
+| execution_map/100K | 75.4 ms | 26.1 ms | **-65%** |
+| execution_filter/1K | 526 us | 160 us | **-70%** |
+| execution_filter/10K | 5.28 ms | 1.58 ms | **-70%** |
+| execution_filter/100K | 52.8 ms | 15.9 ms | **-70%** |
+| execution_limit/1K | 132 us | 121 us | **-8%** |
+| execution_limit/10K | 1.32 ms | 1.23 ms | **-7%** |
+| execution_limit/100K | 13.3 ms | 12.0 ms | **-10%** |
+| **Execution (e2e)** | | | |
+| E1_scan_limit | 121 us | 70 us | **-42%** |
+| E2_groupby_count | 6.79 ms | 3.70 ms | **-46%** |
+| E3_filter_orderby | 8.58 us | 2.19 us | **-74%** |
+| **Datasource** | | | |
+| ELB | 2.89 ms | 2.27 ms | **-21%** |
+| ALB | 4.52 ms | 3.56 ms | **-21%** |
+| S3 | 3.12 ms | 2.64 ms | **-15%** |
+| Squid | 1.29 ms | 1.07 ms | **-17%** |
+| JSONL | 819 us | 760 us | **-7%** |
+| **UDF** | | | |
+| upper | 40.2 ns | 30.2 ns | **-25%** |
+| round | 25.9 ns | 19.4 ns | **-25%** |
+| date_part | 32.1 ns | 26.3 ns | **-18%** |
+| array_contains | 33.2 ns | 22.0 ns | **-34%** |
+| map_keys | 72.6 ns | 55.1 ns | **-24%** |
+| regexp_like | 2.82 us | 2.90 us | ~0% |
+
 ## Summary
 
-- **Parser: 71-76% faster** — VerboseError→Error, first-char keyword dispatch
-- **Execution map: 64-65% faster** — merge elimination + Value boxing + move-based projections
-- **Execution filter: 68-69% faster** — merge elimination + Value boxing + pre-allocation
-- **E1 scan_limit e2e: 37% faster** — SELECT * passthrough eliminates record rebuilding
-- **E2 groupby e2e: 42% faster** — merge + capacity + function registry
-- **E3 filter e2e: 74% faster** — VerboseError→Error + move-based optimizations
-- **Datasource: 3-18% faster** — format resolution + pre-allocation + buffer reuse + Value boxing
-- **UDFs: 13-31% faster** — pre-lowercased function names (partially offset by Box indirection)
+- **Parser: 71-77% faster** — VerboseError→Error, first-char keyword dispatch
+- **Execution map: 65-66% faster** — merge elimination + Value boxing + move-based projections
+- **Execution filter: 70% faster** — merge elimination + Value boxing + pre-allocation
+- **Execution limit: 8-10% faster** — Value boxing + general overhead reduction
+- **E1 scan_limit e2e: 42% faster** — SELECT * passthrough + parser speedup
+- **E2 groupby e2e: 46% faster** — merge + capacity + function registry + regex-free parsing
+- **E3 filter e2e: 74% faster** — VerboseError→Error + optimized evaluation
+- **Datasource ELB/ALB: 21% faster** — regex-free host/HTTP parsing + format resolution + Value boxing
+- **Datasource S3/Squid: 15-17% faster** — format resolution + pre-allocation + buffer reuse
+- **UDFs: 18-34% faster** — pre-lowercased function names
 - No new dependencies, all 488 tests pass, all changes backwards-compatible

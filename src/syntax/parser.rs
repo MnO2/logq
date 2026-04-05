@@ -20,17 +20,6 @@ use crate::syntax::ast::{
 };
 use hashbrown::hash_map::HashMap;
 
-lazy_static! {
-    static ref KEYWORDS: Vec<&'static str> = {
-        vec![
-            "select", "value", "from", "where", "group", "by", "limit", "order", "true", "false", "case", "when",
-            "then", "as", "at", "not", "and", "or", "asc", "desc", "having", "within", "else", "end",
-            "distinct", "join", "cross", "left", "inner", "on", "lateral", "like", "between", "in", "is", "null",
-            "missing", "cast", "union", "intersect", "except", "all", "exists",
-        ]
-    };
-}
-
 fn case_when_branch(i: &str) -> IResult<&str, (ast::Expression, ast::Expression), nom::error::Error<&str>> {
     let (remaining_input, (_, condition, _, then_expr)) = tuple((
         tuple((multispace0, tag_no_case("when"), space1)),

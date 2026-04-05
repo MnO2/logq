@@ -12,9 +12,6 @@ use std::sync::Arc;
 use url;
 
 lazy_static! {
-    //FIXME: use different type for string hostname and Ipv4
-    static ref HOST_REGEX: Regex = Regex::new(r#"([\.0-9a-zA-Z]+):([0-9]+)"#).unwrap();
-    static ref SPLIT_HTTP_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
     static ref SPLIT_TIME_INTERVAL_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
 }
 
@@ -62,12 +59,9 @@ impl fmt::Display for Host {
 }
 
 pub(crate) fn parse_host(s: &str) -> ParseHostResult<Host> {
-    if let Some(cap) = HOST_REGEX.captures(s) {
-        //FIXME: very simplified parsing.
-        let hostname = cap.get(1).map_or("", |m| m.as_str()).to_string();
-        let port: u16 = cap.get(2).map_or("", |m| m.as_str()).parse::<u16>()?;
-
-        let host = Host { hostname, port };
+    if let Some((hostname_str, port_str)) = s.rsplit_once(':') {
+        let port: u16 = port_str.parse::<u16>()?;
+        let host = Host { hostname: hostname_str.to_string(), port };
         Ok(host)
     } else {
         Err(ParseHostError::ParseHost)
@@ -126,40 +120,21 @@ pub(crate) fn parse_http_version(s: &str) -> ParseHttpRequestResult<HttpVersion>
 }
 
 pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest> {
-    let mut iter = SPLIT_HTTP_LINE_REGEX.find_iter(&s);
+    let mut parts = s.splitn(3, ' ');
 
-    let http_method_opt = if let Some(m) = iter.next() {
-        let method = parse_http_method(m.as_str())?;
-        Some(method)
-    } else {
-        None
-    };
+    let method_str = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
+    let url_str = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
+    let version_str = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
 
-    let url_opt = if let Some(m) = iter.next() {
-        let url = url::Url::parse(m.as_str())?;
-        Some(url)
-    } else {
-        None
-    };
+    let http_method = parse_http_method(method_str)?;
+    let url = url::Url::parse(url_str)?;
+    let http_version = parse_http_version(version_str)?;
 
-    let http_version_opt = if let Some(m) = iter.next() {
-        let version = parse_http_version(m.as_str())?;
-        Some(version)
-    } else {
-        None
-    };
-
-    if let (Some(http_method), Some(url), Some(http_version)) = (http_method_opt, url_opt, http_version_opt) {
-        let request = HttpRequest {
-            http_method,
-            url,
-            http_version,
-        };
-
-        Ok(request)
-    } else {
-        Err(ParseHttpRequestError::MissingField)
-    }
+    Ok(HttpRequest {
+        http_method,
+        url,
+        http_version,
+    })
 }
 
 pub(crate) type ParseTimeIntervalResult<T> = result::Result<T, ParseTimeIntervalError>;
