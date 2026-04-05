@@ -186,13 +186,60 @@
 | map_keys | 72.6 ns | 57.1 ns | **-21%** |
 | regexp_like | 2.82 us | 2.91 us | ~0% |
 
+## Round 5 Optimizations (2026-04-05)
+
+20. **Move-based MapStream for simple projections**: When all SELECT expressions are simple single-segment Variable references with no extra variables to merge, take ownership of the source record and use `remove()` to move Values instead of cloning. Eliminates Value::clone (including heap-allocating String clone) per projected column per record.
+21. **SELECT * passthrough**: When the named list is a single Star with no extra variables, return the source record directly without any copying or rebuilding.
+22. **Fix Formula::NotIn cloning**: Previously delegated to `Formula::In(expr.clone(), list.clone())`, cloning the entire expression tree per evaluation. Now inlines the NOT IN logic with negated return values.
+23. **Cache LIKE regex compilations**: Thread-local LRU cache (capacity 64) for compiled LIKE patterns, same pattern as regexp functions. Avoids `Regex::new()` on every LIKE evaluation when patterns repeat.
+
+## Cumulative Results (Original Baseline → Current, Round 5)
+
+| Benchmark | Baseline | Current | Improvement |
+|---|---|---|---|
+| **Parser** | | | |
+| L1_trivial | 2.55 us | 749 ns | **-71%** |
+| L2_where | 8.09 us | 2.06 us | **-75%** |
+| L3_group_order_limit | 9.40 us | 2.54 us | **-73%** |
+| L4_having_like | 16.12 us | 4.38 us | **-73%** |
+| L5_casewhen_join | 18.52 us | 5.03 us | **-73%** |
+| L6_in_union | 8.70 us | 2.09 us | **-76%** |
+| **Execution (synthetic)** | | | |
+| execution_map/1K | 754 us | 268 us | **-64%** |
+| execution_map/10K | 7.71 ms | 2.69 ms | **-65%** |
+| execution_map/100K | 75.4 ms | 26.9 ms | **-64%** |
+| execution_filter/1K | 526 us | 166 us | **-68%** |
+| execution_filter/10K | 5.28 ms | 1.64 ms | **-69%** |
+| execution_filter/100K | 52.8 ms | 16.6 ms | **-69%** |
+| execution_limit/1K | 132 us | 135 us | ~0% |
+| execution_limit/10K | 1.32 ms | 1.40 ms | ~0% |
+| execution_limit/100K | 13.3 ms | 13.3 ms | ~0% |
+| **Execution (e2e)** | | | |
+| E1_scan_limit | 121 us | 76 us | **-37%** |
+| E2_groupby_count | 6.79 ms | 3.94 ms | **-42%** |
+| E3_filter_orderby | 8.58 us | 2.19 us | **-74%** |
+| **Datasource** | | | |
+| ELB | 2.89 ms | 2.59 ms | **-10%** |
+| ALB | 4.52 ms | 4.09 ms | **-10%** |
+| S3 | 3.12 ms | 2.59 ms | **-17%** |
+| Squid | 1.29 ms | 1.06 ms | **-18%** |
+| JSONL | 819 us | 791 us | **-3%** |
+| **UDF** | | | |
+| upper | 40.2 ns | 32.5 ns | **-19%** |
+| round | 25.9 ns | 21.1 ns | **-19%** |
+| date_part | 32.1 ns | 27.8 ns | **-13%** |
+| array_contains | 33.2 ns | 23.0 ns | **-31%** |
+| map_keys | 72.6 ns | 57.1 ns | **-21%** |
+| regexp_like | 2.82 us | 2.91 us | ~0% |
+
 ## Summary
 
-- **Parser: 70-77% faster** — VerboseError→Error eliminates Vec allocs, first-char keyword dispatch
-- **Execution filter/map: 55-66% faster** — merge elimination + Value boxing + pre-allocation
-- **Execution limit: 3-7% faster** — Value boxing reduces per-record overhead
-- **E2 groupby e2e: 34% faster** — merge + capacity + function registry
-- **E3 filter e2e: 73% faster** — VerboseError→Error dominates (query parsing was bottleneck for this small-data benchmark)
-- **Datasource: 0-13% faster** — format resolution + pre-allocation + buffer reuse + Value boxing
-- **UDFs: 17-34% faster** — pre-lowercased function names (partially offset by Box indirection)
+- **Parser: 71-76% faster** — VerboseError→Error, first-char keyword dispatch
+- **Execution map: 64-65% faster** — merge elimination + Value boxing + move-based projections
+- **Execution filter: 68-69% faster** — merge elimination + Value boxing + pre-allocation
+- **E1 scan_limit e2e: 37% faster** — SELECT * passthrough eliminates record rebuilding
+- **E2 groupby e2e: 42% faster** — merge + capacity + function registry
+- **E3 filter e2e: 74% faster** — VerboseError→Error + move-based optimizations
+- **Datasource: 3-18% faster** — format resolution + pre-allocation + buffer reuse + Value boxing
+- **UDFs: 13-31% faster** — pre-lowercased function names (partially offset by Box indirection)
 - No new dependencies, all 488 tests pass, all changes backwards-compatible

@@ -339,6 +339,29 @@ fn like_pattern_to_regex(pattern: &str) -> String {
     regex
 }
 
+use std::cell::RefCell;
+use std::num::NonZeroUsize;
+
+thread_local! {
+    static LIKE_REGEX_CACHE: RefCell<lru::LruCache<String, regex::Regex>> = RefCell::new(
+        lru::LruCache::new(NonZeroUsize::new(64).unwrap())
+    );
+}
+
+fn get_or_compile_like_regex(pattern: &str) -> Result<regex::Regex, EvaluateError> {
+    LIKE_REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(re) = cache.get(pattern) {
+            return Ok(re.clone());
+        }
+        let regex_pattern = like_pattern_to_regex(pattern);
+        let re = regex::Regex::new(&regex_pattern)
+            .map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+        cache.put(pattern.to_string(), re.clone());
+        Ok(re)
+    })
+}
+
 impl Formula {
     pub(crate) fn evaluate(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
         match self {
@@ -408,8 +431,7 @@ impl Formula {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
                     (Value::String(s), Value::String(p)) => {
-                        let regex_pattern = like_pattern_to_regex(p);
-                        let re = regex::Regex::new(&regex_pattern).map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+                        let re = get_or_compile_like_regex(p)?;
                         Ok(Some(re.is_match(s)))
                     }
                     _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
@@ -422,8 +444,7 @@ impl Formula {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
                     (Value::String(s), Value::String(p)) => {
-                        let regex_pattern = like_pattern_to_regex(p);
-                        let re = regex::Regex::new(&regex_pattern).map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+                        let re = get_or_compile_like_regex(p)?;
                         Ok(Some(!re.is_match(s)))
                     }
                     _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
@@ -454,9 +475,28 @@ impl Formula {
                 }
             }
             Formula::NotIn(expr, list) => {
-                // NOT IN is the negation of IN
-                let in_result = Formula::In(expr.clone(), list.clone()).evaluate(variables, registry)?;
-                Ok(in_result.map(|b| !b))
+                let val = expr.expression_value(variables, registry)?;
+                match &val {
+                    Value::Null | Value::Missing => Ok(None),
+                    _ => {
+                        let mut has_null = false;
+                        for item_expr in list {
+                            let item = item_expr.expression_value(variables, registry)?;
+                            if item == Value::Null || item == Value::Missing {
+                                has_null = true;
+                                continue;
+                            }
+                            if val == item {
+                                return Ok(Some(false));
+                            }
+                        }
+                        if has_null {
+                            Ok(None)
+                        } else {
+                            Ok(Some(true))
+                        }
+                    }
+                }
             }
         }
     }

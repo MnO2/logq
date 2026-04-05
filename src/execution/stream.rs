@@ -1,9 +1,9 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Formula, Named, NamedAggregate, Node, StreamResult};
+use super::types::{Aggregate, Expression, Formula, Named, NamedAggregate, Node, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::functions::FunctionRegistry;
-use crate::syntax::ast;
+use crate::syntax::ast::{self, PathSegment};
 use linked_hash_map::LinkedHashMap;
 use prettytable::Cell;
 use std::collections::hash_set;
@@ -27,6 +27,10 @@ impl Record {
 
     pub(crate) fn new_with_variables(variables: Variables) -> Self {
         Record { variables }
+    }
+
+    pub(crate) fn into_variables(self) -> Variables {
+        self.variables
     }
 
     pub(crate) fn get(&self, field_name: &ast::PathExpr) -> Value {
@@ -125,6 +129,8 @@ pub struct MapStream {
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
     pub(crate) registry: Arc<FunctionRegistry>,
+    simple_projection: bool,
+    is_star_only: bool,
 }
 
 impl MapStream {
@@ -137,12 +143,25 @@ impl MapStream {
                 Named::Star => None,
             }
         }).collect();
+        // Pre-compute: can we use the move-based fast path?
+        // True when all entries are simple single-segment Variable references
+        // and variables is empty (no merge needed).
+        let simple_projection = variables.is_empty() && named_list.iter().all(|n| matches!(n,
+            Named::Expression(Expression::Variable(pe), _)
+                if pe.path_segments.len() == 1 && matches!(&pe.path_segments[0], PathSegment::AttrName(_))
+        ));
+        // Also check for pure SELECT * (single Star, no extra variables)
+        let is_star_only = variables.is_empty()
+            && named_list.len() == 1
+            && matches!(&named_list[0], Named::Star);
         MapStream {
             named_list,
             column_names,
             variables,
             source,
             registry,
+            simple_projection,
+            is_star_only,
         }
     }
 }
@@ -154,6 +173,28 @@ impl RecordStream for MapStream {
 
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if let Some(record) = self.source.next()? {
+            // Fast path: SELECT * with no extra variables — pass through unchanged
+            if self.is_star_only {
+                return Ok(Some(record));
+            }
+
+            // Fast path: all expressions are simple variable projections, no merge needed.
+            // Move values out of source record instead of cloning.
+            if self.simple_projection {
+                let mut source_vars = record.into_variables();
+                let mut out = Variables::with_capacity(self.named_list.len());
+                for (idx, named) in self.named_list.iter().enumerate() {
+                    if let Named::Expression(Expression::Variable(pe), _) = named {
+                        if let PathSegment::AttrName(ref field_name) = pe.path_segments[0] {
+                            let name = self.column_names[idx].as_ref().unwrap().clone();
+                            let v = source_vars.remove(field_name).unwrap_or(Value::Missing);
+                            out.insert(name, v);
+                        }
+                    }
+                }
+                return Ok(Some(Record::new_with_variables(out)));
+            }
+
             let variables_owned;
             let variables = if self.variables.is_empty() {
                 record.to_variables()
