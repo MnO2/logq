@@ -11,10 +11,10 @@ use crate::functions;
 use crate::logical;
 use crate::syntax;
 
-pub(crate) type AppResult<T> = result::Result<T, AppError>;
+pub type AppResult<T> = result::Result<T, AppError>;
 
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum AppError {
+pub enum AppError {
     #[error("Syntax Error: {0}")]
     Syntax(String),
     #[error("Input is fully consumed, the leftover are \"{0}\"")]
@@ -87,7 +87,7 @@ impl From<nom::Err<VerboseError<&str>>> for AppError {
 }
 
 
-pub(crate) enum OutputMode {
+pub enum OutputMode {
     Table,
     Csv,
     Json,
@@ -106,7 +106,7 @@ impl FromStr for OutputMode {
     }
 }
 
-pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
+pub fn explain(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -123,7 +123,7 @@ pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -
     Ok(())
 }
 
-pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, output_mode: OutputMode) -> AppResult<()> {
+pub fn run(query_str: &str, data_source: common::types::DataSource, output_mode: OutputMode) -> AppResult<()> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));

@@ -14,10 +14,10 @@ use std::result;
 use std::sync::Arc;
 use tdigest::TDigest;
 
-pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
+pub type EvaluateResult<T> = result::Result<T, EvaluateError>;
 
 #[derive(thiserror::Error, PartialEq, Eq, Debug)]
-pub(crate) enum EvaluateError {
+pub enum EvaluateError {
     #[error("{0}")]
     Expression(#[from] ExpressionError),
 }
@@ -52,10 +52,10 @@ impl From<StreamError> for CreateStreamError {
     }
 }
 
-pub(crate) type StreamResult<T> = result::Result<T, StreamError>;
+pub type StreamResult<T> = result::Result<T, StreamError>;
 
 #[derive(thiserror::Error, PartialEq, Eq, Debug)]
-pub(crate) enum StreamError {
+pub enum StreamError {
     #[error("{0}")]
     Get(#[from] CreateStreamError),
     #[error("{0}")]
@@ -80,10 +80,10 @@ impl From<AggregateError> for StreamError {
     }
 }
 
-pub(crate) type ExpressionResult<T> = result::Result<T, ExpressionError>;
+pub type ExpressionResult<T> = result::Result<T, ExpressionError>;
 
 #[derive(thiserror::Error, PartialEq, Eq, Debug)]
-pub(crate) enum ExpressionError {
+pub enum ExpressionError {
     #[error("Key Not Found")]
     KeyNotFound,
     #[error("Invalid Arguments")]

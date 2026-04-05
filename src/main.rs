@@ -1,18 +1,10 @@
-extern crate chrono;
-extern crate nom;
-extern crate prettytable;
 #[macro_use]
 extern crate lazy_static;
-extern crate pdatastructs;
 
-mod app;
-mod common;
-mod execution;
-mod functions;
-mod logical;
-mod syntax;
+use logq::app::{self, AppError, OutputMode};
+use logq::common;
+use logq::execution;
 
-use crate::app::AppError;
 use clap::load_yaml;
 use clap::App;
 use prettytable::{Cell, Row, Table};
@@ -33,7 +25,7 @@ fn main() {
         ("query", Some(sub_m)) => {
             if let Some(query_str) = sub_m.value_of("query") {
                 let output_mode = if let Some(output_format) = sub_m.value_of("output") {
-                    match app::OutputMode::from_str(output_format) {
+                    match OutputMode::from_str(output_format) {
                         Ok(output_mode) => output_mode,
                         Err(e) => {
                             eprintln!("{}", e);
@@ -41,7 +33,7 @@ fn main() {
                         }
                     }
                 } else {
-                    app::OutputMode::Table
+                    OutputMode::Table
                 };
 
                 let result = if let Some(table_spec_string) = sub_m.value_of("table") {

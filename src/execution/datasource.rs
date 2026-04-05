@@ -22,7 +22,7 @@ lazy_static! {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub(crate) enum DataType {
+pub enum DataType {
     DateTime,
     String,
     Integral,
@@ -255,7 +255,7 @@ lazy_static! {
 }
 
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/access-log-collection.html
-pub(crate) enum ClassicLoadBalancerLogField {
+pub enum ClassicLoadBalancerLogField {
     Timestamp = 0,
     Elbname = 1,
     ClientAndPort = 2,
@@ -345,7 +345,7 @@ impl ClassicLoadBalancerLogField {
         AWS_ELB_DATATYPES[idx].clone()
     }
 
-    pub(crate) fn schema() -> Vec<(String, DataType)> {
+    pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
@@ -353,7 +353,7 @@ impl ClassicLoadBalancerLogField {
 }
 
 //Reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
-pub(crate) enum ApplicationLoadBalancerLogField {
+pub enum ApplicationLoadBalancerLogField {
     Type = 0,
     Timestamp = 1,
     Elbname = 2,
@@ -433,7 +433,7 @@ impl ApplicationLoadBalancerLogField {
         AWS_ALB_DATATYPES[idx].clone()
     }
 
-    pub(crate) fn schema() -> Vec<(String, DataType)> {
+    pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
@@ -441,7 +441,7 @@ impl ApplicationLoadBalancerLogField {
 }
 
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/LogFormat.html
-pub(crate) enum S3Field {
+pub enum S3Field {
     BucketOwner = 0,
     Bucket = 1,
     Time = 2,
@@ -519,7 +519,7 @@ impl S3Field {
         AWS_S3_DATATYPES[idx].clone()
     }
 
-    pub(crate) fn schema() -> Vec<(String, DataType)> {
+    pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
@@ -527,7 +527,7 @@ impl S3Field {
 }
 
 //Reference: https://wiki.squid-cache.org/Features/LogFormat
-pub(crate) enum SquidLogField {
+pub enum SquidLogField {
     Timestamp = 0,
     Elapsed = 1,
     RemoteHost = 2,
@@ -577,17 +577,17 @@ impl SquidLogField {
         SQUID_DATATYPES[idx].clone()
     }
 
-    pub(crate) fn schema() -> Vec<(String, DataType)> {
+    pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
         fields.into_iter().zip(datatypes.into_iter()).collect()
     }
 }
 
-pub(crate) type ReaderResult<T> = result::Result<T, ReaderError>;
+pub type ReaderResult<T> = result::Result<T, ReaderError>;
 
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum ReaderError {
+pub enum ReaderError {
     #[error("{0}")]
     Io(#[from] io::Error),
     #[error("{0}")]
@@ -607,7 +607,7 @@ pub(crate) enum ReaderError {
 }
 
 #[derive(Debug)]
-pub(crate) struct ReaderBuilder {
+pub struct ReaderBuilder {
     capacity: usize,
     file_format: String,
 }

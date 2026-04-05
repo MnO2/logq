@@ -19,7 +19,7 @@ lazy_static! {
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub(crate) enum Value {
+pub enum Value {
     Int(i32),
     Float(OrderedFloat<f32>),
     Boolean(bool),
@@ -36,7 +36,7 @@ pub(crate) enum Value {
 pub(crate) type ParseHostResult<T> = result::Result<T, ParseHostError>;
 
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum ParseHostError {
+pub enum ParseHostError {
     #[error("Parse Host Error")]
     ParseHost,
     #[error("{0}")]
@@ -47,9 +47,9 @@ pub(crate) type Hostname = String;
 pub(crate) type Port = u16;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub(crate) struct Host {
-    pub(crate) hostname: Hostname,
-    pub(crate) port: Port,
+pub struct Host {
+    pub hostname: Hostname,
+    pub port: Port,
 }
 
 impl fmt::Display for Host {
@@ -77,7 +77,7 @@ pub(crate) fn parse_host(s: &str) -> ParseHostResult<Host> {
 pub(crate) type ParseHttpRequestResult<T> = result::Result<T, ParseHttpRequestError>;
 
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum ParseHttpRequestError {
+pub enum ParseHttpRequestError {
     #[error("Parse Http Method Error")]
     ParseHttpMethod,
     #[error("{0}")]
@@ -92,10 +92,10 @@ pub(crate) type HttpMethod = String;
 pub(crate) type HttpVersion = String;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub(crate) struct HttpRequest {
-    pub(crate) http_method: String,
-    pub(crate) url: url::Url,
-    pub(crate) http_version: String,
+pub struct HttpRequest {
+    pub http_method: String,
+    pub url: url::Url,
+    pub http_version: String,
 }
 
 impl fmt::Display for HttpRequest {
@@ -165,7 +165,7 @@ pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest>
 pub(crate) type ParseTimeIntervalResult<T> = result::Result<T, ParseTimeIntervalError>;
 
 #[derive(thiserror::Error, PartialEq, Eq, Clone, Debug)]
-pub(crate) enum ParseTimeIntervalError {
+pub enum ParseTimeIntervalError {
     #[error("Parse Integral Error: {0}")]
     ParseIntegral(#[from] std::num::ParseIntError),
     #[error("Missing Part")]
@@ -193,7 +193,7 @@ pub(crate) struct TimeInterval {
 pub(crate) type ParseDatePartResult<T> = result::Result<T, ParseDatePartError>;
 
 #[derive(thiserror::Error, PartialEq, Eq, Clone, Debug)]
-pub(crate) enum ParseDatePartError {
+pub enum ParseDatePartError {
     #[error("Unknown DatePart Unit")]
     UnknownDatePartUnit,
 }
@@ -429,7 +429,7 @@ impl std::fmt::Debug for ParsingContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DataSource {
+pub enum DataSource {
     File(PathBuf, String, String),
     Stdin(String, String),
 }
