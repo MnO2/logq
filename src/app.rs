@@ -244,6 +244,32 @@ pub fn run_to_records(
     Ok(results)
 }
 
+#[cfg(feature = "bench-internals")]
+pub fn run_to_records_with_registry(
+    query_str: &str,
+    data_source: common::types::DataSource,
+    registry: Arc<functions::FunctionRegistry>,
+) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
+    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
+    if !rest_of_str.is_empty() {
+        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
+    }
+    let q = syntax::desugar::desugar_query(q);
+
+    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
+
+    let mut stream = physical_plan.get(variables, registry)?;
+    let mut results = Vec::new();
+
+    while let Some(record) = stream.next()? {
+        results.push(record.to_tuples());
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

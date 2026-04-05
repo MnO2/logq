@@ -36,7 +36,7 @@ fn bench_udfs(c: &mut Criterion) {
     let fixed_dt = chrono::DateTime::parse_from_rfc3339("2024-06-15T10:30:00+00:00").unwrap();
     let args_datepart = vec![
         Value::String("month".to_string()),
-        Value::DateTime(Box::new(fixed_dt)),
+        Value::DateTime(fixed_dt),
     ];
     group.bench_function("date_part", |b| {
         b.iter(|| {

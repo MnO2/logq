@@ -19,6 +19,7 @@ fn bench_execution_tier_a(c: &mut Criterion) {
         return;
     }
 
+    let registry = Arc::new(functions::register_all().unwrap());
     let mut group = c.benchmark_group("execution_e2e");
 
     let queries = [
@@ -33,11 +34,13 @@ fn bench_execution_tier_a(c: &mut Criterion) {
             "elb".to_string(),
             "elb".to_string(),
         );
+        let reg = registry.clone();
         group.bench_function(*name, |b| {
             b.iter(|| {
-                let result = logq::app::run_to_records(
+                let result = logq::app::run_to_records_with_registry(
                     black_box(query),
                     data_source.clone(),
+                    reg.clone(),
                 );
                 let _ = black_box(result);
             });

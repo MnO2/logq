@@ -60,7 +60,7 @@ impl std::fmt::Debug for FunctionRegistry {
 impl FunctionRegistry {
     pub fn new() -> Self {
         FunctionRegistry {
-            functions: HashMap::new(),
+            functions: HashMap::with_capacity(150),
         }
     }
 
