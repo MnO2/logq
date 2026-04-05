@@ -40,5 +40,5 @@ pub mod bench_internals {
     pub use crate::execution::datasource::{ReaderBuilder, RecordRead, Reader};
 
     // Common types
-    pub use crate::common::types::{Value, Variables, VariableName, DataSource};
+    pub use crate::common::types::{Value, Variables, VariableName, DataSource, DataSourceRegistry};
 }

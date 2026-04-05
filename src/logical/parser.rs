@@ -1774,7 +1774,7 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+        let data_source = common::DataSource::File(std::path::PathBuf::from("/tmp/test.jsonl"), "jsonl".to_string(), "it".to_string());
         let data_sources: common::DataSourceRegistry = vec![("it".to_string(), data_source.clone())].into_iter().collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
@@ -1892,7 +1892,7 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+        let data_source = common::DataSource::File(std::path::PathBuf::from("/tmp/test.jsonl"), "jsonl".to_string(), "it".to_string());
         let data_sources: common::DataSourceRegistry = vec![("it".to_string(), data_source.clone())].into_iter().collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
 

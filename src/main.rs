@@ -9,12 +9,51 @@ use clap::load_yaml;
 use clap::App;
 use prettytable::{Cell, Row, Table};
 use regex::Regex;
+use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
 
 lazy_static! {
     //FIXME: use different type for string hostname and Ipv4
     static ref TABLE_SPEC_REGEX: Regex = Regex::new(r#"([0-9a-zA-Z]+):([a-zA-Z]+)=([^=\s"':]+)"#).unwrap();
+}
+
+fn parse_table_specs<'a, I>(values: I) -> Result<common::types::DataSourceRegistry, AppError>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut data_sources = common::types::DataSourceRegistry::new();
+    let mut seen_names = HashSet::new();
+
+    for table_spec_string in values {
+        if let Some(cap) = TABLE_SPEC_REGEX.captures(table_spec_string) {
+            let table_name = cap.get(1).map_or("", |m| m.as_str()).to_string();
+            let file_format = cap.get(2).map_or("", |m| m.as_str()).to_string();
+            let file_path = cap.get(3).map_or("", |m| m.as_str()).to_string();
+
+            if !["elb", "alb", "squid", "s3", "jsonl"].contains(&&*file_format) {
+                return Err(AppError::InvalidLogFileFormat);
+            }
+
+            if !seen_names.insert(table_name.clone()) {
+                eprintln!("Error: duplicate table name '{}'", table_name);
+                std::process::exit(1);
+            }
+
+            let data_source = if file_path == "stdin" {
+                common::types::DataSource::Stdin(file_format, table_name.clone())
+            } else {
+                let path = Path::new(&file_path);
+                common::types::DataSource::File(path.to_path_buf(), file_format, table_name.clone())
+            };
+
+            data_sources.insert(table_name, data_source);
+        } else {
+            return Err(AppError::InvalidTableSpecString);
+        }
+    }
+
+    Ok(data_sources)
 }
 
 fn main() {
@@ -36,27 +75,10 @@ fn main() {
                     OutputMode::Table
                 };
 
-                let result = if let Some(table_spec_string) = sub_m.value_of("table") {
-                    if let Some(cap) = TABLE_SPEC_REGEX.captures(table_spec_string) {
-                        let table_name = cap.get(1).map_or("", |m| m.as_str()).to_string();
-                        let file_format = cap.get(2).map_or("", |m| m.as_str()).to_string();
-                        let file_path = cap.get(3).map_or("", |m| m.as_str()).to_string();
-
-                        if !["elb", "alb", "squid", "s3", "jsonl"].contains(&&*file_format) {
-                            Err(AppError::InvalidLogFileFormat)
-                        } else {
-                            if file_path == "stdin" {
-                                let data_source = common::types::DataSource::Stdin(file_format, table_name);
-                                app::run(query_str, data_source, output_mode)
-                            } else {
-                                let path = Path::new(&file_path);
-                                let data_source =
-                                    common::types::DataSource::File(path.to_path_buf(), file_format, table_name);
-                                app::run(query_str, data_source, output_mode)
-                            }
-                        }
-                    } else {
-                        Err(AppError::InvalidTableSpecString)
+                let result = if let Some(table_specs) = sub_m.values_of("table") {
+                    match parse_table_specs(table_specs) {
+                        Ok(data_sources) => app::run(query_str, data_sources, output_mode),
+                        Err(e) => Err(e),
                     }
                 } else {
                     Err(AppError::InvalidTableSpecString)
@@ -71,8 +93,20 @@ fn main() {
         }
         ("explain", Some(sub_m)) => {
             if let Some(query_str) = sub_m.value_of("query") {
-                let data_source = common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string());
-                let result = app::explain(query_str, data_source);
+                let data_sources = if let Some(table_specs) = sub_m.values_of("table") {
+                    match parse_table_specs(table_specs) {
+                        Ok(ds) => ds,
+                        Err(e) => {
+                            println!("{}", e);
+                            return;
+                        }
+                    }
+                } else {
+                    let mut ds = common::types::DataSourceRegistry::new();
+                    ds.insert("it".to_string(), common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string()));
+                    ds
+                };
+                let result = app::explain(query_str, data_sources);
 
                 if let Err(e) = result {
                     println!("{}", e);

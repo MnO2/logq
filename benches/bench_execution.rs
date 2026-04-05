@@ -34,12 +34,13 @@ fn bench_execution_tier_a(c: &mut Criterion) {
             "elb".to_string(),
             "elb".to_string(),
         );
+        let data_sources: ctypes::DataSourceRegistry = vec![("elb".to_string(), data_source)].into_iter().collect();
         let reg = registry.clone();
         group.bench_function(*name, |b| {
             b.iter(|| {
                 let result = logq::app::run_to_records_with_registry(
                     black_box(query),
-                    data_source.clone(),
+                    data_sources.clone(),
                     reg.clone(),
                 );
                 let _ = black_box(result);
