@@ -396,16 +396,14 @@ pub(crate) struct Binding {
 
 #[derive(Clone)]
 pub(crate) struct ParsingContext {
-    pub(crate) table_name: String,
-    pub(crate) data_source: DataSource,
+    pub(crate) data_sources: DataSourceRegistry,
     pub(crate) registry: Arc<FunctionRegistry>,
 }
 
 impl std::fmt::Debug for ParsingContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParsingContext")
-            .field("table_name", &self.table_name)
-            .field("data_source", &self.data_source)
+            .field("data_sources", &self.data_sources)
             .finish()
     }
 }
