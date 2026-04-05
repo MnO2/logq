@@ -365,16 +365,65 @@
 | map_keys | 72.6 ns | 56.8 ns | **-22%** |
 | regexp_like | 2.82 us | 2.94 us | ~0% |
 
+## Round 10 & 11 Optimizations (2026-04-05)
+
+31. **HashMap entry API in all aggregates**: Replaced get+insert patterns with entry().or_insert() across Count, Sum, Avg, Max, Min, First, GroupAs, ApproxCountDistinct aggregates. Avoid redundant key clone for existing groups.
+32. **GroupByStream group existence check**: Check `groups.contains(&key)` before `groups.insert(key.clone())` to avoid cloning for existing groups.
+33. **get_mut before clone in aggregates**: Replaced entry API (which always takes ownership of key) with get_mut + conditional insert. Only clones key for first occurrence of each group. Changed CountAggregate::add_row to take &key.
+34. **Pre-compute projection field mapping**: Store (source_field, output_column) pairs at MapStream construction, eliminating per-record pattern matching in simple_projection path.
+35. **Defer URL parsing in HttpRequest**: Store raw URL string instead of parsed url::Url. Parse on demand via parsed_url() only when url_* functions are called. Eliminates expensive url::Url::parse() call for every ELB/ALB record.
+
+## Cumulative Results (Original Baseline → Current, Rounds 1-11)
+
+| Benchmark | Baseline | Current | Improvement |
+|---|---|---|---|
+| **Parser** | | | |
+| L1_trivial | 2.55 us | 748 ns | **-71%** |
+| L2_where | 8.09 us | 2.09 us | **-74%** |
+| L3_group_order_limit | 9.40 us | 2.81 us | **-70%** |
+| L4_having_like | 16.12 us | 4.27 us | **-74%** |
+| L5_casewhen_join | 18.52 us | 5.11 us | **-72%** |
+| L6_in_union | 8.70 us | 2.01 us | **-77%** |
+| **Execution (synthetic)** | | | |
+| execution_map/1K | 754 us | 255 us | **-66%** |
+| execution_map/10K | 7.71 ms | 2.56 ms | **-67%** |
+| execution_map/100K | 75.4 ms | 25.7 ms | **-66%** |
+| execution_filter/1K | 526 us | 155 us | **-71%** |
+| execution_filter/10K | 5.28 ms | 1.57 ms | **-70%** |
+| execution_filter/100K | 52.8 ms | 14.7 ms | **-72%** |
+| execution_limit/1K | 132 us | 122 us | **-8%** |
+| execution_limit/10K | 1.32 ms | 1.25 ms | **-5%** |
+| execution_limit/100K | 13.3 ms | 12.3 ms | **-8%** |
+| **Execution (e2e)** | | | |
+| E1_scan_limit | 121 us | 52 us | **-57%** |
+| E2_groupby_count | 6.79 ms | 2.26 ms | **-67%** |
+| E3_filter_orderby | 8.58 us | 2.26 us | **-74%** |
+| **Datasource** | | | |
+| ELB | 2.89 ms | 1.00 ms | **-65%** |
+| ALB | 4.52 ms | 2.04 ms | **-55%** |
+| S3 | 3.12 ms | 1.85 ms | **-41%** |
+| Squid | 1.29 ms | 762 us | **-41%** |
+| JSONL | 819 us | 840 us | ~0% |
+| **UDF** | | | |
+| upper | 40.2 ns | 31.4 ns | **-22%** |
+| round | 25.9 ns | 19.7 ns | **-24%** |
+| date_part | 32.1 ns | 26.8 ns | **-17%** |
+| array_contains | 33.2 ns | 22.3 ns | **-33%** |
+| map_keys | 72.6 ns | 55.8 ns | **-23%** |
+| regexp_like | 2.82 us | 2.96 us | ~0% |
+
 ## Summary
 
-- **Parser: 70-76% faster** — VerboseError→Error, first-char keyword dispatch
-- **Execution map: 65-66% faster** — merge elimination + Value boxing + move-based projections
-- **Execution filter: 73% faster** — merge elimination + by-reference comparison + pre-allocation
-- **Execution limit: 7-9% faster** — Value boxing + general overhead reduction
-- **E1 scan_limit e2e: 50% faster** — SELECT * passthrough + hand-written tokenizer
-- **E2 groupby e2e: 55% faster** — all optimizations combined
+- **Parser: 70-77% faster** — VerboseError→Error, first-char keyword dispatch
+- **Execution map: 66-67% faster** — merge elimination + Value boxing + move-based projections
+- **Execution filter: 70-72% faster** — merge elimination + by-reference comparison + pre-allocation
+- **Execution limit: 5-8% faster** — Value boxing + general overhead reduction
+- **E1 scan_limit e2e: 57% faster** — SELECT * passthrough + deferred URL parsing
+- **E2 groupby e2e: 67% faster** — all optimizations combined + deferred URL parsing
 - **E3 filter e2e: 74% faster** — VerboseError→Error + by-reference comparison
-- **Datasource: 40-44% faster** — hand-written tokenizer + regex-free parsing
-- **UDFs: 17-34% faster** — pre-lowercased function names
+- **Datasource ELB: 65% faster** — hand-written tokenizer + regex-free parsing + deferred URL parsing
+- **Datasource ALB: 55% faster** — hand-written tokenizer + deferred URL parsing
+- **Datasource S3/Squid: 41% faster** — hand-written tokenizer + regex-free parsing
+- **UDFs: 17-33% faster** — pre-lowercased function names
 - No new dependencies, all 488 tests pass, all changes backwards-compatible
-- 30 optimizations applied across 9 rounds of the AlphaCode-inspired pipeline
+- 35 optimizations applied across 11 rounds of the AlphaCode-inspired pipeline
