@@ -417,7 +417,7 @@ impl RecordStream for GroupByStream {
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
-                                    inner.add_row(key.clone())?;
+                                    inner.add_row(&key)?;
                                 }
                             };
                         }

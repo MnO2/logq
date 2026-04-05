@@ -999,14 +999,16 @@ impl AvgAggregate {
             }
         };
 
-        let count = self.counts.entry(key.clone()).or_insert(0);
-        let avg = self.averages.entry(key.clone()).or_insert(OrderedFloat::from(0.0));
-        let new_count = *count + 1;
-        let f32_avg: f32 = (*avg).into();
-        let f32_new_value: f32 = new_value.into();
-        let new_avg: f32 = (f32_avg * (*count as f32) + f32_new_value) / (new_count as f32);
-        *avg = OrderedFloat::from(new_avg);
-        *count = new_count;
+        if let (Some(count), Some(avg)) = (self.counts.get_mut(key), self.averages.get_mut(key)) {
+            let new_count = *count + 1;
+            let f32_avg: f32 = (*avg).into();
+            let f32_new_value: f32 = new_value.into();
+            *avg = OrderedFloat::from((f32_avg * (*count as f32) + f32_new_value) / (new_count as f32));
+            *count = new_count;
+        } else {
+            self.averages.insert(key.clone(), new_value);
+            self.counts.insert(key.clone(), 1);
+        }
         Ok(())
     }
 
@@ -1038,10 +1040,13 @@ impl SumAggregate {
             }
         };
 
-        let sum = self.sums.entry(key.clone()).or_insert(OrderedFloat::from(0.0));
-        let f32_sum: f32 = (*sum).into();
-        let f32_new_value: f32 = new_value.into();
-        *sum = OrderedFloat::from(f32_sum + f32_new_value);
+        if let Some(sum) = self.sums.get_mut(key) {
+            let f32_sum: f32 = (*sum).into();
+            let f32_new_value: f32 = new_value.into();
+            *sum = OrderedFloat::from(f32_sum + f32_new_value);
+        } else {
+            self.sums.insert(key.clone(), new_value);
+        }
         Ok(())
     }
 
@@ -1070,12 +1075,20 @@ impl CountAggregate {
             return Ok(());
         };
 
-        *self.counts.entry(key.clone()).or_insert(0) += 1;
+        if let Some(count) = self.counts.get_mut(key) {
+            *count += 1;
+        } else {
+            self.counts.insert(key.clone(), 1);
+        }
         Ok(())
     }
 
-    pub(crate) fn add_row(&mut self, key: Option<Tuple>) -> AggregateResult<()> {
-        *self.counts.entry(key).or_insert(0) += 1;
+    pub(crate) fn add_row(&mut self, key: &Option<Tuple>) -> AggregateResult<()> {
+        if let Some(count) = self.counts.get_mut(key) {
+            *count += 1;
+        } else {
+            self.counts.insert(key.clone(), 1);
+        }
         Ok(())
     }
 
@@ -1099,7 +1112,11 @@ impl GroupAsAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        self.tuples.entry(key.clone()).or_insert_with(Vec::new).push(value.clone());
+        if let Some(tuples) = self.tuples.get_mut(key) {
+            tuples.push(value.clone());
+        } else {
+            self.tuples.insert(key.clone(), vec![value.clone()]);
+        }
         Ok(())
     }
 
@@ -1205,7 +1222,9 @@ impl FirstAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        self.firsts.entry(key.clone()).or_insert_with(|| value.clone());
+        if !self.firsts.contains_key(key) {
+            self.firsts.insert(key.clone(), value.clone());
+        }
         Ok(())
     }
 
@@ -1273,7 +1292,13 @@ impl ApproxCountDistinctAggregate {
             return Ok(());
         };
 
-        self.counts.entry(key.clone()).or_insert_with(|| HyperLogLog::new(8)).add(value);
+        if let Some(hll) = self.counts.get_mut(key) {
+            hll.add(value);
+        } else {
+            let mut hll = HyperLogLog::new(8);
+            hll.add(value);
+            self.counts.insert(key.clone(), hll);
+        }
         Ok(())
     }
 
