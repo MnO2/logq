@@ -83,6 +83,10 @@ impl Record {
         self.variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
+    pub fn into_tuples(self) -> Vec<(VariableName, Value)> {
+        self.variables.into_iter().collect()
+    }
+
     pub(crate) fn to_row(&self) -> Vec<Cell> {
         self.variables
             .values()

@@ -264,7 +264,7 @@ pub fn run_to_records_with_registry(
     let mut results = Vec::new();
 
     while let Some(record) = stream.next()? {
-        results.push(record.to_tuples());
+        results.push(record.into_tuples());
     }
 
     Ok(results)
