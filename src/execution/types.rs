@@ -245,55 +245,58 @@ pub enum Relation {
 }
 
 impl Relation {
-    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Option<bool>> {
-        let left_result = left.expression_value(variables, registry)?;
-        let right_result = right.expression_value(variables, registry)?;
-
-        // NULL/MISSING: any comparison involving Null or Missing returns None (unknown)
-        if matches!(&left_result, Value::Null | Value::Missing) || matches!(&right_result, Value::Null | Value::Missing) {
+    /// Compare two Values by reference. Avoids cloning when values are
+    /// already available as references (e.g., from LinkedHashMap::get).
+    fn compare_ref(&self, left: &Value, right: &Value) -> ExpressionResult<Option<bool>> {
+        if matches!(left, Value::Null | Value::Missing) || matches!(right, Value::Null | Value::Missing) {
             return Ok(None);
         }
-
         match self {
-            Relation::Equal => Ok(Some(left_result == right_result)),
-            Relation::NotEqual => Ok(Some(left_result != right_result)),
-            Relation::GreaterEqual => match (left_result, right_result) {
+            Relation::Equal => Ok(Some(left == right)),
+            Relation::NotEqual => Ok(Some(left != right)),
+            Relation::GreaterEqual => match (left, right) {
                 (Value::Int(l), Value::Int(r)) => Ok(Some(l >= r)),
                 (Value::Float(l), Value::Float(r)) => Ok(Some(l >= r)),
-                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) >= r)),
-                (Value::Float(l), Value::Int(r)) => Ok(Some(l >= OrderedFloat::from(r as f32))),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(*l as f32) >= *r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(*l >= OrderedFloat::from(*r as f32))),
                 (Value::String(l), Value::String(r)) => Ok(Some(l >= r)),
                 (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l >= r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
-            Relation::LessEqual => match (left_result, right_result) {
+            Relation::LessEqual => match (left, right) {
                 (Value::Int(l), Value::Int(r)) => Ok(Some(l <= r)),
                 (Value::Float(l), Value::Float(r)) => Ok(Some(l <= r)),
-                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) <= r)),
-                (Value::Float(l), Value::Int(r)) => Ok(Some(l <= OrderedFloat::from(r as f32))),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(*l as f32) <= *r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(*l <= OrderedFloat::from(*r as f32))),
                 (Value::String(l), Value::String(r)) => Ok(Some(l <= r)),
                 (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l <= r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
-            Relation::MoreThan => match (left_result, right_result) {
+            Relation::MoreThan => match (left, right) {
                 (Value::Int(l), Value::Int(r)) => Ok(Some(l > r)),
                 (Value::Float(l), Value::Float(r)) => Ok(Some(l > r)),
-                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) > r)),
-                (Value::Float(l), Value::Int(r)) => Ok(Some(l > OrderedFloat::from(r as f32))),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(*l as f32) > *r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(*l > OrderedFloat::from(*r as f32))),
                 (Value::String(l), Value::String(r)) => Ok(Some(l > r)),
                 (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l > r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
-            Relation::LessThan => match (left_result, right_result) {
+            Relation::LessThan => match (left, right) {
                 (Value::Int(l), Value::Int(r)) => Ok(Some(l < r)),
                 (Value::Float(l), Value::Float(r)) => Ok(Some(l < r)),
-                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(l as f32) < r)),
-                (Value::Float(l), Value::Int(r)) => Ok(Some(l < OrderedFloat::from(r as f32))),
+                (Value::Int(l), Value::Float(r)) => Ok(Some(OrderedFloat::from(*l as f32) < *r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Some(*l < OrderedFloat::from(*r as f32))),
                 (Value::String(l), Value::String(r)) => Ok(Some(l < r)),
                 (Value::DateTime(l), Value::DateTime(r)) => Ok(Some(l < r)),
                 _ => Err(ExpressionError::TypeMismatch),
             },
         }
+    }
+
+    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Option<bool>> {
+        let left_result = left.expression_value(variables, registry)?;
+        let right_result = right.expression_value(variables, registry)?;
+        self.compare_ref(&left_result, &right_result)
     }
 }
 
@@ -396,6 +399,31 @@ impl Formula {
                 Ok(child.map(|b| !b))
             }
             Formula::Predicate(relation, left_formula, right_formula) => {
+                // Fast path: Variable op Constant — avoid expression_value overhead
+                // by looking up the variable directly and comparing by reference.
+                match (left_formula.as_ref(), right_formula.as_ref()) {
+                    (Expression::Variable(pe), Expression::Constant(constant))
+                        if pe.path_segments.len() == 1 =>
+                    {
+                        if let PathSegment::AttrName(ref name) = pe.path_segments[0] {
+                            match variables.get(name) {
+                                Some(val) => return Ok(relation.compare_ref(val, constant)?),
+                                None => return Ok(None), // Missing
+                            }
+                        }
+                    }
+                    (Expression::Constant(constant), Expression::Variable(pe))
+                        if pe.path_segments.len() == 1 =>
+                    {
+                        if let PathSegment::AttrName(ref name) = pe.path_segments[0] {
+                            match variables.get(name) {
+                                Some(val) => return Ok(relation.compare_ref(constant, val)?),
+                                None => return Ok(None),
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 let result = relation.apply(variables, left_formula, right_formula, registry)?;
                 Ok(result)
             }
