@@ -4,7 +4,7 @@ use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
 use crate::functions::FunctionRegistry;
-use crate::syntax::ast::{CastType, PathExpr};
+use crate::syntax::ast::{CastType, PathExpr, PathSegment};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use pdatastructs::hyperloglog::HyperLogLog;
@@ -143,6 +143,12 @@ impl Expression {
                 }
             }
             Expression::Variable(path_expr) => {
+                // Fast path: single-segment AttrName is the overwhelmingly common case
+                if path_expr.path_segments.len() == 1 {
+                    if let PathSegment::AttrName(ref name) = path_expr.path_segments[0] {
+                        return Ok(variables.get(name).cloned().unwrap_or(Value::Missing));
+                    }
+                }
                 Ok(common::types::get_value_by_path_expr(path_expr, 0, variables))
             }
             Expression::Function(name, arguments) => {

@@ -1,5 +1,5 @@
 use csv::Writer;
-use nom::error::VerboseError;
+use nom::error;
 use prettytable::{Row, Table};
 use std::result;
 use std::str::FromStr;
@@ -60,26 +60,14 @@ impl PartialEq for AppError {
 
 impl Eq for AppError {}
 
-impl From<nom::Err<VerboseError<&str>>> for AppError {
-    fn from(e: nom::Err<VerboseError<&str>>) -> AppError {
+impl From<nom::Err<error::Error<&str>>> for AppError {
+    fn from(e: nom::Err<error::Error<&str>>) -> AppError {
         match e {
             nom::Err::Failure(v) => {
-                let mut errors: String = String::new();
-                for (s, _) in v.errors {
-                    errors.push_str(&s.to_string());
-                    errors.push('\n');
-                }
-
-                AppError::Syntax(errors)
+                AppError::Syntax(v.input.to_string())
             }
             nom::Err::Error(v) => {
-                let mut errors: String = String::new();
-                for (s, _) in v.errors {
-                    errors.push_str(&s.to_string());
-                    errors.push('\n');
-                }
-
-                AppError::Syntax(errors)
+                AppError::Syntax(v.input.to_string())
             }
             _ => AppError::Syntax(String::new()),
         }

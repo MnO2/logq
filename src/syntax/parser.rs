@@ -7,7 +7,7 @@ use nom::{
     bytes::complete::{escaped, tag, tag_no_case},
     character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
-    error::{context, VerboseError},
+    error::context,
     multi::{many0, many1, separated_list0},
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
@@ -31,7 +31,7 @@ lazy_static! {
     };
 }
 
-fn case_when_branch(i: &str) -> IResult<&str, (ast::Expression, ast::Expression), VerboseError<&str>> {
+fn case_when_branch(i: &str) -> IResult<&str, (ast::Expression, ast::Expression), nom::error::Error<&str>> {
     let (remaining_input, (_, condition, _, then_expr)) = tuple((
         tuple((multispace0, tag_no_case("when"), space1)),
         expression,
@@ -42,7 +42,7 @@ fn case_when_branch(i: &str) -> IResult<&str, (ast::Expression, ast::Expression)
     Ok((remaining_input, (condition, then_expr)))
 }
 
-fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, VerboseError<&str>> {
+fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, nom::error::Error<&str>> {
     let (remaining_input, (_, branches, else_expr, _)) = tuple((
         tag_no_case("case"),
         many1(case_when_branch),
@@ -63,11 +63,11 @@ fn case_when_expression(i: &str) -> IResult<&str, ast::CaseWhenExpression, Verbo
     ))
 }
 
-fn double_quote_string_literal_interior(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
+fn double_quote_string_literal_interior(i: &str) -> IResult<&str, &str, nom::error::Error<&str>> {
     escaped(none_of("\""), '\\', one_of("\"n\\"))(i)
 }
 
-fn double_quote_string_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn double_quote_string_literal(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     context(
         "string",
         map(
@@ -80,11 +80,11 @@ fn double_quote_string_literal(i: &str) -> IResult<&str, ast::Value, VerboseErro
     )(i)
 }
 
-fn single_quote_string_literal_interior(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
+fn single_quote_string_literal_interior(i: &str) -> IResult<&str, &str, nom::error::Error<&str>> {
     escaped(none_of("'"), '\\', one_of("\"n\\"))(i)
 }
 
-fn single_quote_string_literal(i: &str) -> IResult<&str, String, VerboseError<&str>> {
+fn single_quote_string_literal(i: &str) -> IResult<&str, String, nom::error::Error<&str>> {
     context(
         "single_quote_string_literal",
         map(
@@ -95,6 +95,35 @@ fn single_quote_string_literal(i: &str) -> IResult<&str, String, VerboseError<&s
             |s| s.to_string(),
         ),
     )(i)
+}
+
+/// Check if a string is a SQL keyword using first-char dispatch.
+/// Partitions ~40 keywords by their first letter so average comparison
+/// count drops from 40 to ~2-3 per lookup.
+fn is_keyword(s: &str) -> bool {
+    let first = s.as_bytes()[0] | 0x20; // ASCII lowercase
+    match first {
+        b'a' => ["all", "and", "as", "at", "asc"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'b' => ["between", "by"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'c' => ["case", "cross", "cast"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'd' => ["desc", "distinct"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'e' => ["else", "end", "except", "exists"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'f' => ["false", "from"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'g' => ["group"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'h' => ["having"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'i' => ["in", "inner", "intersect", "is"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'j' => ["join"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'l' => ["lateral", "left", "like", "limit"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'm' => ["missing"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'n' => ["not", "null"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'o' => ["on", "or", "order"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b's' => ["select"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b't' => ["then", "true"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'u' => ["union"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'v' => ["value"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'w' => ["when", "where", "within"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        _ => false,
+    }
 }
 
 fn identifier<'a, E: nom::error::ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E>
@@ -119,7 +148,7 @@ where
 
     match result {
         Ok((i, o)) => {
-            if start_with_number(o) || all_underscore(o) || KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(o)) {
+            if start_with_number(o) || all_underscore(o) || is_keyword(o) {
                 Err(nom::Err::Failure(nom::error::ParseError::from_error_kind(
                     i,
                     nom::error::ErrorKind::Alpha, //FIXME: customize error
@@ -132,18 +161,18 @@ where
     }
 }
 
-fn boolean(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn boolean(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     alt((
         map(tag_no_case("true"), |_| ast::Value::Boolean(true)),
         map(tag_no_case("false"), |_| ast::Value::Boolean(false)),
     ))(i)
 }
 
-fn float(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn float(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     map(complete::float, |f| ast::Value::Float(OrderedFloat::from(f)))(i)
 }
 
-fn integral(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn integral(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     alt((
         map_res(terminated(digit1, not(char('.'))), |digit_str: &str| {
             digit_str.parse::<i32>().map(ast::Value::Integral)
@@ -155,44 +184,40 @@ fn integral(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
     ))(i)
 }
 
-fn null_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn null_literal(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     let (i, _) = tag_no_case("null")(i)?;
     // Ensure "null" is not followed by alphanumeric/underscore (e.g., "nullif")
     if i.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-        return Err(nom::Err::Error(VerboseError {
-            errors: vec![(i, nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Tag))],
-        }));
+        return Err(nom::Err::Error(nom::error::Error::new(i, nom::error::ErrorKind::Tag)));
     }
     Ok((i, ast::Value::Null))
 }
 
-fn missing_literal(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn missing_literal(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     let (i, _) = tag_no_case("missing")(i)?;
     // Ensure "missing" is not followed by alphanumeric/underscore
     if i.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-        return Err(nom::Err::Error(VerboseError {
-            errors: vec![(i, nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Tag))],
-        }));
+        return Err(nom::Err::Error(nom::error::Error::new(i, nom::error::ErrorKind::Tag)));
     }
     Ok((i, ast::Value::Missing))
 }
 
-fn value(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn value(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     alt((integral, float, boolean, double_quote_string_literal, null_literal, missing_literal))(i)
 }
 
-fn parens(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn parens(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     delimited(space0, delimited(tag("("), expression, tag(")")), space0)(i)
 }
 
-fn order_by_clause_for_within_group(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseError<&str>> {
+fn order_by_clause_for_within_group(i: &str) -> IResult<&str, ast::OrderByExpression, nom::error::Error<&str>> {
     map(
         preceded(tuple((tag_no_case("order"), space1, tag_no_case("by"), space1)), ordering_term),
         |item| ast::OrderByExpression::new(vec![item]),
     )(i)
 }
 
-fn within_group_clause(i: &str) -> IResult<&str, ast::WithinGroupClause, VerboseError<&str>> {
+fn within_group_clause(i: &str) -> IResult<&str, ast::WithinGroupClause, nom::error::Error<&str>> {
     map(
         preceded(
             tuple((space1, tag_no_case("within"), space1, tag_no_case("group"), space1)),
@@ -202,7 +227,7 @@ fn within_group_clause(i: &str) -> IResult<&str, ast::WithinGroupClause, Verbose
     )(i)
 }
 
-fn func_call(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn func_call(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     map(
         tuple((
             identifier,
@@ -219,11 +244,11 @@ fn func_call(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     )(i)
 }
 
-fn select_column_reference(i: &str) -> IResult<&str, ast::PathExpr, VerboseError<&str>> {
+fn select_column_reference(i: &str) -> IResult<&str, ast::PathExpr, nom::error::Error<&str>> {
     terminated(path_expr, not(char('(')))(i)
 }
 
-fn subquery(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn subquery(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     map(
         delimited(
             tuple((space0, tag("("), space0)),
@@ -234,7 +259,7 @@ fn subquery(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     )(i)
 }
 
-fn factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn factor(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     delimited(
         space0,
         alt((
@@ -248,7 +273,7 @@ fn factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     )(i)
 }
 
-fn expression_term_opt_not(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn expression_term_opt_not(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     map(
         pair(opt(tuple((space1, tag_no_case("not"), space1))), factor),
         |(opt_not, factor)| {
@@ -261,7 +286,7 @@ fn expression_term_opt_not(i: &str) -> IResult<&str, ast::Expression, VerboseErr
     )(i)
 }
 
-fn expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn expression(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     lazy_static! {
         static ref PRECEDENCE_TABLE: HashMap<&'static str, (u32, bool)> = {
             let mut m = HashMap::new();
@@ -286,7 +311,7 @@ fn expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
     Ok((i1, expr))
 }
 
-fn select_expression(i: &str) -> IResult<&str, ast::SelectExpression, VerboseError<&str>> {
+fn select_expression(i: &str) -> IResult<&str, ast::SelectExpression, nom::error::Error<&str>> {
     preceded(
         space0,
         alt((
@@ -302,22 +327,22 @@ fn select_expression(i: &str) -> IResult<&str, ast::SelectExpression, VerboseErr
     )(i)
 }
 
-fn select_expression_list(i: &str) -> IResult<&str, Vec<SelectExpression>, VerboseError<&str>> {
+fn select_expression_list(i: &str) -> IResult<&str, Vec<SelectExpression>, nom::error::Error<&str>> {
     context(
         "select_expression_list",
         terminated(separated_list0(preceded(space0, char(',')), select_expression), space0),
     )(i)
 }
 
-fn where_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
+fn where_expression(i: &str) -> IResult<&str, ast::WhereExpression, nom::error::Error<&str>> {
     map(preceded(tag_no_case("where"), expression), ast::WhereExpression::new)(i)
 }
 
-fn column_name_in_group_by(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
+fn column_name_in_group_by(i: &str) -> IResult<&str, PathExpr, nom::error::Error<&str>> {
     terminated(path_expr, not(char('(')))(i)
 }
 
-fn column_factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn column_factor(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     delimited(
         space0,
         alt((
@@ -330,7 +355,7 @@ fn column_factor(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> 
     )(i)
 }
 
-fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, VerboseError<&str>> {
+fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, nom::error::Error<&str>> {
     map(
         tuple((
             column_factor,
@@ -340,7 +365,7 @@ fn column_reference(i: &str) -> IResult<&str, ast::GroupByReference, VerboseErro
     )(i)
 }
 
-fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::GroupByReference>, VerboseError<&str>> {
+fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::GroupByReference>, nom::error::Error<&str>> {
     context(
         "column_expression_list",
         map(
@@ -353,12 +378,12 @@ fn column_expression_list(i: &str) -> IResult<&str, Vec<ast::GroupByReference>, 
     )(i)
 }
 
-fn path_bracket(i: &str) -> IResult<&str, ast::Value, VerboseError<&str>> {
+fn path_bracket(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     delimited(tag("["), integral, tag("]"))(i)
 }
 
 /// Parse a bracket suffix: either `[*]` (wildcard) or `[<integer>]` (array index)
-fn path_bracket_or_wildcard(i: &str) -> IResult<&str, PathSegment, VerboseError<&str>> {
+fn path_bracket_or_wildcard(i: &str) -> IResult<&str, PathSegment, nom::error::Error<&str>> {
     alt((
         map(tag("[*]"), |_| PathSegment::Wildcard),
         map(path_bracket, |v| match v {
@@ -379,22 +404,22 @@ enum TrailingSegment {
     Bracket(PathSegment),                  // [index] or [*]
 }
 
-fn trailing_dot_wildcard_attr(i: &str) -> IResult<&str, TrailingSegment, VerboseError<&str>> {
+fn trailing_dot_wildcard_attr(i: &str) -> IResult<&str, TrailingSegment, nom::error::Error<&str>> {
     map(tag(".*"), |_| TrailingSegment::DotWildcardAttr)(i)
 }
 
-fn trailing_dot_attr(i: &str) -> IResult<&str, TrailingSegment, VerboseError<&str>> {
+fn trailing_dot_attr(i: &str) -> IResult<&str, TrailingSegment, nom::error::Error<&str>> {
     map(
         pair(preceded(char('.'), identifier), opt(path_bracket_or_wildcard)),
         |(name, bracket)| TrailingSegment::DotAttr(name.to_string(), bracket),
     )(i)
 }
 
-fn trailing_bracket(i: &str) -> IResult<&str, TrailingSegment, VerboseError<&str>> {
+fn trailing_bracket(i: &str) -> IResult<&str, TrailingSegment, nom::error::Error<&str>> {
     map(path_bracket_or_wildcard, TrailingSegment::Bracket)(i)
 }
 
-fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
+fn path_expr(i: &str) -> IResult<&str, PathExpr, nom::error::Error<&str>> {
     let (rest, (first_id, first_bracket, trailing)) = terminated(
         tuple((
             identifier,
@@ -463,7 +488,7 @@ fn path_expr(i: &str) -> IResult<&str, PathExpr, VerboseError<&str>> {
     Ok((rest, PathExpr::new(segments)))
 }
 
-fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&str>> {
+fn table_reference(i: &str) -> IResult<&str, ast::TableReference, nom::error::Error<&str>> {
     map(
         tuple((
             path_expr,
@@ -480,7 +505,7 @@ fn table_reference(i: &str) -> IResult<&str, ast::TableReference, VerboseError<&
     )(i)
 }
 
-fn table_reference_separator(i: &str) -> IResult<&str, (), VerboseError<&str>> {
+fn table_reference_separator(i: &str) -> IResult<&str, (), nom::error::Error<&str>> {
     alt((
         map(preceded(space0, char(',')), |_| ()),
         map(
@@ -496,7 +521,7 @@ fn table_reference_separator(i: &str) -> IResult<&str, (), VerboseError<&str>> {
 }
 
 /// Parse a comma-separated or CROSS JOIN separated list of table references into FromClause::Tables.
-fn table_reference_list(i: &str) -> IResult<&str, FromClause, VerboseError<&str>> {
+fn table_reference_list(i: &str) -> IResult<&str, FromClause, nom::error::Error<&str>> {
     context(
         "table_reference_list",
         map(
@@ -510,7 +535,7 @@ fn table_reference_list(i: &str) -> IResult<&str, FromClause, VerboseError<&str>
 }
 
 /// Parse LEFT [OUTER] JOIN ... ON ... returning (JoinType, TableReference, Expression)
-fn left_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, ast::Expression), VerboseError<&str>> {
+fn left_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, ast::Expression), nom::error::Error<&str>> {
     let (i, _) = multispace0(i)?;
     let (i, _) = tag_no_case("left")(i)?;
     let (i, _) = multispace1(i)?;
@@ -527,11 +552,11 @@ fn left_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, as
     Ok((i, (JoinType::Left, right_ref, on_condition)))
 }
 
-fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, VerboseError<&str>> {
+fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, nom::error::Error<&str>> {
     map(preceded(tag_no_case("having"), expression), ast::WhereExpression::new)(i)
 }
 
-fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, VerboseError<&str>> {
+fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, nom::error::Error<&str>> {
     map(
         preceded(
             tuple((tag_no_case("group"), space1, tag_no_case("by"), space1)),
@@ -549,14 +574,14 @@ fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, Verbose
     )(i)
 }
 
-fn limit_expression(i: &str) -> IResult<&str, ast::LimitExpression, VerboseError<&str>> {
+fn limit_expression(i: &str) -> IResult<&str, ast::LimitExpression, nom::error::Error<&str>> {
     map(preceded(tuple((tag_no_case("limit"), space1)), digit1), |s: &str| {
         let v = s.parse::<u32>().unwrap();
         ast::LimitExpression::new(v)
     })(i)
 }
 
-fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, VerboseError<&str>> {
+fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, nom::error::Error<&str>> {
     map(
         pair(
             column_name_in_group_by,
@@ -566,7 +591,7 @@ fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, VerboseError<&str>
     )(i)
 }
 
-fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseError<&str>> {
+fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, nom::error::Error<&str>> {
     map(
         preceded(
             tuple((tag_no_case("order"), space1, tag_no_case("by"), space1)),
@@ -576,7 +601,7 @@ fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, VerboseErro
     )(i)
 }
 
-fn from_clause(i: &str) -> IResult<&str, FromClause, VerboseError<&str>> {
+fn from_clause(i: &str) -> IResult<&str, FromClause, nom::error::Error<&str>> {
     let (i, _) = tag_no_case("from")(i)?;
     let (i, _) = space1(i)?;
     let (i, base) = table_reference_list(i)?;
@@ -597,7 +622,7 @@ fn from_clause(i: &str) -> IResult<&str, FromClause, VerboseError<&str>> {
     Ok((i, result))
 }
 
-fn cast_expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn cast_expression(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     let (i, _) = space0(i)?;
     let (i, _) = tag_no_case("cast")(i)?;
     let (i, _) = multispace0(i)?;
@@ -621,7 +646,7 @@ fn cast_expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>
     Ok((i, ast::Expression::Cast(Box::new(expr), cast_type)))
 }
 
-fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
+fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     alt((
         map(case_when_expression, |n| ast::Expression::CaseWhenExpression(n)),
         cast_expression,
@@ -629,7 +654,7 @@ fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, VerboseError
     ))(i)
 }
 
-fn parse_expression_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
+fn parse_expression_op(i: &str) -> IResult<&str, &str, nom::error::Error<&str>> {
     alt((
         tag("||"),
         tag("+"),
@@ -647,24 +672,24 @@ fn parse_expression_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     ))(i)
 }
 
-fn parse_postfix_is<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
-    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("is")(i) {
-        if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
-            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
-                if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
-                    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("null")(i) {
+fn parse_postfix_is<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, nom::error::Error<&'a str>> {
+    let i = multispace0::<&str, nom::error::Error<&str>>(input)?.0;
+    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("is")(i) {
+        if let Ok((i, _)) = multispace1::<&str, nom::error::Error<&str>>(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("not")(i) {
+                if let Ok((i, _)) = multispace1::<&str, nom::error::Error<&str>>(i) {
+                    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("null")(i) {
                         return Ok((i, ast::Expression::IsNotNull(Box::new(expr))));
                     }
-                    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("missing")(i) {
+                    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("missing")(i) {
                         return Ok((i, ast::Expression::IsNotMissing(Box::new(expr))));
                     }
                 }
             }
-            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("null")(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("null")(i) {
                 return Ok((i, ast::Expression::IsNull(Box::new(expr))));
             }
-            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("missing")(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("missing")(i) {
                 return Ok((i, ast::Expression::IsMissing(Box::new(expr))));
             }
         }
@@ -672,32 +697,32 @@ fn parse_postfix_is<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a st
     Ok((input, expr))
 }
 
-fn parse_postfix_like<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+fn parse_postfix_like<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, nom::error::Error<&'a str>> {
+    let i = multispace0::<&str, nom::error::Error<&str>>(input)?.0;
     // Check for NOT LIKE first (before LIKE)
-    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
-        if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
-            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("like")(i) {
+    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("not")(i) {
+        if let Ok((i, _)) = multispace1::<&str, nom::error::Error<&str>>(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("like")(i) {
                 let (i, _) = multispace1(i)?;
                 let (i, pattern) = parse_expression_atom(i)?;
                 return Ok((i, ast::Expression::NotLike(Box::new(expr), Box::new(pattern))));
             }
         }
     }
-    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("like")(i) {
-        let (i, _) = multispace1::<&str, VerboseError<&str>>(i)?;
+    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("like")(i) {
+        let (i, _) = multispace1::<&str, nom::error::Error<&str>>(i)?;
         let (i, pattern) = parse_expression_atom(i)?;
         return Ok((i, ast::Expression::Like(Box::new(expr), Box::new(pattern))));
     }
     Ok((input, expr))
 }
 
-fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, nom::error::Error<&'a str>> {
+    let i = multispace0::<&str, nom::error::Error<&str>>(input)?.0;
     // Check NOT IN first
-    let (i, negated) = if let Ok((i2, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
-        if let Ok((i3, _)) = multispace1::<&str, VerboseError<&str>>(i2) {
-            if let Ok((i4, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("in")(i3) {
+    let (i, negated) = if let Ok((i2, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("not")(i) {
+        if let Ok((i3, _)) = multispace1::<&str, nom::error::Error<&str>>(i2) {
+            if let Ok((i4, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("in")(i3) {
                 // Ensure "in" is not a prefix of another keyword (e.g., "intersect")
                 if i4.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
                     return Ok((input, expr));
@@ -709,7 +734,7 @@ fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a st
         } else {
             return Ok((input, expr));
         }
-    } else if let Ok((i2, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("in")(i) {
+    } else if let Ok((i2, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("in")(i) {
         // Ensure "in" is not a prefix of another keyword (e.g., "intersect")
         if i2.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
             return Ok((input, expr));
@@ -743,12 +768,12 @@ fn parse_postfix_in<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a st
     }
 }
 
-fn parse_postfix_between<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
-    let i = multispace0::<&str, VerboseError<&str>>(input)?.0;
+fn parse_postfix_between<'a>(input: &'a str, expr: ast::Expression) -> IResult<&'a str, ast::Expression, nom::error::Error<&'a str>> {
+    let i = multispace0::<&str, nom::error::Error<&str>>(input)?.0;
     // Check for NOT BETWEEN first
-    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("not")(i) {
-        if let Ok((i, _)) = multispace1::<&str, VerboseError<&str>>(i) {
-            if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("between")(i) {
+    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("not")(i) {
+        if let Ok((i, _)) = multispace1::<&str, nom::error::Error<&str>>(i) {
+            if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("between")(i) {
                 let (i, _) = multispace1(i)?;
                 let (i, lo) = parse_expression_atom(i)?;
                 let (i, _) = multispace0(i)?;
@@ -759,8 +784,8 @@ fn parse_postfix_between<'a>(input: &'a str, expr: ast::Expression) -> IResult<&
             }
         }
     }
-    if let Ok((i, _)) = tag_no_case::<&str, &str, VerboseError<&str>>("between")(i) {
-        let (i, _) = multispace1::<&str, VerboseError<&str>>(i)?;
+    if let Ok((i, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("between")(i) {
+        let (i, _) = multispace1::<&str, nom::error::Error<&str>>(i)?;
         let (i, lo) = parse_expression_atom(i)?;
         let (i, _) = multispace0(i)?;
         let (i, _) = tag_no_case("and")(i)?;
@@ -775,7 +800,7 @@ fn parse_expression_at_precedence<'a>(
     i0: &'a str,
     current_precedence: u32,
     precedence_table: &HashMap<&str, (u32, bool)>,
-) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
+) -> IResult<&'a str, ast::Expression, nom::error::Error<&'a str>> {
     let (i1, expr) = parse_expression_atom(i0)?;
     let (i1, expr) = parse_postfix_is(i1, expr)?;
     let (i1, expr) = parse_postfix_like(i1, expr)?;
@@ -803,7 +828,7 @@ fn parse_expression_at_precedence<'a>(
     Ok((i1, expr))
 }
 
-fn tuple_constructor_expression_term(i: &str) -> IResult<&str, (String, ast::Expression), VerboseError<&str>> {
+fn tuple_constructor_expression_term(i: &str) -> IResult<&str, (String, ast::Expression), nom::error::Error<&str>> {
     context(
         "tuple_constructor_expression_term",
         map(
@@ -817,7 +842,7 @@ fn tuple_constructor_expression_term(i: &str) -> IResult<&str, (String, ast::Exp
     )(i)
 }
 
-fn tuple_constructor_expression_list(i: &str) -> IResult<&str, Vec<(String, ast::Expression)>, VerboseError<&str>> {
+fn tuple_constructor_expression_list(i: &str) -> IResult<&str, Vec<(String, ast::Expression)>, nom::error::Error<&str>> {
     context(
         "tuple_constructor_expression_list",
         terminated(
@@ -827,7 +852,7 @@ fn tuple_constructor_expression_list(i: &str) -> IResult<&str, Vec<(String, ast:
     )(i)
 }
 
-fn tuple_constructor(i: &str) -> IResult<&str, ast::TupleConstructor, VerboseError<&str>> {
+fn tuple_constructor(i: &str) -> IResult<&str, ast::TupleConstructor, nom::error::Error<&str>> {
     map(
         delimited(
             space0,
@@ -838,14 +863,14 @@ fn tuple_constructor(i: &str) -> IResult<&str, ast::TupleConstructor, VerboseErr
     )(i)
 }
 
-fn array_constructor_expression_list(i: &str) -> IResult<&str, Vec<ast::Expression>, VerboseError<&str>> {
+fn array_constructor_expression_list(i: &str) -> IResult<&str, Vec<ast::Expression>, nom::error::Error<&str>> {
     context(
         "array_constructor_expression_list",
         terminated(separated_list0(preceded(space0, char(',')), expression), space0),
     )(i)
 }
 
-fn array_constructor(i: &str) -> IResult<&str, ast::ArrayConstructor, VerboseError<&str>> {
+fn array_constructor(i: &str) -> IResult<&str, ast::ArrayConstructor, nom::error::Error<&str>> {
     map(
         delimited(
             space0,
@@ -856,7 +881,7 @@ fn array_constructor(i: &str) -> IResult<&str, ast::ArrayConstructor, VerboseErr
     )(i)
 }
 
-fn value_constructor(i: &str) -> IResult<&str, ast::SelectClause, VerboseError<&str>> {
+fn value_constructor(i: &str) -> IResult<&str, ast::SelectClause, nom::error::Error<&str>> {
     delimited(
         space0,
         preceded(
@@ -877,11 +902,11 @@ fn value_constructor(i: &str) -> IResult<&str, ast::SelectClause, VerboseError<&
     )(i)
 }
 
-fn select_clause_expression_list(i: &str) -> IResult<&str, ast::SelectClause, VerboseError<&str>> {
+fn select_clause_expression_list(i: &str) -> IResult<&str, ast::SelectClause, nom::error::Error<&str>> {
     map(select_expression_list, |v| SelectClause::SelectExpressions(v))(i)
 }
 
-pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, VerboseError<&str>> {
+pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, nom::error::Error<&str>> {
     let (i, _) = tag_no_case("select")(i)?;
     let (i, _) = multispace1(i)?;
     let (i, distinct) = opt(|i| {
@@ -917,7 +942,7 @@ pub(crate) fn select_query(i: &str) -> IResult<&str, ast::SelectStatement, Verbo
     ))
 }
 
-fn set_operator(i: &str) -> IResult<&str, (ast::SetOperator, bool), VerboseError<&str>> {
+fn set_operator(i: &str) -> IResult<&str, (ast::SetOperator, bool), nom::error::Error<&str>> {
     alt((
         map(
             tuple((tag_no_case("union"), multispace1, tag_no_case("all"))),
@@ -939,7 +964,7 @@ fn set_operator(i: &str) -> IResult<&str, (ast::SetOperator, bool), VerboseError
     ))(i)
 }
 
-pub fn query(i: &str) -> IResult<&str, ast::Query, VerboseError<&str>> {
+pub fn query(i: &str) -> IResult<&str, ast::Query, nom::error::Error<&str>> {
     let (i, first) = select_query(i)?;
     let mut result = ast::Query::Select(first);
 
@@ -973,42 +998,30 @@ mod test {
     #[test]
     fn test_identifier() {
         assert_eq!(
-            identifier::<VerboseError<&str>>("true"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            identifier::<nom::error::Error<&str>>("true"),
+            Err(nom::Err::Failure(nom::error::Error::new("", nom::error::ErrorKind::Alpha)))
         );
         assert_eq!(
-            identifier::<VerboseError<&str>>("false"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            identifier::<nom::error::Error<&str>>("false"),
+            Err(nom::Err::Failure(nom::error::Error::new("", nom::error::ErrorKind::Alpha)))
         );
         assert_eq!(
-            identifier::<VerboseError<&str>>("select"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            identifier::<nom::error::Error<&str>>("select"),
+            Err(nom::Err::Failure(nom::error::Error::new("", nom::error::ErrorKind::Alpha)))
         );
         assert_eq!(
-            identifier::<VerboseError<&str>>("order"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            identifier::<nom::error::Error<&str>>("order"),
+            Err(nom::Err::Failure(nom::error::Error::new("", nom::error::ErrorKind::Alpha)))
         );
         assert_eq!(
-            identifier::<VerboseError<&str>>("____"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            identifier::<nom::error::Error<&str>>("____"),
+            Err(nom::Err::Failure(nom::error::Error::new("", nom::error::ErrorKind::Alpha)))
         );
         assert_eq!(
-            identifier::<VerboseError<&str>>("123abc"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![("", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            identifier::<nom::error::Error<&str>>("123abc"),
+            Err(nom::Err::Failure(nom::error::Error::new("", nom::error::ErrorKind::Alpha)))
         );
-        assert_eq!(identifier::<VerboseError<&str>>("abc_fef"), Ok(("", "abc_fef")));
+        assert_eq!(identifier::<nom::error::Error<&str>>("abc_fef"), Ok(("", "abc_fef")));
     }
 
     #[test]
@@ -1613,25 +1626,12 @@ mod test {
     fn test_select_stmt_error() {
         assert_eq!(
             select_query("select select from it"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![
-                    (
-                        " from it",
-                        nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha)
-                    ),
-                    (
-                        "select from it",
-                        nom::error::VerboseErrorKind::Context("select_expression_list")
-                    )
-                ]
-            }))
+            Err(nom::Err::Failure(nom::error::Error::new(" from it", nom::error::ErrorKind::Alpha)))
         );
 
         assert_eq!(
             select_query("select * from it where limit 1"),
-            Err(nom::Err::Failure(VerboseError {
-                errors: vec![(" 1", nom::error::VerboseErrorKind::Nom(nom::error::ErrorKind::Alpha))]
-            }))
+            Err(nom::Err::Failure(nom::error::Error::new(" 1", nom::error::ErrorKind::Alpha)))
         );
     }
 
@@ -1846,10 +1846,10 @@ mod test {
 
     #[test]
     fn test_keyword_as_identifier_rejected_case_insensitive() {
-        assert!(identifier::<VerboseError<&str>>("SELECT").is_err());
-        assert!(identifier::<VerboseError<&str>>("From").is_err());
-        assert!(identifier::<VerboseError<&str>>("WHERE").is_err());
-        assert!(identifier::<VerboseError<&str>>("having").is_err());
+        assert!(identifier::<nom::error::Error<&str>>("SELECT").is_err());
+        assert!(identifier::<nom::error::Error<&str>>("From").is_err());
+        assert!(identifier::<nom::error::Error<&str>>("WHERE").is_err());
+        assert!(identifier::<nom::error::Error<&str>>("having").is_err());
     }
 
     #[test]
