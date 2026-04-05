@@ -17,7 +17,7 @@ pub struct Record {
 
 impl Record {
     pub fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
-        let mut variables = LinkedHashMap::default();
+        let mut variables = LinkedHashMap::with_capacity(field_names.len());
         for (i, v) in data.into_iter().enumerate() {
             variables.insert(field_names[i].clone(), v);
         }
@@ -41,7 +41,7 @@ impl Record {
     }
 
     pub(crate) fn project(&self, field_names: &[VariableName]) -> Record {
-        let mut variables = Variables::default();
+        let mut variables = Variables::with_capacity(field_names.len());
         for name in field_names {
             if let Some(v) = self.variables.get(name) {
                 variables.insert(name.clone(), v.clone());

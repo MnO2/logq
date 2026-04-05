@@ -105,21 +105,11 @@ where
     }
 
     fn start_with_number(s: &str) -> bool {
-        if let Some(c) = s.chars().next() {
-            "0123456789".contains(c)
-        } else {
-            false
-        }
+        s.as_bytes().first().map_or(false, |b| b.is_ascii_digit())
     }
 
     fn all_underscore(s: &str) -> bool {
-        for c in s.chars() {
-            if c != '_' {
-                return false;
-            }
-        }
-
-        true
+        s.bytes().all(|b| b == b'_')
     }
 
     let result = input.split_at_position1_complete(
@@ -129,7 +119,7 @@ where
 
     match result {
         Ok((i, o)) => {
-            if start_with_number(o) || all_underscore(o) || KEYWORDS.contains(&o.to_ascii_lowercase().as_str()) {
+            if start_with_number(o) || all_underscore(o) || KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(o)) {
                 Err(nom::Err::Failure(nom::error::ParseError::from_error_kind(
                     i,
                     nom::error::ErrorKind::Alpha, //FIXME: customize error

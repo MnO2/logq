@@ -662,17 +662,51 @@ fn json_to_data_model(parsed: &JsonValue) -> Value {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LogFormat {
+    Elb,
+    Alb,
+    S3,
+    Squid,
+    Jsonl,
+}
+
+impl LogFormat {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "elb" => LogFormat::Elb,
+            "alb" => LogFormat::Alb,
+            "s3" => LogFormat::S3,
+            "squid" => LogFormat::Squid,
+            "jsonl" => LogFormat::Jsonl,
+            _ => LogFormat::Squid, // default fallback
+        }
+    }
+
+    fn field_info(self) -> (&'static Vec<String>, &'static Vec<DataType>, usize) {
+        match self {
+            LogFormat::Elb => (ClassicLoadBalancerLogField::field_names(), &*AWS_ELB_DATATYPES, ClassicLoadBalancerLogField::len()),
+            LogFormat::Alb => (ApplicationLoadBalancerLogField::field_names(), &*AWS_ALB_DATATYPES, ApplicationLoadBalancerLogField::len()),
+            LogFormat::S3 => (S3Field::field_names(), &*AWS_S3_DATATYPES, S3Field::len()),
+            LogFormat::Squid => (SquidLogField::field_names(), &*SQUID_DATATYPES, SquidLogField::len()),
+            LogFormat::Jsonl => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Reader<R> {
     rdr: io::BufReader<R>,
-    file_format: String,
+    format: LogFormat,
+    buf: String,
 }
 
 impl<R: io::Read> Reader<R> {
     pub fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> Reader<R> {
         Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
-            file_format,
+            format: LogFormat::from_str(&file_format),
+            buf: String::with_capacity(512),
         }
     }
 
@@ -682,24 +716,16 @@ impl<R: io::Read> Reader<R> {
 
 impl<R: io::Read> RecordRead for Reader<R> {
     fn read_record(&mut self) -> ReaderResult<Option<Record>> {
-        let mut buf = String::new();
-        let more_data = self.rdr.read_line(&mut buf)?;
+        self.buf.clear();
+        let more_data = self.rdr.read_line(&mut self.buf)?;
 
-        if more_data > 0 && self.file_format != "jsonl" {
-            let (field_names, datatypes, field_count) = if self.file_format == "elb" {
-                (ClassicLoadBalancerLogField::field_names(), &*AWS_ELB_DATATYPES, ClassicLoadBalancerLogField::len())
-            } else if self.file_format == "alb" {
-                (ApplicationLoadBalancerLogField::field_names(), &*AWS_ALB_DATATYPES, ApplicationLoadBalancerLogField::len())
-            } else if self.file_format == "s3" {
-                (S3Field::field_names(), &*AWS_S3_DATATYPES, S3Field::len())
-            } else {
-                (SquidLogField::field_names(), &*SQUID_DATATYPES, SquidLogField::len())
-            };
+        if more_data > 0 && !matches!(self.format, LogFormat::Jsonl) {
+            let (field_names, datatypes, field_count) = self.format.field_info();
 
             let mut record_vars = common::types::Variables::with_capacity(field_count);
             let mut value_cnt: usize = 0;
 
-            for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&buf).enumerate() {
+            for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&self.buf).enumerate() {
                 if i >= field_count {
                     break;
                 }
@@ -749,8 +775,8 @@ impl<R: io::Read> RecordRead for Reader<R> {
 
             let record = Record::new_with_variables(record_vars);
             Ok(Some(record))
-        } else if more_data > 0 && self.file_format == "jsonl" {
-            let parsed = json::parse(&buf)?;
+        } else if more_data > 0 && matches!(self.format, LogFormat::Jsonl) {
+            let parsed = json::parse(&self.buf)?;
             let data_model = json_to_data_model(&parsed);
 
             match data_model {

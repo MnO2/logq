@@ -146,7 +146,7 @@ impl Expression {
                 Ok(common::types::get_value_by_path_expr(path_expr, 0, variables))
             }
             Expression::Function(name, arguments) => {
-                let mut values: Vec<Value> = Vec::new();
+                let mut values: Vec<Value> = Vec::with_capacity(arguments.len());
                 for arg in arguments.iter() {
                     match arg {
                         Named::Expression(expr, _) => {
@@ -338,20 +338,26 @@ impl Formula {
         match self {
             Formula::And(left_formula, right_formula) => {
                 let left = left_formula.evaluate(variables, registry)?;
+                // Three-valued AND: false dominates — short-circuit
+                if left == Some(false) {
+                    return Ok(Some(false));
+                }
                 let right = right_formula.evaluate(variables, registry)?;
-                // Three-valued AND: false dominates unknown
                 match (left, right) {
-                    (Some(false), _) | (_, Some(false)) => Ok(Some(false)),
+                    (_, Some(false)) => Ok(Some(false)),
                     (Some(true), Some(true)) => Ok(Some(true)),
                     _ => Ok(None),
                 }
             }
             Formula::Or(left_formula, right_formula) => {
                 let left = left_formula.evaluate(variables, registry)?;
+                // Three-valued OR: true dominates — short-circuit
+                if left == Some(true) {
+                    return Ok(Some(true));
+                }
                 let right = right_formula.evaluate(variables, registry)?;
-                // Three-valued OR: true dominates unknown
                 match (left, right) {
-                    (Some(true), _) | (_, Some(true)) => Ok(Some(true)),
+                    (_, Some(true)) => Ok(Some(true)),
                     (Some(false), Some(false)) => Ok(Some(false)),
                     _ => Ok(None),
                 }
