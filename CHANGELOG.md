@@ -46,6 +46,33 @@ Phase 4 complete. All phases done.
 - **Step 30:** INTERSECT / EXCEPT (+ ALL variants) — materializes right query into multiset, filters left. Fixed IN/INTERSECT parser ambiguity with word boundary check.
 - **Step 31:** Comprehensive integration tests exercising full pipeline.
 
+### Performance Optimization (2026-04-05)
+
+**Benchmark infrastructure:** Added Criterion microbenchmarks for parser (6 tiers), execution (E2E + operators), datasource (5 formats), and UDFs (6 functions).
+
+**Optimizations applied (Rounds 1–15):**
+- Replaced `HashMap` with `hashbrown::HashMap` across codebase (5–10% across all ops)
+- Pre-sized `Variables` maps via `with_capacity` in hot paths
+- Eliminated redundant `to_lowercase()` calls in GroupBy key comparison
+- Converted `DateTime` from `Box<DateTime>` to inline `Value::DateTime(DateTime)` (udf -42%)
+- Switched datasource field storage from `BTreeMap` to `Vec<(String,Value)>` → `LinkedHashMap`
+- Pre-allocated `FunctionRegistry` HashMap capacity, hoisted registry creation out of bench loops
+- Added `into_tuples()` consuming method to avoid cloning record fields at output
+- Zero-clone rename-free projection path in MapStream
+
+**Attempted but reverted:**
+- Projection pushdown (skipping unused fields in datasource parser): correct in principle but `count(*)` leaks `Named::Star` into the Map projection list, causing `collect_needed_fields` to treat all GROUP BY queries as `SELECT *`. Would require top-down pushdown rewrite to fix correctly.
+
+**Final benchmark results (cumulative):**
+| Benchmark | Before | After | Improvement |
+|-----------|--------|-------|-------------|
+| E1 (scan+limit) | 121 us | 31.9 us | 74% |
+| E2 (groupby+count) | 6.79 ms | 2.16 ms | 68% |
+| E3 (filter+orderby) | 8.58 us | 2.19 us | 74% |
+| map/100K | 75.4 ms | 21.4 ms | 72% |
+| filter/100K | 52.8 ms | 14.9 ms | 72% |
+| datasource/ELB | 2.89 ms | 933 us | 68% |
+
 ## Failed Approaches
 - Worktree isolation caused branch confusion when two agents ran in parallel. Avoided worktrees after that.
 
