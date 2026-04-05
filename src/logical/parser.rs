@@ -268,6 +268,14 @@ fn parse_value_expression(
         ast::Expression::BinaryOperator(_, _, _) => parse_binary_operator(ctx, value_expr),
         ast::Expression::UnaryOperator(_, _) => parse_unary_operator(ctx, value_expr),
         ast::Expression::FuncCall(func_name, select_exprs, _) => {
+            // Validate scalar functions at planning time.
+            // Aggregate functions are handled by parse_aggregate() and should not
+            // be validated as scalar functions.
+            if !is_aggregate_name(func_name) {
+                ctx.registry.validate(func_name, select_exprs.len())
+                    .map_err(ParseError::from)?;
+            }
+
             let mut args = Vec::new();
             for select_expr in select_exprs.iter() {
                 let arg = parse_expression(ctx, select_expr)?;
@@ -401,6 +409,20 @@ fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
         "sum" => Ok(types::Aggregate::Sum(named)),
         "approx_count_distinct" => Ok(types::Aggregate::ApproxCountDistinct(named)),
         _ => Err(ParseError::NotAggregateFunction),
+    }
+}
+
+/// Returns true if the given function name is an aggregate function.
+fn is_aggregate_name(name: &str) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        // from_str() names:
+        "avg" | "count" | "first" | "last" | "max" | "min" | "sum"
+        | "approx_count_distinct"
+        // within_group path names:
+        | "percentile_disc" | "approx_percentile"
+        // group_as:
+        | "group_as" => true,
+        _ => false,
     }
 }
 
@@ -1469,10 +1491,10 @@ mod test {
 
     #[test]
     fn test_parse_logic_func_call_in_boolean_context() {
-        // WHERE some_func(a) — a FuncCall used directly as the WHERE predicate
+        // WHERE upper(a) — a FuncCall used directly as the WHERE predicate
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let func_call = ast::Expression::FuncCall(
-            "some_func".to_string(),
+            "upper".to_string(),
             vec![ast::SelectExpression::Expression(
                 Box::new(ast::Expression::Column(path_expr_a.clone())),
                 None,
@@ -1493,7 +1515,7 @@ mod test {
             types::Formula::ExpressionPredicate(ref expr) => {
                 match &**expr {
                     types::Expression::Function(name, _) => {
-                        assert_eq!(name, "some_func");
+                        assert_eq!(name, "upper");
                     }
                     _ => panic!("Expected Function expression"),
                 }

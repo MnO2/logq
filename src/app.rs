@@ -1264,6 +1264,22 @@ mod tests {
     }
 
     #[test]
+    fn test_unknown_function_error_at_planning() {
+        let result = run_format_query(
+            "jsonl",
+            &[r#"{"a": 1}"#],
+            "SELECT nonexistent_func(a) FROM it",
+        );
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Unknown function") || err_msg.contains("nonexistent_func"),
+            "Expected unknown function error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
     fn test_squid_count_by_status() {
         let lines = &[
             r#"1515734740.000      1 [10.0.0.1] TCP_DENIED/407 3922 CONNECT a.com:443 - HIER_NONE/- text/html"#,
