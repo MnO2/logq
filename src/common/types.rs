@@ -77,14 +77,14 @@ pub enum ParseHttpRequestError {
     MissingField,
 }
 
-pub(crate) type HttpMethod = String;
-pub(crate) type HttpVersion = String;
+pub(crate) type HttpMethod = &'static str;
+pub(crate) type HttpVersion = &'static str;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct HttpRequest {
-    pub http_method: String,
+    pub http_method: &'static str,
     pub url_raw: String,
-    pub http_version: String,
+    pub http_version: &'static str,
 }
 
 impl HttpRequest {
@@ -96,28 +96,33 @@ impl HttpRequest {
 
 impl fmt::Display for HttpRequest {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str(&*self.http_method)?;
+        fmt.write_str(self.http_method)?;
         fmt.write_str(" ")?;
         fmt.write_str(&self.url_raw)?;
         fmt.write_str(" ")?;
-        fmt.write_str(&*self.http_version)?;
+        fmt.write_str(self.http_version)?;
         Ok(())
     }
 }
 
 pub(crate) fn parse_http_method(s: &str) -> ParseHttpRequestResult<HttpMethod> {
-    if s == "GET" || s == "POST" || s == "DELETE" || s == "HEAD" || s == "PUT" || s == "PATCH" {
-        Ok(s.to_string())
-    } else {
-        Err(ParseHttpRequestError::ParseHttpMethod)
+    match s {
+        "GET" => Ok("GET"),
+        "POST" => Ok("POST"),
+        "DELETE" => Ok("DELETE"),
+        "HEAD" => Ok("HEAD"),
+        "PUT" => Ok("PUT"),
+        "PATCH" => Ok("PATCH"),
+        _ => Err(ParseHttpRequestError::ParseHttpMethod),
     }
 }
 
 pub(crate) fn parse_http_version(s: &str) -> ParseHttpRequestResult<HttpVersion> {
-    if s == "HTTP/1.1" || s == "HTTP/1.0" || s == "HTTP/2.0" {
-        Ok(s.to_string())
-    } else {
-        Err(ParseHttpRequestError::ParseHttpVersion)
+    match s {
+        "HTTP/1.1" => Ok("HTTP/1.1"),
+        "HTTP/1.0" => Ok("HTTP/1.0"),
+        "HTTP/2.0" => Ok("HTTP/2.0"),
+        _ => Err(ParseHttpRequestError::ParseHttpVersion),
     }
 }
 

@@ -183,9 +183,9 @@ mod tests {
 
     fn make_request(url_str: &str) -> Value {
         Value::HttpRequest(Box::new(HttpRequest {
-            http_method: "GET".to_string(),
+            http_method: "GET",
             url_raw: url_str.to_string(),
-            http_version: "HTTP/1.1".to_string(),
+            http_version: "HTTP/1.1",
         }))
     }
 
