@@ -740,6 +740,14 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
         }
     }
 
+    // Apply WHERE filter before SELECT projection (SQL evaluation order:
+    // FROM → WHERE → SELECT). The filter needs access to all raw columns,
+    // not just the projected ones.
+    if let Some(where_expr) = query.where_expr_opt {
+        let filter_formula = parse_logic(&parsing_context, &where_expr.expr)?;
+        root = types::Node::Filter(filter_formula, Box::new(root));
+    }
+
     match query.select_clause {
         ast::SelectClause::SelectExpressions(select_exprs) => {
             if !select_exprs.is_empty() {
@@ -923,11 +931,6 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 }
             }
         }
-    }
-
-    if let Some(where_expr) = query.where_expr_opt {
-        let filter_formula = parse_logic(&parsing_context, &where_expr.expr)?;
-        root = types::Node::Filter(filter_formula, Box::new(root));
     }
 
     if !named_aggregates.is_empty() {
@@ -1252,13 +1255,13 @@ mod test {
             idx_name: None,
         }];
 
-        let expected = types::Node::Filter(
-            filtered_formula,
-            Box::new(types::Node::Map(
-                vec![
-                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
-                    types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
-                ],
+        let expected = types::Node::Map(
+            vec![
+                types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
+            ],
+            Box::new(types::Node::Filter(
+                filtered_formula,
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
                     bindings,
@@ -1307,13 +1310,13 @@ mod test {
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
-        let expected = types::Node::Filter(
-            filtered_formula,
-            Box::new(types::Node::Map(
-                vec![
-                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
-                    types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
-                ],
+        let expected = types::Node::Map(
+            vec![
+                types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+                types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
+            ],
+            Box::new(types::Node::Filter(
+                filtered_formula,
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
                     vec![],
@@ -1379,13 +1382,13 @@ mod test {
             idx_name: None,
         };
 
-        let filter = types::Node::Filter(
-            filtered_formula,
-            Box::new(types::Node::Map(
-                vec![
-                    types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
-                    types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
-                ],
+        let filter = types::Node::Map(
+            vec![
+                types::Named::Expression(types::Expression::Variable(path_expr_b.clone()), Some("b".to_string())),
+                types::Named::Expression(types::Expression::Variable(path_expr_a.clone()), Some("a".to_string())),
+            ],
+            Box::new(types::Node::Filter(
+                filtered_formula,
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
                     vec![],
@@ -1651,14 +1654,14 @@ mod test {
             Box::new(types::Expression::Constant(common::Value::Int(1))),
         ));
 
-        // SELECT VALUE a should produce a Map with a single named expression
-        let expected = types::Node::Filter(
-            filtered_formula,
-            Box::new(types::Node::Map(
-                vec![types::Named::Expression(
-                    types::Expression::Variable(path_expr_a.clone()),
-                    Some("a".to_string()),
-                )],
+        // SELECT VALUE a should produce Map(Filter(DataSource))
+        let expected = types::Node::Map(
+            vec![types::Named::Expression(
+                types::Expression::Variable(path_expr_a.clone()),
+                Some("a".to_string()),
+            )],
+            Box::new(types::Node::Filter(
+                filtered_formula,
                 Box::new(types::Node::DataSource(
                     common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
                     vec![],
