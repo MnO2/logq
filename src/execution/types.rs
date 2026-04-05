@@ -530,6 +530,35 @@ impl Formula {
     }
 }
 
+/// Compare two Values by reference for sorting. Returns Ordering assuming ascending.
+/// Null/Missing sort after all non-null values in ascending order.
+fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(i1), Value::Int(i2)) => i1.cmp(i2),
+        (Value::Float(f1), Value::Float(f2)) => f1.cmp(f2),
+        (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
+        (Value::Boolean(b1), Value::Boolean(b2)) => b1.cmp(b2),
+        (Value::DateTime(dt1), Value::DateTime(dt2)) => dt1.cmp(dt2),
+        (Value::Host(h1), Value::Host(h2)) => {
+            let s1 = h1.to_string();
+            let s2 = h2.to_string();
+            s1.cmp(&s2)
+        }
+        (Value::HttpRequest(h1), Value::HttpRequest(h2)) => {
+            let s1 = h1.to_string();
+            let s2 = h2.to_string();
+            s1.cmp(&s2)
+        }
+        (Value::Null, Value::Null)
+        | (Value::Missing, Value::Missing)
+        | (Value::Null, Value::Missing)
+        | (Value::Missing, Value::Null) => std::cmp::Ordering::Equal,
+        (Value::Null, _) | (Value::Missing, _) => std::cmp::Ordering::Greater,
+        (_, Value::Null) | (_, Value::Missing) => std::cmp::Ordering::Less,
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
@@ -604,96 +633,26 @@ impl Node {
                         let column_name = &column_names[idx];
                         let curr_ordering = &orderings[idx];
 
-                        let a_value = a.get(column_name);
-                        let b_value = b.get(column_name);
+                        // Fast path: get references to avoid cloning values during sort.
+                        // Falls back to owned get() for complex paths (multi-segment, wildcards).
+                        let a_owned;
+                        let b_owned;
+                        let a_ref = match a.get_ref(column_name) {
+                            Some(v) => v,
+                            None => { a_owned = a.get(column_name); &a_owned }
+                        };
+                        let b_ref = match b.get_ref(column_name) {
+                            Some(v) => v,
+                            None => { b_owned = b.get(column_name); &b_owned }
+                        };
 
-                        match (a_value, b_value) {
-                            (Value::Int(i1), Value::Int(i2)) => match curr_ordering {
-                                Ordering::Asc => {
-                                    return i1.cmp(&i2);
-                                }
-                                Ordering::Desc => {
-                                    return i2.cmp(&i1);
-                                }
-                            },
-                            (Value::Boolean(b1), Value::Boolean(b2)) => match curr_ordering {
-                                Ordering::Asc => {
-                                    return b1.cmp(&b2);
-                                }
-                                Ordering::Desc => {
-                                    return b2.cmp(&b1);
-                                }
-                            },
-                            (Value::Float(f1), Value::Float(f2)) => match curr_ordering {
-                                Ordering::Asc => {
-                                    return f1.cmp(&f2);
-                                }
-                                Ordering::Desc => {
-                                    return f2.cmp(&f1);
-                                }
-                            },
-                            (Value::String(s1), Value::String(s2)) => match curr_ordering {
-                                Ordering::Asc => {
-                                    return s1.cmp(&s2);
-                                }
-                                Ordering::Desc => {
-                                    return s2.cmp(&s1);
-                                }
-                            },
-                            (Value::DateTime(dt1), Value::DateTime(dt2)) => match curr_ordering {
-                                Ordering::Asc => {
-                                    return dt1.cmp(&dt2);
-                                }
-                                Ordering::Desc => {
-                                    return dt2.cmp(&dt1);
-                                }
-                            },
-                            (Value::Null, Value::Null) => {
-                                return std::cmp::Ordering::Equal;
-                            }
-                            (Value::Host(h1), Value::Host(h2)) => {
-                                let s1 = h1.to_string();
-                                let s2 = h2.to_string();
-
-                                match curr_ordering {
-                                    Ordering::Asc => {
-                                        return s1.cmp(&s2);
-                                    }
-                                    Ordering::Desc => {
-                                        return s2.cmp(&s1);
-                                    }
-                                }
-                            }
-                            (Value::HttpRequest(h1), Value::HttpRequest(h2)) => {
-                                let s1 = h1.to_string();
-                                let s2 = h2.to_string();
-
-                                match curr_ordering {
-                                    Ordering::Asc => {
-                                        return s1.cmp(&s2);
-                                    }
-                                    Ordering::Desc => {
-                                        return s2.cmp(&s1);
-                                    }
-                                }
-                            }
-                            (Value::Missing, Value::Missing) => {
-                                return std::cmp::Ordering::Equal;
-                            }
-                            (Value::Null, Value::Missing) | (Value::Missing, Value::Null) => {
-                                return std::cmp::Ordering::Equal;
-                            }
-                            (Value::Null, _) | (Value::Missing, _) => match curr_ordering {
-                                Ordering::Asc => return std::cmp::Ordering::Greater,
-                                Ordering::Desc => return std::cmp::Ordering::Less,
-                            },
-                            (_, Value::Null) | (_, Value::Missing) => match curr_ordering {
-                                Ordering::Asc => return std::cmp::Ordering::Less,
-                                Ordering::Desc => return std::cmp::Ordering::Greater,
-                            },
-                            _ => {
-                                return std::cmp::Ordering::Equal;
-                            }
+                        let cmp_result = compare_values(a_ref, b_ref);
+                        let ordered = match curr_ordering {
+                            Ordering::Asc => cmp_result,
+                            Ordering::Desc => cmp_result.reverse(),
+                        };
+                        if ordered != std::cmp::Ordering::Equal {
+                            return ordered;
                         }
                     }
 

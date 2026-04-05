@@ -37,6 +37,18 @@ impl Record {
         common::types::get_value_by_path_expr(field_name, 0, &self.variables)
     }
 
+    /// Get a reference to a value for a single-segment path. Returns None for
+    /// multi-segment paths or missing values (caller must fall back to get()).
+    #[inline]
+    pub(crate) fn get_ref(&self, field_name: &ast::PathExpr) -> Option<&Value> {
+        if field_name.path_segments.len() == 1 {
+            if let ast::PathSegment::AttrName(ref name) = field_name.path_segments[0] {
+                return self.variables.get(name);
+            }
+        }
+        None
+    }
+
     pub(crate) fn alias(&mut self, bindings: &Vec<common::types::Binding>) {
         for binding in bindings.iter() {
             let val = common::types::get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
@@ -317,26 +329,18 @@ impl RecordStream for FilterStream {
 }
 
 pub struct InMemoryStream {
-    pub(crate) data: Vec<Option<Record>>,
-    pos: usize,
+    pub(crate) data: VecDeque<Record>,
 }
 
 impl InMemoryStream {
     pub fn new(data: VecDeque<Record>) -> InMemoryStream {
-        let data: Vec<Option<Record>> = data.into_iter().map(Some).collect();
-        InMemoryStream { data, pos: 0 }
+        InMemoryStream { data }
     }
 }
 
 impl RecordStream for InMemoryStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        if self.pos < self.data.len() {
-            let record = self.data[self.pos].take();
-            self.pos += 1;
-            Ok(record)
-        } else {
-            Ok(None)
-        }
+        Ok(self.data.pop_front())
     }
 
     fn close(&self) {}
