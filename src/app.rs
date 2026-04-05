@@ -94,7 +94,7 @@ impl FromStr for OutputMode {
     }
 }
 
-pub fn explain(query_str: &str, data_source: common::types::DataSource) -> AppResult<()> {
+pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry) -> AppResult<()> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -102,7 +102,7 @@ pub fn explain(query_str: &str, data_source: common::types::DataSource) -> AppRe
     let q = syntax::desugar::desugar_query(q);
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_source.clone(), registry)?;
+    let node = logical::parser::parse_query_top(q, data_sources, registry)?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -111,7 +111,7 @@ pub fn explain(query_str: &str, data_source: common::types::DataSource) -> AppRe
     Ok(())
 }
 
-pub fn run(query_str: &str, data_source: common::types::DataSource, output_mode: OutputMode) -> AppResult<()> {
+pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, output_mode: OutputMode) -> AppResult<()> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -119,7 +119,7 @@ pub fn run(query_str: &str, data_source: common::types::DataSource, output_mode:
     let q = syntax::desugar::desugar_query(q);
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
+    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -195,7 +195,7 @@ pub fn run(query_str: &str, data_source: common::types::DataSource, output_mode:
 #[cfg(test)]
 pub(crate) fn run_to_vec(
     query_str: &str,
-    data_source: common::types::DataSource,
+    data_sources: common::types::DataSourceRegistry,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
@@ -204,7 +204,7 @@ pub(crate) fn run_to_vec(
     let q = syntax::desugar::desugar_query(q);
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
+    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -221,7 +221,7 @@ pub(crate) fn run_to_vec(
 #[cfg(feature = "bench-internals")]
 pub fn run_to_records(
     query_str: &str,
-    data_source: common::types::DataSource,
+    data_sources: common::types::DataSourceRegistry,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
@@ -230,7 +230,7 @@ pub fn run_to_records(
     let q = syntax::desugar::desugar_query(q);
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
+    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -247,7 +247,7 @@ pub fn run_to_records(
 #[cfg(feature = "bench-internals")]
 pub fn run_to_records_with_registry(
     query_str: &str,
-    data_source: common::types::DataSource,
+    data_sources: common::types::DataSourceRegistry,
     registry: Arc<functions::FunctionRegistry>,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
@@ -256,7 +256,7 @@ pub fn run_to_records_with_registry(
     }
     let q = syntax::desugar::desugar_query(q);
 
-    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
+    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -289,7 +289,8 @@ mod tests {
 
         let data_source =
             common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
-        let result = run(query, data_source, OutputMode::Csv);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let result = run(query, data_sources, OutputMode::Csv);
         dir.close().unwrap();
         result
     }
@@ -310,7 +311,8 @@ mod tests {
 
         let data_source =
             common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
-        let result = run_to_vec(query, data_source);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let result = run_to_vec(query, data_sources);
         dir.close().unwrap();
         result
     }
@@ -328,7 +330,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let result = run(&*query_str, data_source, OutputMode::Csv);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let result = run(&*query_str, data_sources, OutputMode::Csv);
 
         assert_eq!(result, Ok(()));
 
@@ -347,30 +350,31 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
         let result = run(
             r#"select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t order by t asc limit 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from it limit 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
             r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -394,23 +398,24 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
         let result = run(
             r#"select b, e.f.g as x from it limit 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
             r#"select b, count(e.f.g) as x from it group by b"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
 
         let result = run(
             r#"select x, count(*) as x from it group by d[0] as x"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -431,11 +436,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Self cross join: FROM it AS a CROSS JOIN it AS b
         let result = run(
             r#"select a.x, b.x from it as a cross join it as b"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -456,11 +462,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Comma-separated FROM items (implicit cross join)
         let result = run(
             r#"select a.x, b.x from it as a, it as b"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -482,11 +489,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Cross join with filter
         let result = run(
             r#"select a.x, b.x from it as a cross join it as b where a.x < b.x"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -508,11 +516,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LEFT JOIN with matching condition - all rows match themselves
         let result = run(
             r#"select a.x, b.x from it as a left join it as b on a.x = b.x"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -533,11 +542,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LEFT JOIN where nothing matches - all right sides should be NULL
         let result = run(
             r#"select a.x, b.x from it as a left join it as b on a.x != a.x"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -558,11 +568,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LEFT OUTER JOIN - should work identically to LEFT JOIN
         let result = run(
             r#"select a.x, b.x from it as a left outer join it as b on a.x = b.x"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -584,11 +595,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Subquery: select rows where x equals the max x
         let result = run(
             r#"select x from it where x = (select max(x) from it)"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -609,11 +621,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Scalar subquery in SELECT
         let result = run(
             r#"select x, (select count(*) from it) as total from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -635,11 +648,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // UNION (deduplicates)
         let result = run(
             r#"select x from it where x < 3 union select x from it where x > 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -647,7 +661,7 @@ mod tests {
         // UNION ALL (keeps duplicates)
         let result = run(
             r#"select x from it where x < 3 union all select x from it where x > 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -669,10 +683,11 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         let result = run(
             r#"select x from it where x < 3 intersect select x from it where x > 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -694,10 +709,11 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         let result = run(
             r#"select x from it except select x from it where x > 2"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -721,11 +737,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Mixed case: SELECT, FROM, WHERE, AND, LIMIT
         let result = run(
             r#"SELECT a, b FROM it WHERE a > 0 AND b > 0 LIMIT 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -733,7 +750,7 @@ mod tests {
         // Mixed case: ORDER BY, ASC (lowercase order by to avoid OR prefix match)
         let result = run(
             r#"SELECT a FROM it order by a ASC LIMIT 1"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -741,7 +758,7 @@ mod tests {
         // Mixed case variant with OR
         let result = run(
             r#"Select a From it Where a = 1 Or b = 4"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -763,11 +780,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // IS NULL
         let result = run(
             r#"select a from it where b is null"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -775,7 +793,7 @@ mod tests {
         // IS NOT MISSING
         let result = run(
             r#"select a, b from it where b is not missing"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -783,7 +801,7 @@ mod tests {
         // COALESCE with NULL/MISSING
         let result = run(
             r#"select coalesce(b, 0) as b_or_zero from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -805,11 +823,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Multi-branch CASE WHEN with ELSE
         let result = run(
             r#"select case when x < 3 then "low" when x < 8 then "mid" else "high" end as category from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -831,11 +850,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LIKE
         let result = run(
             r#"select name from it where name like "%ob%""#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -843,7 +863,7 @@ mod tests {
         // BETWEEN
         let result = run(
             r#"select name, age from it where age between 28 and 32"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -851,7 +871,7 @@ mod tests {
         // IN
         let result = run(
             r#"select name from it where age in (25, 35)"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -859,7 +879,7 @@ mod tests {
         // NOT LIKE + NOT BETWEEN + NOT IN
         let result = run(
             r#"select name from it where name not like "%a%" and age not between 30 and 40 and age not in (30)"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -880,11 +900,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // CAST to int
         let result = run(
             r#"select cast(x as int) as xi from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -892,7 +913,7 @@ mod tests {
         // String concatenation
         let result = run(
             r#"select y || " " || x as combined from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -912,11 +933,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // UPPER, LOWER, CHAR_LENGTH
         let result = run(
             r#"select upper(name) as u, lower(name) as l, char_length(name) as len from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -940,11 +962,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // SELECT DISTINCT with ORDER BY
         let result = run(
             r#"select distinct x from it order by x asc"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -966,11 +989,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // CROSS JOIN
         let result = run(
             r#"select a.id, b.val from it as a cross join it as b limit 3"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -978,7 +1002,7 @@ mod tests {
         // LEFT JOIN with ON condition
         let result = run(
             r#"select a.id, b.val from it as a left join it as b on a.id = b.id limit 5"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1000,11 +1024,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Subquery in WHERE
         let result = run(
             r#"select x from it where x = (select max(x) from it)"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1012,7 +1037,7 @@ mod tests {
         // UNION
         let result = run(
             r#"select x from it where x = 1 union select x from it where x = 3"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1020,7 +1045,7 @@ mod tests {
         // INTERSECT
         let result = run(
             r#"select x from it where x > 1 intersect select x from it where x < 3"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1028,7 +1053,7 @@ mod tests {
         // EXCEPT
         let result = run(
             r#"select x from it except select x from it where x = 2"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1049,11 +1074,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // NULLIF returns NULL when equal, value when not
         let result = run(
             r#"select nullif(a, b) as result from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1074,11 +1100,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // JSON output mode
         let result = run(
             r#"select x, y from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Json,
         );
         assert_eq!(result, Ok(()));
@@ -1086,7 +1113,7 @@ mod tests {
         // CSV output mode (Table mode omitted: prettytable may SIGSEGV without a TTY)
         let result = run(
             r#"select x, y from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1106,11 +1133,12 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Nested path access
         let result = run(
             r#"select a.b.c as deep from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
@@ -1118,7 +1146,7 @@ mod tests {
         // Array index
         let result = run(
             r#"select d[0] as first, d[2] as third from it"#,
-            data_source.clone(),
+            data_sources.clone(),
             OutputMode::Csv,
         );
         assert_eq!(result, Ok(()));
