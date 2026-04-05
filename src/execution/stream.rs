@@ -131,6 +131,8 @@ pub struct MapStream {
     pub(crate) registry: Arc<FunctionRegistry>,
     simple_projection: bool,
     is_star_only: bool,
+    /// Pre-computed (source_field, output_column) pairs for simple_projection fast path
+    projection_map: Vec<(String, String)>,
 }
 
 impl MapStream {
@@ -154,6 +156,20 @@ impl MapStream {
         let is_star_only = variables.is_empty()
             && named_list.len() == 1
             && matches!(&named_list[0], Named::Star);
+        // Pre-compute (source_field, output_column) pairs for simple_projection
+        let projection_map = if simple_projection {
+            named_list.iter().enumerate().filter_map(|(idx, named)| {
+                if let Named::Expression(Expression::Variable(pe), _) = named {
+                    if let PathSegment::AttrName(ref field_name) = pe.path_segments[0] {
+                        let out_name = column_names[idx].as_ref().unwrap().clone();
+                        return Some((field_name.clone(), out_name));
+                    }
+                }
+                None
+            }).collect()
+        } else {
+            Vec::new()
+        };
         MapStream {
             named_list,
             column_names,
@@ -162,6 +178,7 @@ impl MapStream {
             registry,
             simple_projection,
             is_star_only,
+            projection_map,
         }
     }
 }
@@ -182,15 +199,10 @@ impl RecordStream for MapStream {
             // Move values out of source record instead of cloning.
             if self.simple_projection {
                 let mut source_vars = record.into_variables();
-                let mut out = Variables::with_capacity(self.named_list.len());
-                for (idx, named) in self.named_list.iter().enumerate() {
-                    if let Named::Expression(Expression::Variable(pe), _) = named {
-                        if let PathSegment::AttrName(ref field_name) = pe.path_segments[0] {
-                            let name = self.column_names[idx].as_ref().unwrap().clone();
-                            let v = source_vars.remove(field_name).unwrap_or(Value::Missing);
-                            out.insert(name, v);
-                        }
-                    }
+                let mut out = Variables::with_capacity(self.projection_map.len());
+                for (src_field, out_name) in &self.projection_map {
+                    let v = source_vars.remove(src_field).unwrap_or(Value::Missing);
+                    out.insert(out_name.clone(), v);
                 }
                 return Ok(Some(Record::new_with_variables(out)));
             }
