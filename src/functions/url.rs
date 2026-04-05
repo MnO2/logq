@@ -12,7 +12,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
             Value::HttpRequest(r) => {
-                if let Some(host) = r.url.host_str() {
+                let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                if let Some(host) = url.host_str() {
                     Ok(Value::String(host.to_string()))
                 } else {
                     Ok(Value::Null)
@@ -31,7 +32,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
             Value::HttpRequest(r) => {
-                if let Some(port) = r.url.port() {
+                let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                if let Some(port) = url.port() {
                     Ok(Value::Int(port as i32))
                 } else {
                     Ok(Value::Null)
@@ -50,7 +52,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
             Value::HttpRequest(r) => {
-                let url_path = r.url.path();
+                let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                let url_path = url.path();
                 Ok(Value::String(url_path.to_string()))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -66,7 +69,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
             Value::HttpRequest(r) => {
-                if let Some(url_fragment) = r.url.fragment() {
+                let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                if let Some(url_fragment) = url.fragment() {
                     Ok(Value::String(url_fragment.to_string()))
                 } else {
                     Ok(Value::Null)
@@ -85,7 +89,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
             Value::HttpRequest(r) => {
-                if let Some(url_query) = r.url.query() {
+                let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                if let Some(url_query) = url.query() {
                     Ok(Value::String(url_query.to_string()))
                 } else {
                     Ok(Value::Null)
@@ -106,7 +111,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::HttpRequest(r) => {
                 match &args[1] {
                     Value::Int(idx) => {
-                        if let Some(url_path_segments) = r.url.path_segments() {
+                        let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                        if let Some(url_path_segments) = url.path_segments() {
                             let idx = *idx as usize;
                             for (i, segment) in url_path_segments.enumerate() {
                                 if i == idx {
@@ -136,7 +142,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::HttpRequest(r) => {
                 match (&args[1], &args[2]) {
                     (Value::Int(idx), Value::String(target)) => {
-                        if let Some(url_path_segments) = r.url.path_segments() {
+                        let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                        if let Some(url_path_segments) = url.path_segments() {
                             let idx = *idx as usize;
                             let mut res = String::new();
                             for (i, segment) in url_path_segments.enumerate() {
@@ -167,7 +174,6 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
 mod tests {
     use super::*;
     use crate::common::types::{Value, HttpRequest};
-    use url::Url;
 
     fn make_registry() -> FunctionRegistry {
         let mut r = FunctionRegistry::new();
@@ -176,10 +182,9 @@ mod tests {
     }
 
     fn make_request(url_str: &str) -> Value {
-        let url = Url::parse(url_str).unwrap();
         Value::HttpRequest(Box::new(HttpRequest {
             http_method: "GET".to_string(),
-            url,
+            url_raw: url_str.to_string(),
             http_version: "HTTP/1.1".to_string(),
         }))
     }

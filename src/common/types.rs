@@ -83,15 +83,22 @@ pub(crate) type HttpVersion = String;
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct HttpRequest {
     pub http_method: String,
-    pub url: url::Url,
+    pub url_raw: String,
     pub http_version: String,
+}
+
+impl HttpRequest {
+    /// Parse the URL on demand. Only needed for url_* functions.
+    pub fn parsed_url(&self) -> Result<url::Url, url::ParseError> {
+        url::Url::parse(&self.url_raw)
+    }
 }
 
 impl fmt::Display for HttpRequest {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.write_str(&*self.http_method)?;
         fmt.write_str(" ")?;
-        fmt.write_str(&*self.url.to_string())?;
+        fmt.write_str(&self.url_raw)?;
         fmt.write_str(" ")?;
         fmt.write_str(&*self.http_version)?;
         Ok(())
@@ -118,16 +125,15 @@ pub(crate) fn parse_http_request(s: &str) -> ParseHttpRequestResult<HttpRequest>
     let mut parts = s.splitn(3, ' ');
 
     let method_str = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
-    let url_str = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
+    let url_raw = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
     let version_str = parts.next().ok_or(ParseHttpRequestError::MissingField)?;
 
     let http_method = parse_http_method(method_str)?;
-    let url = url::Url::parse(url_str)?;
     let http_version = parse_http_version(version_str)?;
 
     Ok(HttpRequest {
         http_method,
-        url,
+        url_raw: url_raw.to_string(),
         http_version,
     })
 }
