@@ -4,6 +4,7 @@ pub mod bitwise;
 pub mod datetime;
 pub mod host;
 pub mod json;
+pub mod map;
 pub mod regexp;
 pub mod registry;
 pub mod string;
@@ -22,5 +23,6 @@ pub fn register_all() -> Result<FunctionRegistry, RegistryError> {
     datetime::register(&mut registry)?;
     regexp::register(&mut registry)?;
     json::register(&mut registry)?;
+    map::register(&mut registry)?;
     Ok(registry)
 }
