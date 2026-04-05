@@ -348,7 +348,7 @@ fn parse_value_expression(
             Ok(Box::new(types::Expression::Cast(expr, cast_type.clone())))
         }
         ast::Expression::Subquery(stmt) => {
-            let inner_node = parse_query(*stmt.clone(), ctx.data_source.clone(), ctx.registry.clone())?;
+            let inner_node = parse_query(*stmt.clone(), ctx.data_sources.clone(), ctx.registry.clone())?;
             Ok(Box::new(types::Expression::Subquery(Box::new(inner_node))))
         }
     }
@@ -612,33 +612,65 @@ fn check_group_by_vars(named: &Named, group_by_vars: &HashSet<String>) -> bool {
     }
 }
 
+fn lookup_data_source(
+    data_sources: &common::DataSourceRegistry,
+    table_ref: &TableReference,
+) -> ParseResult<common::DataSource> {
+    match &table_ref.path_expr.path_segments[0] {
+        PathSegment::AttrName(name) => {
+            data_sources.get(name).cloned().ok_or_else(|| {
+                let mut available: Vec<_> = data_sources.keys().cloned().collect();
+                available.sort();
+                ParseError::UnknownTable(name.clone(), available.join(", "))
+            })
+        }
+        _ => Err(ParseError::FromClausePathInvalidTableReference),
+    }
+}
+
+fn extract_base_name(table_ref: &TableReference) -> ParseResult<String> {
+    match &table_ref.path_expr.path_segments[0] {
+        PathSegment::AttrName(s) => Ok(s.clone()),
+        _ => Err(ParseError::FromClausePathInvalidTableReference),
+    }
+}
+
 fn build_from_node(
-    ctx: &ParsingContext,
+    ctx: &common::ParsingContext,
     from_clause: &FromClause,
-    data_source: &common::DataSource,
-    table_name: &String,
 ) -> ParseResult<types::Node> {
     match from_clause {
         FromClause::Tables(table_references) => {
             if table_references.len() == 1 {
-                let bindings = to_bindings(table_name, table_references);
-                Ok(types::Node::DataSource(data_source.clone(), bindings))
+                let ref0 = &table_references[0];
+                let ds = lookup_data_source(&ctx.data_sources, ref0)?;
+                let bindings = to_bindings_for_ref(&ctx.data_sources, ref0);
+                Ok(types::Node::DataSource(ds, bindings))
             } else {
-                // Multiple table references: build a cross join tree
-                let first_bindings = to_bindings_for_ref(table_name, &table_references[0]);
-                let mut node = types::Node::DataSource(data_source.clone(), first_bindings);
+                let ref0 = &table_references[0];
+                let ds0 = lookup_data_source(&ctx.data_sources, ref0)?;
+                let first_bindings = to_bindings_for_ref(&ctx.data_sources, ref0);
+                let mut node = types::Node::DataSource(ds0, first_bindings);
                 for table_ref in table_references.iter().skip(1) {
-                    let ref_bindings = to_bindings_for_ref(table_name, table_ref);
-                    let right = types::Node::DataSource(data_source.clone(), ref_bindings);
+                    let ds = lookup_data_source(&ctx.data_sources, table_ref)?;
+                    if matches!(&ds, common::DataSource::Stdin(..)) {
+                        return Err(ParseError::StdinInJoinRightSide);
+                    }
+                    let ref_bindings = to_bindings_for_ref(&ctx.data_sources, table_ref);
+                    let right = types::Node::DataSource(ds, ref_bindings);
                     node = types::Node::CrossJoin(Box::new(node), Box::new(right));
                 }
                 Ok(node)
             }
         }
         FromClause::Join { left, right, join_type, condition } => {
-            let left_node = build_from_node(ctx, left, data_source, table_name)?;
-            let right_bindings = to_bindings_for_ref(table_name, right);
-            let right_node = types::Node::DataSource(data_source.clone(), right_bindings);
+            let left_node = build_from_node(ctx, left)?;
+            let ds_right = lookup_data_source(&ctx.data_sources, right)?;
+            if matches!(&ds_right, common::DataSource::Stdin(..)) {
+                return Err(ParseError::StdinInJoinRightSide);
+            }
+            let right_bindings = to_bindings_for_ref(&ctx.data_sources, right);
+            let right_node = types::Node::DataSource(ds_right, right_bindings);
             match join_type {
                 JoinType::Cross => {
                     Ok(types::Node::CrossJoin(Box::new(left_node), Box::new(right_node)))
@@ -653,12 +685,12 @@ fn build_from_node(
     }
 }
 
-pub(crate) fn parse_query_top(q: ast::Query, data_source: common::DataSource, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
+pub(crate) fn parse_query_top(q: ast::Query, data_sources: common::DataSourceRegistry, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
     match q {
-        ast::Query::Select(stmt) => parse_query(stmt, data_source, registry),
+        ast::Query::Select(stmt) => parse_query(stmt, data_sources, registry),
         ast::Query::SetOp { op, all, left, right } => {
-            let left_node = parse_query_top(*left, data_source.clone(), registry.clone())?;
-            let right_node = parse_query_top(*right, data_source, registry)?;
+            let left_node = parse_query_top(*left, data_sources.clone(), registry.clone())?;
+            let right_node = parse_query_top(*right, data_sources, registry)?;
             match op {
                 ast::SetOperator::Union => {
                     let union_node = types::Node::Union(Box::new(left_node), Box::new(right_node));
@@ -679,23 +711,33 @@ pub(crate) fn parse_query_top(q: ast::Query, data_source: common::DataSource, re
     }
 }
 
-pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
+pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::DataSourceRegistry, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
     let from_clause = &query.from_clause;
 
-    let (file_format, table_name) = match &data_source {
-        common::DataSource::File(_, file_format, table_name) => (file_format.clone(), table_name.clone()),
-        common::DataSource::Stdin(file_format, table_name) => (file_format.clone(), table_name.clone()),
+    check_env(&data_sources, from_clause)?;
+
+    // Extract file_format from the primary (leftmost) table
+    let primary_table_name = {
+        fn leftmost_name(fc: &FromClause) -> ParseResult<String> {
+            match fc {
+                FromClause::Tables(refs) => extract_base_name(&refs[0]),
+                FromClause::Join { left, .. } => leftmost_name(left),
+            }
+        }
+        leftmost_name(from_clause)?
+    };
+    let primary_ds = data_sources.get(&primary_table_name).unwrap();
+    let file_format = match primary_ds {
+        common::DataSource::File(_, fmt, _) => fmt.clone(),
+        common::DataSource::Stdin(fmt, _) => fmt.clone(),
     };
 
-    check_env(&table_name, from_clause)?;
-
-    let parsing_context = ParsingContext {
-        table_name: table_name.clone(),
-        data_source: data_source.clone(),
+    let parsing_context = common::ParsingContext {
+        data_sources: data_sources.clone(),
         registry: registry.clone(),
     };
 
-    let mut root = build_from_node(&parsing_context, from_clause, &data_source, &table_name)?;
+    let mut root = build_from_node(&parsing_context, from_clause)?;
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -969,6 +1011,13 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
                 })
                 .collect();
 
+            // SELECT * with GROUP BY is not supported for jsonl or multi-table queries
+            if non_aggregates.iter().any(|n| matches!(n, types::Named::Star)) {
+                if data_sources.len() > 1 || file_format == "jsonl" {
+                    return Err(ParseError::StarGroupByUnsupported);
+                }
+            }
+
             if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
                 return Err(ParseError::GroupByFieldsMismatch);
             }
@@ -1062,7 +1111,8 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
                         b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else {
-                    unreachable!();
+                    // jsonl has no fixed schema -- cannot expand Star
+                    return false;
                 }
             }
         }
