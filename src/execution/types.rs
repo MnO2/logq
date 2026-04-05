@@ -143,8 +143,7 @@ impl Expression {
                 }
             }
             Expression::Variable(path_expr) => {
-                let v = common::types::get_value_by_path_expr(path_expr, 0, variables);
-                Ok(v.clone())
+                Ok(common::types::get_value_by_path_expr(path_expr, 0, variables))
             }
             Expression::Function(name, arguments) => {
                 let mut values: Vec<Value> = Vec::new();

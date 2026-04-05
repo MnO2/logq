@@ -121,6 +121,7 @@ pub trait RecordStream {
 
 pub struct MapStream {
     pub(crate) named_list: Vec<Named>,
+    pub(crate) column_names: Vec<Option<String>>,
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
     pub(crate) registry: Arc<FunctionRegistry>,
@@ -128,8 +129,17 @@ pub struct MapStream {
 
 impl MapStream {
     pub fn new(named_list: Vec<Named>, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
+        let column_names: Vec<Option<String>> = named_list.iter().enumerate().map(|(idx, named)| {
+            match named {
+                Named::Expression(_, name_opt) => {
+                    Some(name_opt.clone().unwrap_or_else(|| format!("_{}", idx)))
+                }
+                Named::Star => None,
+            }
+        }).collect();
         MapStream {
             named_list,
+            column_names,
             variables,
             source,
             registry,
@@ -144,36 +154,31 @@ impl RecordStream for MapStream {
 
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if let Some(record) = self.source.next()? {
-            let variables = common::types::merge(&self.variables, record.to_variables());
+            let variables_owned;
+            let variables = if self.variables.is_empty() {
+                record.to_variables()
+            } else {
+                variables_owned = common::types::merge(&self.variables, record.to_variables());
+                &variables_owned
+            };
 
-            let capacity = self.named_list.len();
-            let mut field_names = Vec::with_capacity(capacity);
-            let mut data = Vec::with_capacity(capacity);
+            let mut out = Variables::with_capacity(self.named_list.len());
             for (idx, named) in self.named_list.iter().enumerate() {
                 match named {
-                    Named::Expression(expr, name_opt) => {
-                        let name = if let Some(name) = name_opt {
-                            name.clone()
-                        } else {
-                            //Give the column a positional name if not provided.
-                            format!("_{}", idx)
-                        };
-
-                        field_names.push(name);
-                        let v = expr.expression_value(&variables, &self.registry)?;
-                        data.push(v);
+                    Named::Expression(expr, _) => {
+                        let name = self.column_names[idx].as_ref().unwrap().clone();
+                        let v = expr.expression_value(variables, &self.registry)?;
+                        out.insert(name, v);
                     }
                     Named::Star => {
-                        for (k, v) in record.to_tuples().into_iter() {
-                            field_names.push(k);
-                            data.push(v);
+                        for (k, v) in record.to_variables().iter() {
+                            out.insert(k.clone(), v.clone());
                         }
                     }
                 }
             }
 
-            let record = Record::new(&field_names, data);
-            Ok(Some(record))
+            Ok(Some(Record::new_with_variables(out)))
         } else {
             Ok(None)
         }
@@ -238,8 +243,12 @@ impl FilterStream {
 impl RecordStream for FilterStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         while let Some(record) = self.source.next()? {
-            let variables = common::types::merge(&self.variables, record.to_variables());
-            let predicate = self.formula.evaluate(&variables, &self.registry)?;
+            let predicate = if self.variables.is_empty() {
+                self.formula.evaluate(record.to_variables(), &self.registry)?
+            } else {
+                let variables = common::types::merge(&self.variables, record.to_variables());
+                self.formula.evaluate(&variables, &self.registry)?
+            };
 
             if predicate == Some(true) {
                 return Ok(Some(record));
@@ -309,7 +318,13 @@ impl RecordStream for GroupByStream {
         if self.group_iterator.is_none() {
             let mut groups: hash_set::HashSet<Option<Tuple>> = hash_set::HashSet::new();
             while let Some(record) = self.source.next()? {
-                let variables = common::types::merge(&self.variables, record.to_variables());
+                let variables_owned;
+                let variables = if self.variables.is_empty() {
+                    record.to_variables()
+                } else {
+                    variables_owned = common::types::merge(&self.variables, record.to_variables());
+                    &variables_owned
+                };
 
                 let key = if self.keys.is_empty() {
                     None

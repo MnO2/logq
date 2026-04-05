@@ -101,9 +101,15 @@ impl FunctionRegistry {
     }
 
     pub fn call(&self, name: &str, args: &[Value]) -> ExpressionResult<Value> {
-        let key = name.to_ascii_lowercase();
-        let def = self.functions.get(&key)
-            .ok_or(ExpressionError::UnknownFunction)?;
+        // Try direct lookup first (name is usually pre-lowercased at plan creation time)
+        let def = if let Some(d) = self.functions.get(name) {
+            d
+        } else {
+            // Fallback to lowercase for backwards compatibility (tests, etc.)
+            let key = name.to_ascii_lowercase();
+            self.functions.get(&key)
+                .ok_or(ExpressionError::UnknownFunction)?
+        };
 
         match def.null_handling {
             NullHandling::Propagate => {

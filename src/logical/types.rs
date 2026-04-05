@@ -221,7 +221,7 @@ impl Expression {
                 }
 
                 Ok((
-                    Box::new(execution::Expression::Function(name.clone(), physical_args)),
+                    Box::new(execution::Expression::Function(name.to_ascii_lowercase(), physical_args)),
                     variables,
                 ))
             }

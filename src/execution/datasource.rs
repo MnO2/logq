@@ -686,50 +686,26 @@ impl<R: io::Read> RecordRead for Reader<R> {
         let more_data = self.rdr.read_line(&mut buf)?;
 
         if more_data > 0 && self.file_format != "jsonl" {
-            let field_names = if self.file_format == "elb" {
-                ClassicLoadBalancerLogField::field_names()
+            let (field_names, datatypes, field_count) = if self.file_format == "elb" {
+                (ClassicLoadBalancerLogField::field_names(), &*AWS_ELB_DATATYPES, ClassicLoadBalancerLogField::len())
             } else if self.file_format == "alb" {
-                ApplicationLoadBalancerLogField::field_names()
+                (ApplicationLoadBalancerLogField::field_names(), &*AWS_ALB_DATATYPES, ApplicationLoadBalancerLogField::len())
             } else if self.file_format == "s3" {
-                S3Field::field_names()
+                (S3Field::field_names(), &*AWS_S3_DATATYPES, S3Field::len())
             } else {
-                SquidLogField::field_names()
+                (SquidLogField::field_names(), &*SQUID_DATATYPES, SquidLogField::len())
             };
 
-            let mut record_vars = common::types::Variables::default();
+            let mut record_vars = common::types::Variables::with_capacity(field_count);
             let mut value_cnt: usize = 0;
 
             for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&buf).enumerate() {
-                if self.file_format == "elb" {
-                    if i >= ClassicLoadBalancerLogField::len() {
-                        break;
-                    }
-                } else if self.file_format == "alb" {
-                    if i >= ApplicationLoadBalancerLogField::len() {
-                        break;
-                    }
-                } else if self.file_format == "squid" {
-                    if i >= SquidLogField::len() {
-                        break;
-                    }
-                } else if self.file_format == "s3" {
-                    if i >= S3Field::len() {
-                        break;
-                    }
-                } else {
-                    unreachable!();
+                if i >= field_count {
+                    break;
                 }
 
                 let s = m.as_str();
-                let datatype = if self.file_format == "elb" {
-                    ClassicLoadBalancerLogField::datatype(i)
-                } else if self.file_format == "alb" {
-                    ApplicationLoadBalancerLogField::datatype(i)
-                } else if self.file_format == "s3" {
-                    S3Field::datatype(i)
-                } else {
-                    SquidLogField::datatype(i)
-                };
+                let datatype = &datatypes[i];
 
                 match datatype {
                     DataType::DateTime => {

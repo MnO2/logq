@@ -272,22 +272,27 @@ fn expression_term_opt_not(i: &str) -> IResult<&str, ast::Expression, VerboseErr
 }
 
 fn expression(i: &str) -> IResult<&str, ast::Expression, VerboseError<&str>> {
-    let mut precedence_table: HashMap<String, (u32, bool)> = HashMap::new();
-    precedence_table.insert("*".to_string(), (7, true));
-    precedence_table.insert("/".to_string(), (7, true));
-    precedence_table.insert("+".to_string(), (6, true));
-    precedence_table.insert("-".to_string(), (6, true));
-    precedence_table.insert("||".to_string(), (6, true));
-    precedence_table.insert("<".to_string(), (4, true));
-    precedence_table.insert("<=".to_string(), (4, true));
-    precedence_table.insert(">".to_string(), (4, true));
-    precedence_table.insert(">=".to_string(), (4, true));
-    precedence_table.insert("=".to_string(), (3, true));
-    precedence_table.insert("!=".to_string(), (3, true));
-    precedence_table.insert("and".to_string(), (2, true));
-    precedence_table.insert("or".to_string(), (1, true));
+    lazy_static! {
+        static ref PRECEDENCE_TABLE: HashMap<&'static str, (u32, bool)> = {
+            let mut m = HashMap::new();
+            m.insert("*", (7, true));
+            m.insert("/", (7, true));
+            m.insert("+", (6, true));
+            m.insert("-", (6, true));
+            m.insert("||", (6, true));
+            m.insert("<", (4, true));
+            m.insert("<=", (4, true));
+            m.insert(">", (4, true));
+            m.insert(">=", (4, true));
+            m.insert("=", (3, true));
+            m.insert("!=", (3, true));
+            m.insert("and", (2, true));
+            m.insert("or", (1, true));
+            m
+        };
+    }
 
-    let (i1, expr) = parse_expression_at_precedence(i, 1, &precedence_table)?;
+    let (i1, expr) = parse_expression_at_precedence(i, 1, &PRECEDENCE_TABLE)?;
     Ok((i1, expr))
 }
 
@@ -779,7 +784,7 @@ fn parse_postfix_between<'a>(input: &'a str, expr: ast::Expression) -> IResult<&
 fn parse_expression_at_precedence<'a>(
     i0: &'a str,
     current_precedence: u32,
-    precedence_table: &HashMap<String, (u32, bool)>,
+    precedence_table: &HashMap<&str, (u32, bool)>,
 ) -> IResult<&'a str, ast::Expression, VerboseError<&'a str>> {
     let (i1, expr) = parse_expression_atom(i0)?;
     let (i1, expr) = parse_postfix_is(i1, expr)?;
@@ -1677,20 +1682,20 @@ mod test {
 
     #[test]
     fn test_parse_expression_at_precedence() {
-        let mut precedence_table: HashMap<String, (u32, bool)> = HashMap::new();
-        precedence_table.insert("*".to_string(), (7, true));
-        precedence_table.insert("/".to_string(), (7, true));
-        precedence_table.insert("+".to_string(), (6, true));
-        precedence_table.insert("-".to_string(), (6, true));
-        precedence_table.insert("||".to_string(), (6, true));
-        precedence_table.insert("<".to_string(), (4, true));
-        precedence_table.insert("<=".to_string(), (4, true));
-        precedence_table.insert(">".to_string(), (4, true));
-        precedence_table.insert(">=".to_string(), (4, true));
-        precedence_table.insert("=".to_string(), (3, true));
-        precedence_table.insert("!=".to_string(), (3, true));
-        precedence_table.insert("and".to_string(), (2, true));
-        precedence_table.insert("or".to_string(), (1, true));
+        let mut precedence_table: HashMap<&str, (u32, bool)> = HashMap::new();
+        precedence_table.insert("*", (7, true));
+        precedence_table.insert("/", (7, true));
+        precedence_table.insert("+", (6, true));
+        precedence_table.insert("-", (6, true));
+        precedence_table.insert("||", (6, true));
+        precedence_table.insert("<", (4, true));
+        precedence_table.insert("<=", (4, true));
+        precedence_table.insert(">", (4, true));
+        precedence_table.insert(">=", (4, true));
+        precedence_table.insert("=", (3, true));
+        precedence_table.insert("!=", (3, true));
+        precedence_table.insert("and", (2, true));
+        precedence_table.insert("or", (1, true));
         let (_, ans) = parse_expression_at_precedence(" 1 +1*2- 3", 1, &precedence_table).unwrap();
         let expected = ast::Expression::BinaryOperator(
             ast::BinaryOperator::Minus,
