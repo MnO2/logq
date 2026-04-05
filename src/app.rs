@@ -1347,6 +1347,211 @@ mod tests {
         );
     }
 
+    // ==================== Multi-table Integration Tests ====================
+
+    #[test]
+    fn test_multi_table_cross_join() {
+        let dir = tempdir().unwrap();
+
+        // Create file for table "a"
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        writeln!(file_a, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file_a, r#"{{"x": 2}}"#).unwrap();
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        // Create file for table "b"
+        let file_path_b = dir.path().join("b.jsonl");
+        let mut file_b = File::create(file_path_b.clone()).unwrap();
+        writeln!(file_b, r#"{{"y": 10}}"#).unwrap();
+        writeln!(file_b, r#"{{"y": 20}}"#).unwrap();
+        file_b.sync_all().unwrap();
+        drop(file_b);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+
+        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_left_join() {
+        let dir = tempdir().unwrap();
+
+        // Create file for table "a"
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        writeln!(file_a, r#"{{"id": 1, "x": "hello"}}"#).unwrap();
+        writeln!(file_a, r#"{{"id": 2, "x": "world"}}"#).unwrap();
+        writeln!(file_a, r#"{{"id": 3, "x": "foo"}}"#).unwrap();
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        // Create file for table "b"
+        let file_path_b = dir.path().join("b.jsonl");
+        let mut file_b = File::create(file_path_b.clone()).unwrap();
+        writeln!(file_b, r#"{{"id": 1, "y": "alpha"}}"#).unwrap();
+        writeln!(file_b, r#"{{"id": 3, "y": "beta"}}"#).unwrap();
+        file_b.sync_all().unwrap();
+        drop(file_b);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+
+        let result = run(r#"SELECT a.x, b.y FROM a LEFT JOIN b ON a.id = b.id"#, data_sources, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_comma_join() {
+        let dir = tempdir().unwrap();
+
+        // Create file for table "a"
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        writeln!(file_a, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file_a, r#"{{"x": 2}}"#).unwrap();
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        // Create file for table "b"
+        let file_path_b = dir.path().join("b.jsonl");
+        let mut file_b = File::create(file_path_b.clone()).unwrap();
+        writeln!(file_b, r#"{{"y": 10}}"#).unwrap();
+        writeln!(file_b, r#"{{"y": 20}}"#).unwrap();
+        file_b.sync_all().unwrap();
+        drop(file_b);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+
+        let result = run(r#"SELECT a.x, b.y FROM a, b"#, data_sources, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_unknown_table_error() {
+        let dir = tempdir().unwrap();
+
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        writeln!(file_a, r#"{{"x": 1}}"#).unwrap();
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+
+        let result = run(r#"SELECT * FROM unknown_table"#, data_sources, OutputMode::Csv);
+        assert!(result.is_err(), "Expected error for unknown table, got Ok");
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_backward_compat() {
+        let dir = tempdir().unwrap();
+
+        let file_path = dir.path().join("compat.jsonl");
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file, r#"{{"x": 2}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let data_source = common::types::DataSource::File(file_path, "jsonl".to_string(), "it".to_string());
+        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+
+        let result = run(r#"SELECT * FROM it LIMIT 1"#, data_sources, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_stdin_in_join_right_side_error() {
+        let dir = tempdir().unwrap();
+
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        writeln!(file_a, r#"{{"x": 1}}"#).unwrap();
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert("b".to_string(), common::types::DataSource::Stdin("jsonl".to_string(), "b".to_string()));
+
+        // "b" is stdin and used as the right side of a join — should produce an error
+        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv);
+        assert!(result.is_err(), "Expected error when stdin is on the right side of a join");
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_with_where_filter() {
+        let dir = tempdir().unwrap();
+
+        // Create file for table "a"
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        writeln!(file_a, r#"{{"x": 1}}"#).unwrap();
+        writeln!(file_a, r#"{{"x": 2}}"#).unwrap();
+        writeln!(file_a, r#"{{"x": 3}}"#).unwrap();
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        // Create file for table "b"
+        let file_path_b = dir.path().join("b.jsonl");
+        let mut file_b = File::create(file_path_b.clone()).unwrap();
+        writeln!(file_b, r#"{{"y": 2}}"#).unwrap();
+        writeln!(file_b, r#"{{"y": 3}}"#).unwrap();
+        writeln!(file_b, r#"{{"y": 4}}"#).unwrap();
+        file_b.sync_all().unwrap();
+        drop(file_b);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+
+        let result = run(r#"SELECT a.x, b.y FROM a, b WHERE a.x = b.y"#, data_sources, OutputMode::Csv);
+        assert_eq!(result, Ok(()));
+
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_table_case_sensitive_name_error() {
+        let dir = tempdir().unwrap();
+
+        let file_path = dir.path().join("mytable.jsonl");
+        let mut file = File::create(file_path.clone()).unwrap();
+        writeln!(file, r#"{{"x": 1}}"#).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("MyTable".to_string(), common::types::DataSource::File(file_path, "jsonl".to_string(), "MyTable".to_string()));
+
+        // Query uses lowercase "mytable" but registry has "MyTable" — should fail
+        let result = run(r#"SELECT * FROM mytable"#, data_sources, OutputMode::Csv);
+        assert!(result.is_err(), "Expected error for case-sensitive table name mismatch");
+
+        dir.close().unwrap();
+    }
+
     #[test]
     fn test_squid_count_by_status() {
         let lines = &[
