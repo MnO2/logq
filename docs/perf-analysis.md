@@ -320,15 +320,61 @@
 | map_keys | 72.6 ns | 54.9 ns | **-24%** |
 | regexp_like | 2.82 us | 2.88 us | ~0% |
 
+## Round 8 & 9 Optimizations (2026-04-05)
+
+28. **By-reference predicate comparison**: Added `Relation::compare_ref()` for comparing Values by reference. Fast path in `Formula::Predicate` for Variable-op-Constant pattern directly borrows from LinkedHashMap and constant, avoiding two `expression_value()` calls and two Value clones per predicate. Filter 10-12% faster.
+29. **Replace parse_time_interval regex with split_whitespace**: Eliminated last regex in common/types.rs.
+30. **Remove all dead regex imports**: Removed unused `Regex` imports from common/types.rs and datasource.rs. Removed `SPLIT_READER_LINE_REGEX` and `SPLIT_TIME_INTERVAL_LINE_REGEX` lazy_statics.
+
+## Cumulative Results (Original Baseline → Current, Rounds 1-9)
+
+| Benchmark | Baseline | Current | Improvement |
+|---|---|---|---|
+| **Parser** | | | |
+| L1_trivial | 2.55 us | 759 ns | **-70%** |
+| L2_where | 8.09 us | 2.05 us | **-75%** |
+| L3_group_order_limit | 9.40 us | 2.54 us | **-73%** |
+| L4_having_like | 16.12 us | 4.26 us | **-74%** |
+| L5_casewhen_join | 18.52 us | 5.04 us | **-73%** |
+| L6_in_union | 8.70 us | 2.13 us | **-76%** |
+| **Execution (synthetic)** | | | |
+| execution_map/1K | 754 us | 260 us | **-66%** |
+| execution_map/10K | 7.71 ms | 2.74 ms | **-65%** |
+| execution_map/100K | 75.4 ms | 26.1 ms | **-65%** |
+| execution_filter/1K | 526 us | 144 us | **-73%** |
+| execution_filter/10K | 5.28 ms | 1.44 ms | **-73%** |
+| execution_filter/100K | 52.8 ms | 14.3 ms | **-73%** |
+| execution_limit/1K | 132 us | 120 us | **-9%** |
+| execution_limit/10K | 1.32 ms | 1.23 ms | **-7%** |
+| execution_limit/100K | 13.3 ms | 12.3 ms | **-8%** |
+| **Execution (e2e)** | | | |
+| E1_scan_limit | 121 us | 61 us | **-50%** |
+| E2_groupby_count | 6.79 ms | 3.03 ms | **-55%** |
+| E3_filter_orderby | 8.58 us | 2.19 us | **-74%** |
+| **Datasource** | | | |
+| ELB | 2.89 ms | 1.62 ms | **-44%** |
+| ALB | 4.52 ms | 2.69 ms | **-40%** |
+| S3 | 3.12 ms | 1.79 ms | **-43%** |
+| Squid | 1.29 ms | 757 us | **-41%** |
+| JSONL | 819 us | 808 us | ~0% |
+| **UDF** | | | |
+| upper | 40.2 ns | 30.4 ns | **-24%** |
+| round | 25.9 ns | 19.8 ns | **-24%** |
+| date_part | 32.1 ns | 26.7 ns | **-17%** |
+| array_contains | 33.2 ns | 21.9 ns | **-34%** |
+| map_keys | 72.6 ns | 56.8 ns | **-22%** |
+| regexp_like | 2.82 us | 2.94 us | ~0% |
+
 ## Summary
 
-- **Parser: 68-77% faster** — VerboseError→Error, first-char keyword dispatch
-- **Execution map: 66-67% faster** — merge elimination + Value boxing + move-based projections
-- **Execution filter: 69-70% faster** — merge elimination + Value boxing + pre-allocation
-- **Execution limit: 9-10% faster** — Value boxing + general overhead reduction
+- **Parser: 70-76% faster** — VerboseError→Error, first-char keyword dispatch
+- **Execution map: 65-66% faster** — merge elimination + Value boxing + move-based projections
+- **Execution filter: 73% faster** — merge elimination + by-reference comparison + pre-allocation
+- **Execution limit: 7-9% faster** — Value boxing + general overhead reduction
 - **E1 scan_limit e2e: 50% faster** — SELECT * passthrough + hand-written tokenizer
 - **E2 groupby e2e: 55% faster** — all optimizations combined
-- **E3 filter e2e: 73% faster** — VerboseError→Error + optimized evaluation
-- **Datasource: 37-44% faster** — hand-written tokenizer + regex-free host/HTTP parsing
-- **UDFs: 18-35% faster** — pre-lowercased function names
+- **E3 filter e2e: 74% faster** — VerboseError→Error + by-reference comparison
+- **Datasource: 40-44% faster** — hand-written tokenizer + regex-free parsing
+- **UDFs: 17-34% faster** — pre-lowercased function names
 - No new dependencies, all 488 tests pass, all changes backwards-compatible
+- 30 optimizations applied across 9 rounds of the AlphaCode-inspired pipeline

@@ -3,7 +3,6 @@ use crate::common;
 use crate::common::types::Value;
 use json;
 use ordered_float::OrderedFloat;
-use regex::Regex;
 use url;
 
 use json::JsonValue;
@@ -16,12 +15,7 @@ use std::path::Path;
 use std::result;
 use std::str::FromStr;
 
-lazy_static! {
-    static ref SPLIT_READER_LINE_REGEX: Regex =
-        Regex::new(r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#).unwrap();
-}
-
-/// Hand-written tokenizer replacing the regex-based SPLIT_READER_LINE_REGEX.
+/// Hand-written tokenizer for log line parsing.
 /// Splits log lines into tokens, handling unquoted tokens, double-quoted strings,
 /// single-quoted strings, and bracket-enclosed strings.
 struct LogTokenizer<'a> {

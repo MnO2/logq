@@ -4,16 +4,11 @@ use crate::syntax::ast;
 use chrono;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
-use regex::Regex;
 use std::fmt;
 use std::path::PathBuf;
 use std::result;
 use std::sync::Arc;
 use url;
-
-lazy_static! {
-    static ref SPLIT_TIME_INTERVAL_LINE_REGEX: Regex = Regex::new(r#"[^\s"']+"#).unwrap();
-}
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub enum Value {
@@ -220,17 +215,17 @@ pub(crate) fn parse_time_interval_unit(s: &str, plural: bool) -> ParseTimeInterv
 }
 
 pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterval> {
-    let mut iter = SPLIT_TIME_INTERVAL_LINE_REGEX.find_iter(&s);
+    let mut iter = s.split_whitespace();
 
-    let integral_opt = if let Some(m) = iter.next() {
-        let integral = m.as_str().parse::<u32>()?;
+    let integral_opt = if let Some(token) = iter.next() {
+        let integral = token.parse::<u32>()?;
         Some(integral)
     } else {
         None
     };
 
-    let time_unit_opt = if let (Some(m), Some(integral)) = (iter.next(), integral_opt) {
-        let time_unit = parse_time_interval_unit(m.as_str(), integral > 1)?;
+    let time_unit_opt = if let (Some(token), Some(integral)) = (iter.next(), integral_opt) {
+        let time_unit = parse_time_interval_unit(token, integral > 1)?;
         Some(time_unit)
     } else {
         None
