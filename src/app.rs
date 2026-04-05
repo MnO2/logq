@@ -103,7 +103,7 @@ pub fn explain(query_str: &str, data_source: common::types::DataSource) -> AppRe
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_source.clone(), registry)?;
-    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
 
     println!("Query Plan:");
@@ -120,7 +120,7 @@ pub fn run(query_str: &str, data_source: common::types::DataSource, output_mode:
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
-    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
     let mut stream = physical_plan.get(variables, registry)?;
@@ -205,7 +205,7 @@ pub(crate) fn run_to_vec(
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
-    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
     let mut stream = physical_plan.get(variables, registry)?;
@@ -231,7 +231,7 @@ pub fn run_to_records(
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
-    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
     let mut stream = physical_plan.get(variables, registry)?;
@@ -257,7 +257,7 @@ pub fn run_to_records_with_registry(
     let q = syntax::desugar::desugar_query(q);
 
     let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
-    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
+    let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
     let mut stream = physical_plan.get(variables, registry)?;

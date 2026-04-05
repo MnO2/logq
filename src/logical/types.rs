@@ -394,14 +394,12 @@ impl Formula {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhysicalPlanCreator {
     counter: u32,
-    data_source: DataSource,
 }
 
 impl PhysicalPlanCreator {
-    pub(crate) fn new(data_source: DataSource) -> Self {
+    pub(crate) fn new() -> Self {
         PhysicalPlanCreator {
             counter: 0,
-            data_source,
         }
     }
 
@@ -686,7 +684,7 @@ mod test {
             Box::new(Formula::Constant(false)),
         );
         let mut physical_plan_creator =
-            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
+            PhysicalPlanCreator::new();
         let (physical_formula, variables) = formula.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Formula::And(
             Box::new(execution::Formula::Constant(true)),
@@ -705,7 +703,7 @@ mod test {
 
         let expr = Expression::Constant(common::Value::Int(1));
         let mut physical_plan_creator =
-            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
+            PhysicalPlanCreator::new();
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Expression::Variable(path_expr_const.clone());
 
@@ -749,7 +747,7 @@ mod test {
         );
 
         let mut physical_plan_creator =
-            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
+            PhysicalPlanCreator::new();
         let (physical_formula, variables) = filter.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -843,7 +841,7 @@ mod test {
         let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
         let mut physical_plan_creator =
-            PhysicalPlanCreator::new(DataSource::Stdin("jsonl".to_string(), "it".to_string()));
+            PhysicalPlanCreator::new();
         let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
