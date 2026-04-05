@@ -1,6 +1,7 @@
 pub mod arithmetic;
 pub mod datetime;
 pub mod host;
+pub mod regexp;
 pub mod registry;
 pub mod string;
 pub mod url;
@@ -14,5 +15,6 @@ pub fn register_all() -> Result<FunctionRegistry, RegistryError> {
     url::register(&mut registry)?;
     host::register(&mut registry)?;
     datetime::register(&mut registry)?;
+    regexp::register(&mut registry)?;
     Ok(registry)
 }

@@ -32,6 +32,7 @@ tdigest = "0.2"
 pdatastructs = "0.6.0"
 linked-hash-map = "0.5"
 anyhow = "1.0"
+lru = "0.12"
 
 [dev-dependencies]
 criterion = "0.3"
