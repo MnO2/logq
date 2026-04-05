@@ -317,19 +317,23 @@ impl RecordStream for FilterStream {
 }
 
 pub struct InMemoryStream {
-    pub(crate) data: VecDeque<Record>,
+    pub(crate) data: Vec<Option<Record>>,
+    pos: usize,
 }
 
 impl InMemoryStream {
     pub fn new(data: VecDeque<Record>) -> InMemoryStream {
-        InMemoryStream { data }
+        let data: Vec<Option<Record>> = data.into_iter().map(Some).collect();
+        InMemoryStream { data, pos: 0 }
     }
 }
 
 impl RecordStream for InMemoryStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
-        if let Some(record) = self.data.pop_front() {
-            Ok(Some(record))
+        if self.pos < self.data.len() {
+            let record = self.data[self.pos].take();
+            self.pos += 1;
+            Ok(record)
         } else {
             Ok(None)
         }
