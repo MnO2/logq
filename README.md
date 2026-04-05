@@ -345,22 +345,6 @@ When troubleshooting production issues, you often need metrics not provided by C
 
 logq addresses these by providing a fast, Rust-based query engine with built-in parsers for common formats. A modern laptop can comfortably analyze gigabytes of logs without setting up Athena or ELK.
 
-### Why not TextQL or SQLite?
-
-- **Performance** -- TextQL (Python) and SQLite are slow for GB-scale files
-- **Domain functions** -- logq provides URL parsing, HTTP request decomposition, time bucketing, and host extraction out of the box
-- **Semi-structured data** -- JSONL with nested objects requires PartiQL's path expressions, which standard SQL cannot handle
-- **Analytical functions** -- percentiles, approximate distinct counts, and time-series bucketing for common access log analysis patterns
-
-## Roadmap
-
-- [ ] Customizable reader, to follow GoAccess's style
-- [ ] More supported log formats
-- [ ] Plugin quickjs for user-defined functions
-- [ ] Building index for repetitive queries
-- [ ] Performance optimization, avoid unnecessary parsing
-- [ ] More supported functions
-
 ## License
 
 Apache-2.0 OR BSD-3-Clause
