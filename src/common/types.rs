@@ -4,6 +4,7 @@ use crate::syntax::ast;
 use chrono;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::result;
@@ -414,6 +415,8 @@ pub enum DataSource {
     File(PathBuf, String, String),
     Stdin(String, String),
 }
+
+pub type DataSourceRegistry = HashMap<String, DataSource>;
 
 #[cfg(test)]
 mod tests {

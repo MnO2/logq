@@ -30,6 +30,12 @@ pub enum ParseError {
     FromClausePathInvalidTableReference,
     #[error("Using 'as' to define an alias is required in From Clause for nested path expr")]
     FromClauseMissingAsForPathExpr,
+    #[error("Unknown table '{0}'. Available tables: {1}")]
+    UnknownTable(String, String),
+    #[error("Stdin cannot be used as the right side of a join (it can only be read once)")]
+    StdinInJoinRightSide,
+    #[error("SELECT * with GROUP BY is not supported for jsonl or multi-table queries (no fixed schema to expand)")]
+    StarGroupByUnsupported,
 }
 
 impl From<RegistryError> for ParseError {
