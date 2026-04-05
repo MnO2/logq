@@ -61,7 +61,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
 
                         if let Some(target) = target_opt {
                             let new_dt = dt.with_second(target).and_then(|d| d.with_nanosecond(0)).unwrap();
-                            Ok(Value::DateTime(Box::new(new_dt)))
+                            Ok(Value::DateTime(new_dt))
                         } else {
                             unreachable!();
                         }
@@ -87,7 +87,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                                 .and_then(|d| d.with_second(0))
                                 .and_then(|d| d.with_nanosecond(0))
                                 .unwrap();
-                            Ok(Value::DateTime(Box::new(new_dt)))
+                            Ok(Value::DateTime(new_dt))
                         } else {
                             unreachable!();
                         }
@@ -114,7 +114,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                                 .and_then(|d| d.with_second(0))
                                 .and_then(|d| d.with_nanosecond(0))
                                 .unwrap();
-                            Ok(Value::DateTime(Box::new(new_dt)))
+                            Ok(Value::DateTime(new_dt))
                         } else {
                             unreachable!();
                         }
@@ -261,8 +261,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                     "day" => Duration::days(*amount as i64),
                     _ => return Err(ExpressionError::InvalidArguments),
                 };
-                let new_dt = **dt + duration;
-                Ok(Value::DateTime(Box::new(new_dt)))
+                let new_dt = *dt + duration;
+                Ok(Value::DateTime(new_dt))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -275,7 +275,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1], &args[2]) {
             (Value::String(unit), Value::DateTime(start), Value::DateTime(end)) => {
-                let diff = **end - **start;
+                let diff = *end - *start;
                 let result = match unit.as_str() {
                     "second" => diff.num_seconds() as i32,
                     "minute" => diff.num_minutes() as i32,
@@ -310,7 +310,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         .unwrap(),
                     _ => return Err(ExpressionError::InvalidArguments),
                 };
-                Ok(Value::DateTime(Box::new(new_dt)))
+                Ok(Value::DateTime(new_dt))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -329,7 +329,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                     naive,
                     chrono::FixedOffset::east(0),
                 );
-                Ok(Value::DateTime(Box::new(fixed)))
+                Ok(Value::DateTime(fixed))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -354,7 +354,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|_args| {
             let utc_now = chrono::Utc::now();
             let fixed = utc_now.with_timezone(&chrono::FixedOffset::east(0));
-            Ok(Value::DateTime(Box::new(fixed)))
+            Ok(Value::DateTime(fixed))
         }),
     })?;
 
@@ -374,7 +374,7 @@ mod tests {
     }
 
     fn make_datetime(s: &str) -> Value {
-        Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339(s).unwrap()))
+        Value::DateTime(chrono::DateTime::parse_from_rfc3339(s).unwrap())
     }
 
     #[test]

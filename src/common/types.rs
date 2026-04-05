@@ -17,7 +17,7 @@ pub enum Value {
     Boolean(bool),
     String(String),
     Null,
-    DateTime(Box<chrono::DateTime<chrono::offset::FixedOffset>>),
+    DateTime(chrono::DateTime<chrono::offset::FixedOffset>),
     HttpRequest(Box<common::types::HttpRequest>),
     Host(Box<common::types::Host>),
     Missing,

@@ -893,7 +893,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 match datatype {
                     DataType::DateTime => {
                         let dt = parse_utc_timestamp(s)?;
-                        record_vars.insert(field_names[i].clone(), Value::DateTime(Box::new(dt)));
+                        record_vars.insert(field_names[i].clone(), Value::DateTime(dt));
                     }
                     DataType::String => {
                         record_vars.insert(field_names[i].clone(), Value::String(s.to_string()));
@@ -966,7 +966,7 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
-            Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:33.559871Z").unwrap())),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:33.559871Z").unwrap()),
             Value::String("elb1".to_string()),
             Value::Host(Box::new(common::types::parse_host("78.168.134.92:4586").unwrap())),
             Value::Host(Box::new(common::types::parse_host("10.0.0.215:80").unwrap())),
@@ -993,7 +993,7 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
-            Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap())),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap()),
             Value::String("elb1".to_string()),
             Value::Host(Box::new(common::types::parse_host("176.219.166.226:48384").unwrap())),
             Value::Host(Box::new(common::types::parse_host("10.0.2.143:80").unwrap())),
@@ -1024,7 +1024,7 @@ mod tests {
         let fields = ApplicationLoadBalancerLogField::field_names();
         let data = vec![
             Value::String("http".to_string()),
-            Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2018-07-02T22:23:00.186641Z").unwrap())),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2018-07-02T22:23:00.186641Z").unwrap()),
             Value::String("app/my-loadbalancer/50dc6c495c0c9188".to_string()),
             Value::Host(Box::new(common::types::parse_host("192.168.131.39:2817").unwrap())),
             Value::Host(Box::new(common::types::parse_host("10.0.0.1:80").unwrap())),
