@@ -11,6 +11,9 @@ categories = ["command-line-utilities"]
 edition = "2018"
 exclude = ["/benches/**", "/.travis.yml", "/data/**"]
 
+[features]
+bench-internals = []
+
 [badges]
 travis-ci = { repository = "MnO2/logq" }
 codecov = { repository = "MnO2/logq" }
@@ -38,8 +41,23 @@ lru = "0.12"
 criterion = "0.3"
 rand = "0.8"
 tempfile = "3.2"
+linked-hash-map = "0.5"
 
 [[bench]]
-name = "logq_benchmark"
+name = "bench_parser"
 harness = false
-path = "./benches/logq_benchmark.rs"
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "bench_execution"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "bench_datasource"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "bench_udf"
+harness = false

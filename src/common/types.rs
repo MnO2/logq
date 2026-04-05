@@ -274,8 +274,8 @@ pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterv
 }
 
 pub(crate) type Tuple = Vec<Value>;
-pub(crate) type VariableName = String;
-pub(crate) type Variables = LinkedHashMap<String, Value>;
+pub type VariableName = String;
+pub type Variables = LinkedHashMap<String, Value>;
 
 /// Apply remaining path segments (starting at index `from`) to a single Value.
 fn apply_path_to_value(path_expr: &ast::PathExpr, from: usize, value: &Value) -> Value {

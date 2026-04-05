@@ -612,12 +612,12 @@ pub struct ReaderBuilder {
     file_format: String,
 }
 
-pub(crate) trait RecordRead {
+pub trait RecordRead {
     fn read_record(&mut self) -> ReaderResult<Option<Record>>;
 }
 
 impl ReaderBuilder {
-    pub(crate) fn new(file_format: String) -> Self {
+    pub fn new(file_format: String) -> Self {
         ReaderBuilder {
             capacity: 8 * (1 << 10),
             file_format: file_format,
@@ -629,7 +629,7 @@ impl ReaderBuilder {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
+    pub fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
         Reader::new(self, rdr, self.file_format.clone())
     }
 }
@@ -663,13 +663,13 @@ fn json_to_data_model(parsed: &JsonValue) -> Value {
 }
 
 #[derive(Debug)]
-pub(crate) struct Reader<R> {
+pub struct Reader<R> {
     rdr: io::BufReader<R>,
     file_format: String,
 }
 
 impl<R: io::Read> Reader<R> {
-    pub(crate) fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> Reader<R> {
+    pub fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> Reader<R> {
         Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
             file_format,

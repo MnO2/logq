@@ -944,7 +944,7 @@ fn set_operator(i: &str) -> IResult<&str, (ast::SetOperator, bool), VerboseError
     ))(i)
 }
 
-pub(crate) fn query(i: &str) -> IResult<&str, ast::Query, VerboseError<&str>> {
+pub fn query(i: &str) -> IResult<&str, ast::Query, VerboseError<&str>> {
     let (i, first) = select_query(i)?;
     let mut result = ast::Query::Select(first);
 

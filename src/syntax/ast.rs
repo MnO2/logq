@@ -112,7 +112,7 @@ impl fmt::Display for SelectStatement {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
-pub(crate) enum PathSegment {
+pub enum PathSegment {
     AttrName(String),
     ArrayIndex(String, usize),
     Wildcard,     // [*] — iterate all array elements
@@ -120,8 +120,8 @@ pub(crate) enum PathSegment {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
-pub(crate) struct PathExpr {
-    pub(crate) path_segments: Vec<PathSegment>,
+pub struct PathExpr {
+    pub path_segments: Vec<PathSegment>,
 }
 
 impl PathExpr {

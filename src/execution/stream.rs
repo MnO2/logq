@@ -11,12 +11,12 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct Record {
+pub struct Record {
     variables: LinkedHashMap<String, Value>,
 }
 
 impl Record {
-    pub(crate) fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
+    pub fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
         let mut variables = LinkedHashMap::default();
         for (i, v) in data.into_iter().enumerate() {
             variables.insert(field_names[i].clone(), v);
@@ -59,11 +59,11 @@ impl Record {
         ret
     }
 
-    pub(crate) fn to_variables(&self) -> &Variables {
+    pub fn to_variables(&self) -> &Variables {
         &self.variables as &Variables
     }
 
-    pub(crate) fn to_tuples(&self) -> Vec<(VariableName, Value)> {
+    pub fn to_tuples(&self) -> Vec<(VariableName, Value)> {
         self.variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
@@ -114,12 +114,12 @@ impl Record {
     }
 }
 
-pub(crate) trait RecordStream {
+pub trait RecordStream {
     fn next(&mut self) -> StreamResult<Option<Record>>;
     fn close(&self);
 }
 
-pub(crate) struct MapStream {
+pub struct MapStream {
     pub(crate) named_list: Vec<Named>,
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
@@ -127,7 +127,7 @@ pub(crate) struct MapStream {
 }
 
 impl MapStream {
-    pub(crate) fn new(named_list: Vec<Named>, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
+    pub fn new(named_list: Vec<Named>, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
         MapStream {
             named_list,
             variables,
@@ -180,14 +180,14 @@ impl RecordStream for MapStream {
     }
 }
 
-pub(crate) struct LimitStream {
+pub struct LimitStream {
     curr: u32,
     row_count: u32,
     source: Box<dyn RecordStream>,
 }
 
 impl LimitStream {
-    pub(crate) fn new(row_count: u32, source: Box<dyn RecordStream>) -> Self {
+    pub fn new(row_count: u32, source: Box<dyn RecordStream>) -> Self {
         LimitStream {
             curr: 0,
             row_count,
@@ -217,7 +217,7 @@ impl RecordStream for LimitStream {
     }
 }
 
-pub(crate) struct FilterStream {
+pub struct FilterStream {
     formula: Formula,
     variables: Variables,
     source: Box<dyn RecordStream>,
@@ -225,7 +225,7 @@ pub(crate) struct FilterStream {
 }
 
 impl FilterStream {
-    pub(crate) fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
+    pub fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
         FilterStream {
             formula,
             variables,
@@ -254,12 +254,12 @@ impl RecordStream for FilterStream {
     }
 }
 
-pub(crate) struct InMemoryStream {
+pub struct InMemoryStream {
     pub(crate) data: VecDeque<Record>,
 }
 
 impl InMemoryStream {
-    pub(crate) fn new(data: VecDeque<Record>) -> InMemoryStream {
+    pub fn new(data: VecDeque<Record>) -> InMemoryStream {
         InMemoryStream { data }
     }
 }
@@ -276,7 +276,7 @@ impl RecordStream for InMemoryStream {
     fn close(&self) {}
 }
 
-pub(crate) struct GroupByStream {
+pub struct GroupByStream {
     keys: Vec<ast::PathExpr>,
     variables: Variables,
     aggregates: Vec<NamedAggregate>,
@@ -286,7 +286,7 @@ pub(crate) struct GroupByStream {
 }
 
 impl<'a> GroupByStream {
-    pub(crate) fn new(
+    pub fn new(
         keys: Vec<ast::PathExpr>,
         variables: Variables,
         aggregates: Vec<NamedAggregate>,

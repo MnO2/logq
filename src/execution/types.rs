@@ -115,13 +115,13 @@ impl From<EvaluateError> for ExpressionError {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum Ordering {
+pub enum Ordering {
     Asc,
     Desc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Expression {
+pub enum Expression {
     Constant(Value),
     Logic(Box<Formula>),
     Variable(PathExpr),
@@ -230,7 +230,7 @@ impl Expression {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Relation {
+pub enum Relation {
     Equal,
     NotEqual,
     MoreThan,
@@ -293,13 +293,13 @@ impl Relation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Named {
+pub enum Named {
     Expression(Expression, Option<VariableName>),
     Star,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Formula {
+pub enum Formula {
     Constant(bool),
     And(Box<Formula>, Box<Formula>),
     Or(Box<Formula>, Box<Formula>),
@@ -452,7 +452,7 @@ impl Formula {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Node {
+pub enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
     Map(Vec<Named>, Box<Node>),
@@ -468,7 +468,7 @@ pub(crate) enum Node {
 }
 
 impl Node {
-    pub(crate) fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
+    pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream = source.get(variables.clone(), registry.clone())?;
@@ -670,7 +670,7 @@ pub enum AggregateError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NamedAggregate {
+pub struct NamedAggregate {
     pub(crate) aggregate: Aggregate,
     pub(crate) name_opt: Option<String>,
 }
@@ -682,7 +682,7 @@ impl NamedAggregate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Aggregate {
+pub enum Aggregate {
     Avg(AvgAggregate, Named),
     Count(CountAggregate, Named),
     First(FirstAggregate, Named),
