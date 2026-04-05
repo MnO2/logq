@@ -6,3 +6,13 @@ pub mod string;
 pub mod url;
 
 pub use registry::{FunctionRegistry, FunctionDef, Arity, NullHandling, RegistryError};
+
+pub fn register_all() -> Result<FunctionRegistry, RegistryError> {
+    let mut registry = FunctionRegistry::new();
+    arithmetic::register(&mut registry)?;
+    string::register(&mut registry)?;
+    url::register(&mut registry)?;
+    host::register(&mut registry)?;
+    datetime::register(&mut registry)?;
+    Ok(registry)
+}

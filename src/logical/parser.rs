@@ -2,10 +2,13 @@ use super::types;
 use crate::common::types as common;
 use crate::common::types::ParsingContext;
 use crate::execution;
+use crate::functions::registry::RegistryError;
+use crate::functions::FunctionRegistry;
 use crate::logical::types::Named;
 use crate::syntax::ast;
 use crate::syntax::ast::{FromClause, JoinType, PathExpr, PathSegment, TableReference};
 use hashbrown::HashSet;
+use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -27,6 +30,22 @@ pub enum ParseError {
     FromClausePathInvalidTableReference,
     #[error("Using 'as' to define an alias is required in From Clause for nested path expr")]
     FromClauseMissingAsForPathExpr,
+}
+
+impl From<RegistryError> for ParseError {
+    fn from(e: RegistryError) -> Self {
+        match e {
+            RegistryError::UnknownFunction(name) => ParseError::UnknownFunction(name),
+            RegistryError::ArityMismatch { name, expected, actual } => {
+                ParseError::InvalidArguments(
+                    format!("{} expects {} argument(s), got {}", name, expected, actual),
+                )
+            }
+            RegistryError::DuplicateFunction(name) => {
+                ParseError::InvalidArguments(format!("Duplicate function: {}", name))
+            }
+        }
+    }
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -315,7 +334,7 @@ fn parse_value_expression(
             Ok(Box::new(types::Expression::Cast(expr, cast_type.clone())))
         }
         ast::Expression::Subquery(stmt) => {
-            let inner_node = parse_query(*stmt.clone(), ctx.data_source.clone())?;
+            let inner_node = parse_query(*stmt.clone(), ctx.data_source.clone(), ctx.registry.clone())?;
             Ok(Box::new(types::Expression::Subquery(Box::new(inner_node))))
         }
     }
@@ -611,12 +630,12 @@ fn build_from_node(
     }
 }
 
-pub(crate) fn parse_query_top(q: ast::Query, data_source: common::DataSource) -> ParseResult<types::Node> {
+pub(crate) fn parse_query_top(q: ast::Query, data_source: common::DataSource, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
     match q {
-        ast::Query::Select(stmt) => parse_query(stmt, data_source),
+        ast::Query::Select(stmt) => parse_query(stmt, data_source, registry),
         ast::Query::SetOp { op, all, left, right } => {
-            let left_node = parse_query_top(*left, data_source.clone())?;
-            let right_node = parse_query_top(*right, data_source)?;
+            let left_node = parse_query_top(*left, data_source.clone(), registry.clone())?;
+            let right_node = parse_query_top(*right, data_source, registry)?;
             match op {
                 ast::SetOperator::Union => {
                     let union_node = types::Node::Union(Box::new(left_node), Box::new(right_node));
@@ -637,7 +656,7 @@ pub(crate) fn parse_query_top(q: ast::Query, data_source: common::DataSource) ->
     }
 }
 
-pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource) -> ParseResult<types::Node> {
+pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::DataSource, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
     let from_clause = &query.from_clause;
 
     let (file_format, table_name) = match &data_source {
@@ -650,6 +669,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_source: common::Data
     let parsing_context = ParsingContext {
         table_name: table_name.clone(),
         data_source: data_source.clone(),
+        registry: registry.clone(),
     };
 
     let mut root = build_from_node(&parsing_context, from_clause, &data_source, &table_name)?;
@@ -1029,6 +1049,7 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
 mod test {
     use super::*;
     use crate::syntax::ast::{FromClause, PathSegment, SelectClause};
+    use std::sync::Arc;
 
     #[test]
     fn test_parse_logic_expression() {
@@ -1041,6 +1062,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
             types::LogicInfixOp::And,
@@ -1064,6 +1086,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_logic_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1101,6 +1124,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_value_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1128,6 +1152,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_aggregate(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1151,6 +1176,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "a".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_condition(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1218,7 +1244,8 @@ mod test {
             )),
         );
 
-        let ans = parse_query(before, data_source).unwrap();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry).unwrap();
         assert_eq!(expected, ans);
     }
 
@@ -1272,7 +1299,8 @@ mod test {
             )),
         );
 
-        let ans = parse_query(before, data_source).unwrap();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry).unwrap();
         assert_eq!(expected, ans);
     }
 
@@ -1354,7 +1382,8 @@ mod test {
         let fields = vec![path_expr_b.clone()];
         let expected = types::Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
-        let ans = parse_query(before, data_source).unwrap();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry).unwrap();
         assert_eq!(expected, ans);
     }
 
@@ -1389,7 +1418,8 @@ mod test {
             None,
         );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
-        let ans = parse_query(before, data_source);
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry);
         let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
     }
@@ -1431,7 +1461,8 @@ mod test {
             None,
         );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
-        let ans = parse_query(before, data_source);
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry);
         let expected = Err(ParseError::GroupByFieldsMismatch);
         assert_eq!(expected, ans);
     }
@@ -1452,6 +1483,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_logic(&parsing_context, &func_call);
         assert!(result.is_ok());
@@ -1479,6 +1511,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_logic(&parsing_context, &column_expr);
         assert!(result.is_ok());
@@ -1516,6 +1549,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_logic(&parsing_context, &case_when);
         assert!(result.is_ok());
@@ -1543,6 +1577,7 @@ mod test {
         let parsing_context = ParsingContext {
             table_name: "it".to_string(),
             data_source: common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_condition(&parsing_context, &column_expr);
         assert!(result.is_ok());
@@ -1609,7 +1644,8 @@ mod test {
             )),
         );
 
-        let ans = parse_query(before, data_source).unwrap();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry).unwrap();
         assert_eq!(expected, ans);
     }
 
@@ -1644,7 +1680,8 @@ mod test {
             )),
         );
 
-        let ans = parse_query(before, data_source).unwrap();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let ans = parse_query(before, data_source, registry).unwrap();
         assert_eq!(expected, ans);
     }
 
@@ -1674,8 +1711,9 @@ mod test {
             None,
         );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+        let registry = Arc::new(crate::functions::register_all().unwrap());
 
-        let result = parse_query(stmt, data_source.clone());
+        let result = parse_query(stmt, data_source.clone(), registry);
         assert!(result.is_ok(), "Cross join query should parse: {:?}", result);
 
         let node = result.unwrap();
@@ -1729,8 +1767,9 @@ mod test {
             None,
         );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+        let registry = Arc::new(crate::functions::register_all().unwrap());
 
-        let result = parse_query(stmt, data_source);
+        let result = parse_query(stmt, data_source, registry);
         assert!(result.is_ok());
 
         let node = result.unwrap();
@@ -1789,8 +1828,9 @@ mod test {
             None,
         );
         let data_source = common::DataSource::Stdin("jsonl".to_string(), "it".to_string());
+        let registry = Arc::new(crate::functions::register_all().unwrap());
 
-        let result = parse_query(stmt, data_source.clone());
+        let result = parse_query(stmt, data_source.clone(), registry);
         assert!(result.is_ok(), "Left join query should parse: {:?}", result);
 
         let node = result.unwrap();

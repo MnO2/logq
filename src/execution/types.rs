@@ -3,14 +3,15 @@ use super::stream::{CrossJoinStream, DistinctStream, ExceptStream, FilterStream,
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::stream::ProjectionStream;
+use crate::functions::FunctionRegistry;
 use crate::syntax::ast::{CastType, PathExpr};
-use chrono::{Datelike, Timelike};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use pdatastructs::hyperloglog::HyperLogLog;
 use std::collections::VecDeque;
 use std::io;
 use std::result;
+use std::sync::Arc;
 use tdigest::TDigest;
 
 pub(crate) type EvaluateResult<T> = result::Result<T, EvaluateError>;
@@ -131,11 +132,11 @@ pub(crate) enum Expression {
 }
 
 impl Expression {
-    pub(crate) fn expression_value(&self, variables: &Variables) -> ExpressionResult<Value> {
+    pub(crate) fn expression_value(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
         match self {
             Expression::Constant(value) => Ok(value.clone()),
             Expression::Logic(formula) => {
-                let out = formula.evaluate(variables)?;
+                let out = formula.evaluate(variables, registry)?;
                 match out {
                     Some(b) => Ok(Value::Boolean(b)),
                     None => Ok(Value::Null),
@@ -150,7 +151,7 @@ impl Expression {
                 for arg in arguments.iter() {
                     match arg {
                         Named::Expression(expr, _) => {
-                            let value = expr.expression_value(&variables)?;
+                            let value = expr.expression_value(&variables, registry)?;
                             values.push(value);
                         }
                         Named::Star => {
@@ -159,23 +160,23 @@ impl Expression {
                     }
                 }
 
-                let return_value: Value = evaluate(&*name, &values)?;
+                let return_value: Value = registry.call(name, &values)?;
                 Ok(return_value)
             }
             Expression::Branch(branches, else_expr) => {
                 for (formula, then_expr) in branches {
-                    let result = formula.evaluate(variables)?;
+                    let result = formula.evaluate(variables, registry)?;
                     if result == Some(true) {
-                        return then_expr.expression_value(variables);
+                        return then_expr.expression_value(variables, registry);
                     }
                 }
                 match else_expr {
-                    Some(expr) => expr.expression_value(variables),
+                    Some(expr) => expr.expression_value(variables, registry),
                     None => Ok(Value::Null),
                 }
             }
             Expression::Cast(inner, cast_type) => {
-                let val = inner.expression_value(variables)?;
+                let val = inner.expression_value(variables, registry)?;
                 match (&val, cast_type) {
                     (Value::Null, _) => Ok(Value::Null),
                     (Value::Missing, _) => Ok(Value::Missing),
@@ -210,7 +211,7 @@ impl Expression {
                 }
             }
             Expression::Subquery(node) => {
-                let mut stream = node.get(variables.clone())
+                let mut stream = node.get(variables.clone(), registry.clone())
                     .map_err(|_| ExpressionError::InvalidArguments)?;
                 if let Some(record) = stream.next()
                     .map_err(|_| ExpressionError::InvalidArguments)? {
@@ -228,474 +229,6 @@ impl Expression {
     }
 }
 
-fn evaluate_url_functions(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
-    match func_name {
-        "url_host" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match &arguments[0] {
-                Value::HttpRequest(r) => {
-                    if let Some(host) = r.url.host_str() {
-                        Ok(Value::String(host.to_string()))
-                    } else {
-                        Ok(Value::Null)
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "url_port" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match &arguments[0] {
-                Value::HttpRequest(r) => {
-                    if let Some(port) = r.url.port() {
-                        Ok(Value::Int(port as i32))
-                    } else {
-                        Ok(Value::Null)
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "url_path" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match &arguments[0] {
-                Value::HttpRequest(r) => {
-                    let url_path = r.url.path();
-                    Ok(Value::String(url_path.to_string()))
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "url_fragment" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match &arguments[0] {
-                Value::HttpRequest(r) => {
-                    if let Some(url_fragment) = r.url.fragment() {
-                        Ok(Value::String(url_fragment.to_string()))
-                    } else {
-                        Ok(Value::Null)
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "url_query" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match &arguments[0] {
-                Value::HttpRequest(r) => {
-                    if let Some(url_query) = r.url.query() {
-                        Ok(Value::String(url_query.to_string()))
-                    } else {
-                        Ok(Value::Null)
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "url_path_segments" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::HttpRequest(r), Value::Int(idx)) => {
-                    if let Some(url_path_segments) = r.url.path_segments() {
-                        let idx = *idx as usize;
-                        for (i, segment) in url_path_segments.enumerate() {
-                            if i == idx {
-                                return Ok(Value::String(segment.to_string()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    } else {
-                        Ok(Value::Null)
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "url_path_bucket" => {
-            if arguments.len() != 3 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1], &arguments[2]) {
-                (Value::HttpRequest(r), Value::Int(idx), Value::String(target)) => {
-                    if let Some(url_path_segments) = r.url.path_segments() {
-                        let idx = *idx as usize;
-                        let mut res = String::new();
-                        for (i, segment) in url_path_segments.enumerate() {
-                            if i == idx {
-                                res.push('/');
-                                res.push_str(target);
-                            } else {
-                                res.push('/');
-                                res.push_str(segment);
-                            }
-                        }
-                        Ok(Value::String(res))
-                    } else {
-                        Ok(Value::Null)
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        _ => Err(ExpressionError::UnknownFunction),
-    }
-}
-
-fn evaluate_host_functions(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
-    match func_name {
-        "host_name" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-            match &arguments[0] {
-                Value::Host(h) => Ok(Value::String(h.hostname.clone())),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "host_port" => {
-            if arguments.len() != 1 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match &arguments[0] {
-                Value::Host(h) => Ok(Value::Int(i32::from(h.port))),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        _ => Err(ExpressionError::UnknownFunction),
-    }
-}
-
-fn evaluate(func_name: &str, arguments: &[Value]) -> ExpressionResult<Value> {
-    if func_name.starts_with("url_") {
-        return evaluate_url_functions(func_name, arguments);
-    }
-
-    if func_name.starts_with("host_") {
-        return evaluate_host_functions(func_name, arguments);
-    }
-
-    match func_name {
-        "Plus" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            // NULL/MISSING propagation: Missing takes precedence over Null
-            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
-                return Ok(Value::Missing);
-            }
-            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
-                return Ok(Value::Null);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() + b.into_inner()))),
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 + b.into_inner()))),
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() + *b as f32))),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Minus" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
-                return Ok(Value::Missing);
-            }
-            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
-                return Ok(Value::Null);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
-                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() - b.into_inner()))),
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 - b.into_inner()))),
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() - *b as f32))),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Times" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
-                return Ok(Value::Missing);
-            }
-            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
-                return Ok(Value::Null);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
-                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() * b.into_inner()))),
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 * b.into_inner()))),
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() * *b as f32))),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Divide" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            if matches!(&arguments[0], Value::Missing) || matches!(&arguments[1], Value::Missing) {
-                return Ok(Value::Missing);
-            }
-            if matches!(&arguments[0], Value::Null) || matches!(&arguments[1], Value::Null) {
-                return Ok(Value::Null);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::Int(a), Value::Int(b)) => {
-                    if *b == 0 {
-                        Ok(Value::Null)
-                    } else {
-                        Ok(Value::Int(a / b))
-                    }
-                }
-                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() / b.into_inner()))),
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat::from(*a as f32 / b.into_inner()))),
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat::from(a.into_inner() / *b as f32))),
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "date_part" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::String(date_part_unit_str), Value::DateTime(dt)) => {
-                    let date_part_unit = common::types::parse_date_part_unit(date_part_unit_str)?;
-
-                    match date_part_unit {
-                        common::types::DatePartUnit::Second => Ok(Value::Float(OrderedFloat::from(dt.second() as f32))),
-                        common::types::DatePartUnit::Minute => Ok(Value::Float(OrderedFloat::from(dt.minute() as f32))),
-                        common::types::DatePartUnit::Hour => Ok(Value::Float(OrderedFloat::from(dt.hour() as f32))),
-                        common::types::DatePartUnit::Day => Ok(Value::Float(OrderedFloat::from(dt.day() as f32))),
-                        common::types::DatePartUnit::Month => Ok(Value::Float(OrderedFloat::from(dt.month() as f32))),
-                        common::types::DatePartUnit::Year => Ok(Value::Float(OrderedFloat::from(dt.year() as f32))),
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "time_bucket" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-
-            match (&arguments[0], &arguments[1]) {
-                (Value::String(time_interval_str), Value::DateTime(dt)) => {
-                    let time_interval = common::types::parse_time_interval(time_interval_str)?;
-
-                    if time_interval.n == 0 {
-                        return Err(ExpressionError::TimeIntervalZero);
-                    }
-
-                    match time_interval.unit {
-                        common::types::TimeIntervalUnit::Second => {
-                            if time_interval.n > 60 || 60 % time_interval.n != 0 {
-                                return Err(ExpressionError::TimeIntervalNotSupported);
-                            }
-
-                            let mut target_opt: Option<u32> = None;
-                            let step_size: usize = time_interval.n as usize;
-                            //FIXME: binary search
-                            for point in (0..=60u32).rev().step_by(step_size) {
-                                if point <= dt.second() {
-                                    target_opt = Some(point);
-                                    break;
-                                }
-                            }
-
-                            if let Some(target) = target_opt {
-                                let new_dt = dt.with_second(target).and_then(|d| d.with_nanosecond(0)).unwrap();
-                                Ok(Value::DateTime(new_dt))
-                            } else {
-                                unreachable!();
-                            }
-                        }
-                        common::types::TimeIntervalUnit::Minute => {
-                            if time_interval.n > 60 || 60 % time_interval.n != 0 {
-                                return Err(ExpressionError::TimeIntervalNotSupported);
-                            }
-
-                            let mut target_opt: Option<u32> = None;
-                            let step_size: usize = time_interval.n as usize;
-                            //FIXME: binary search
-                            for point in (0..=60u32).rev().step_by(step_size) {
-                                if point <= dt.minute() {
-                                    target_opt = Some(point);
-                                    break;
-                                }
-                            }
-
-                            if let Some(target) = target_opt {
-                                let new_dt = dt
-                                    .with_minute(target)
-                                    .and_then(|d| d.with_second(0))
-                                    .and_then(|d| d.with_nanosecond(0))
-                                    .unwrap();
-                                Ok(Value::DateTime(new_dt))
-                            } else {
-                                unreachable!();
-                            }
-                        }
-                        common::types::TimeIntervalUnit::Hour => {
-                            if time_interval.n > 24 || 24 % time_interval.n != 0 {
-                                return Err(ExpressionError::TimeIntervalNotSupported);
-                            }
-
-                            let mut target_opt: Option<u32> = None;
-                            let step_size: usize = time_interval.n as usize;
-                            //FIXME: binary search
-                            for point in (0..=24u32).rev().step_by(step_size) {
-                                if point <= dt.hour() {
-                                    target_opt = Some(point);
-                                    break;
-                                }
-                            }
-
-                            if let Some(target) = target_opt {
-                                let new_dt = dt
-                                    .with_hour(target)
-                                    .and_then(|d| d.with_minute(0))
-                                    .and_then(|d| d.with_second(0))
-                                    .and_then(|d| d.with_nanosecond(0))
-                                    .unwrap();
-                                Ok(Value::DateTime(new_dt))
-                            } else {
-                                unreachable!();
-                            }
-                        }
-                        _ => Err(ExpressionError::TimeIntervalNotSupported),
-                    }
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        "Concat" => {
-            if arguments.len() != 2 {
-                return Err(ExpressionError::InvalidArguments);
-            }
-            // NULL/MISSING propagation
-            match (&arguments[0], &arguments[1]) {
-                (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
-                (Value::Missing, _) | (_, Value::Missing) => Ok(Value::Missing),
-                (Value::String(a), Value::String(b)) => {
-                    let mut result = a.clone();
-                    result.push_str(b);
-                    Ok(Value::String(result))
-                }
-                _ => Err(ExpressionError::InvalidArguments),
-            }
-        }
-        _ => {
-            // Case-insensitive match for user-facing functions
-            match func_name.to_ascii_lowercase().as_str() {
-                "upper" => {
-                    if arguments.len() != 1 {
-                        return Err(ExpressionError::InvalidArguments);
-                    }
-                    match &arguments[0] {
-                        Value::Null => Ok(Value::Null),
-                        Value::Missing => Ok(Value::Missing),
-                        Value::String(s) => Ok(Value::String(s.to_uppercase())),
-                        _ => Err(ExpressionError::InvalidArguments),
-                    }
-                }
-                "lower" => {
-                    if arguments.len() != 1 {
-                        return Err(ExpressionError::InvalidArguments);
-                    }
-                    match &arguments[0] {
-                        Value::Null => Ok(Value::Null),
-                        Value::Missing => Ok(Value::Missing),
-                        Value::String(s) => Ok(Value::String(s.to_lowercase())),
-                        _ => Err(ExpressionError::InvalidArguments),
-                    }
-                }
-                "char_length" | "character_length" => {
-                    if arguments.len() != 1 {
-                        return Err(ExpressionError::InvalidArguments);
-                    }
-                    match &arguments[0] {
-                        Value::Null => Ok(Value::Null),
-                        Value::Missing => Ok(Value::Missing),
-                        Value::String(s) => Ok(Value::Int(s.len() as i32)),
-                        _ => Err(ExpressionError::InvalidArguments),
-                    }
-                }
-                "substring" => {
-                    // SUBSTRING(str, start) or SUBSTRING(str, start, length)
-                    // Note: SQL SUBSTRING is 1-based
-                    if arguments.len() < 2 || arguments.len() > 3 {
-                        return Err(ExpressionError::InvalidArguments);
-                    }
-                    match &arguments[0] {
-                        Value::Null => Ok(Value::Null),
-                        Value::Missing => Ok(Value::Missing),
-                        Value::String(s) => {
-                            let start = match &arguments[1] {
-                                Value::Int(i) => (*i - 1).max(0) as usize, // 1-based to 0-based
-                                _ => return Err(ExpressionError::InvalidArguments),
-                            };
-                            if arguments.len() == 3 {
-                                let len = match &arguments[2] {
-                                    Value::Int(i) => (*i).max(0) as usize,
-                                    _ => return Err(ExpressionError::InvalidArguments),
-                                };
-                                let result: String = s.chars().skip(start).take(len).collect();
-                                Ok(Value::String(result))
-                            } else {
-                                let result: String = s.chars().skip(start).collect();
-                                Ok(Value::String(result))
-                            }
-                        }
-                        _ => Err(ExpressionError::InvalidArguments),
-                    }
-                }
-                "trim" => {
-                    if arguments.len() != 1 {
-                        return Err(ExpressionError::InvalidArguments);
-                    }
-                    match &arguments[0] {
-                        Value::Null => Ok(Value::Null),
-                        Value::Missing => Ok(Value::Missing),
-                        Value::String(s) => Ok(Value::String(s.trim().to_string())),
-                        _ => Err(ExpressionError::InvalidArguments),
-                    }
-                }
-                _ => Err(ExpressionError::UnknownFunction),
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Relation {
     Equal,
@@ -707,9 +240,9 @@ pub(crate) enum Relation {
 }
 
 impl Relation {
-    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression) -> ExpressionResult<Option<bool>> {
-        let left_result = left.expression_value(variables)?;
-        let right_result = right.expression_value(variables)?;
+    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Option<bool>> {
+        let left_result = left.expression_value(variables, registry)?;
+        let right_result = right.expression_value(variables, registry)?;
 
         // NULL/MISSING: any comparison involving Null or Missing returns None (unknown)
         if matches!(&left_result, Value::Null | Value::Missing) || matches!(&right_result, Value::Null | Value::Missing) {
@@ -802,11 +335,11 @@ fn like_pattern_to_regex(pattern: &str) -> String {
 }
 
 impl Formula {
-    pub(crate) fn evaluate(&self, variables: &Variables) -> EvaluateResult<Option<bool>> {
+    pub(crate) fn evaluate(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
         match self {
             Formula::And(left_formula, right_formula) => {
-                let left = left_formula.evaluate(variables)?;
-                let right = right_formula.evaluate(variables)?;
+                let left = left_formula.evaluate(variables, registry)?;
+                let right = right_formula.evaluate(variables, registry)?;
                 // Three-valued AND: false dominates unknown
                 match (left, right) {
                     (Some(false), _) | (_, Some(false)) => Ok(Some(false)),
@@ -815,8 +348,8 @@ impl Formula {
                 }
             }
             Formula::Or(left_formula, right_formula) => {
-                let left = left_formula.evaluate(variables)?;
-                let right = right_formula.evaluate(variables)?;
+                let left = left_formula.evaluate(variables, registry)?;
+                let right = right_formula.evaluate(variables, registry)?;
                 // Three-valued OR: true dominates unknown
                 match (left, right) {
                     (Some(true), _) | (_, Some(true)) => Ok(Some(true)),
@@ -825,32 +358,32 @@ impl Formula {
                 }
             }
             Formula::Not(child_formula) => {
-                let child = child_formula.evaluate(variables)?;
+                let child = child_formula.evaluate(variables, registry)?;
                 Ok(child.map(|b| !b))
             }
             Formula::Predicate(relation, left_formula, right_formula) => {
-                let result = relation.apply(variables, left_formula, right_formula)?;
+                let result = relation.apply(variables, left_formula, right_formula, registry)?;
                 Ok(result)
             }
             Formula::Constant(value) => Ok(Some(*value)),
             Formula::IsNull(expr) => {
-                let val = expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
                 Ok(Some(val == Value::Null))
             }
             Formula::IsNotNull(expr) => {
-                let val = expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
                 Ok(Some(val != Value::Null))
             }
             Formula::IsMissing(expr) => {
-                let val = expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
                 Ok(Some(val == Value::Missing))
             }
             Formula::IsNotMissing(expr) => {
-                let val = expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
                 Ok(Some(val != Value::Missing))
             }
             Formula::ExpressionPredicate(expr) => {
-                let val = expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
                 match val {
                     Value::Boolean(b) => Ok(Some(b)),
                     Value::Null | Value::Missing => Ok(None),
@@ -858,8 +391,8 @@ impl Formula {
                 }
             }
             Formula::Like(expr, pattern_expr) => {
-                let val = expr.expression_value(variables)?;
-                let pattern = pattern_expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
+                let pattern = pattern_expr.expression_value(variables, registry)?;
                 match (&val, &pattern) {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
@@ -872,8 +405,8 @@ impl Formula {
                 }
             }
             Formula::NotLike(expr, pattern_expr) => {
-                let val = expr.expression_value(variables)?;
-                let pattern = pattern_expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
+                let pattern = pattern_expr.expression_value(variables, registry)?;
                 match (&val, &pattern) {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
@@ -886,13 +419,13 @@ impl Formula {
                 }
             }
             Formula::In(expr, list) => {
-                let val = expr.expression_value(variables)?;
+                let val = expr.expression_value(variables, registry)?;
                 match &val {
                     Value::Null | Value::Missing => Ok(None),
                     _ => {
                         let mut has_null = false;
                         for item_expr in list {
-                            let item = item_expr.expression_value(variables)?;
+                            let item = item_expr.expression_value(variables, registry)?;
                             if item == Value::Null || item == Value::Missing {
                                 has_null = true;
                                 continue;
@@ -911,7 +444,7 @@ impl Formula {
             }
             Formula::NotIn(expr, list) => {
                 // NOT IN is the negation of IN
-                let in_result = Formula::In(expr.clone(), list.clone()).evaluate(variables)?;
+                let in_result = Formula::In(expr.clone(), list.clone()).evaluate(variables, registry)?;
                 Ok(in_result.map(|b| !b))
             }
         }
@@ -935,17 +468,17 @@ pub(crate) enum Node {
 }
 
 impl Node {
-    pub(crate) fn get(&self, variables: Variables) -> CreateStreamResult<Box<dyn RecordStream>> {
+    pub(crate) fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
         match self {
             Node::Filter(source, formula) => {
-                let record_stream = source.get(variables.clone())?;
-                let stream = FilterStream::new(*formula.clone(), variables, record_stream);
+                let record_stream = source.get(variables.clone(), registry.clone())?;
+                let stream = FilterStream::new(*formula.clone(), variables, record_stream, registry);
                 Ok(Box::new(stream))
             }
             Node::Map(named_list, source) => {
-                let record_stream = source.get(variables.clone())?;
+                let record_stream = source.get(variables.clone(), registry.clone())?;
 
-                let stream = MapStream::new(named_list.clone(), variables, record_stream);
+                let stream = MapStream::new(named_list.clone(), variables, record_stream, registry);
 
                 Ok(Box::new(stream))
             }
@@ -970,17 +503,17 @@ impl Node {
                 }
             },
             Node::GroupBy(fields, named_aggregates, source) => {
-                let record_stream = source.get(variables.clone())?;
-                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream);
+                let record_stream = source.get(variables.clone(), registry.clone())?;
+                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream, registry);
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
-                let record_stream = source.get(variables.clone())?;
+                let record_stream = source.get(variables.clone(), registry)?;
                 let stream = LimitStream::new(*row_count, record_stream);
                 Ok(Box::new(stream))
             }
             Node::OrderBy(column_names, orderings, source) => {
-                let mut record_stream = source.get(variables.clone())?;
+                let mut record_stream = source.get(variables.clone(), registry)?;
                 let mut records = Vec::new();
 
                 while let Some(record) = record_stream.next()? {
@@ -1092,34 +625,34 @@ impl Node {
                 Ok(Box::new(stream))
             }
             Node::Distinct(source) => {
-                let record_stream = source.get(variables)?;
+                let record_stream = source.get(variables, registry)?;
                 Ok(Box::new(DistinctStream::new(record_stream)))
             }
             Node::CrossJoin(left, right) => {
-                let left_stream = left.get(variables.clone())?;
+                let left_stream = left.get(variables.clone(), registry.clone())?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(CrossJoinStream::new(left_stream, right_node, right_variables)))
+                Ok(Box::new(CrossJoinStream::new(left_stream, right_node, right_variables, registry)))
             }
             Node::LeftJoin(left, right, condition) => {
-                let left_stream = left.get(variables.clone())?;
+                let left_stream = left.get(variables.clone(), registry.clone())?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone())))
+                Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone(), registry)))
             }
             Node::Union(left, right) => {
-                let left_stream = left.get(variables.clone())?;
-                let right_stream = right.get(variables)?;
+                let left_stream = left.get(variables.clone(), registry.clone())?;
+                let right_stream = right.get(variables, registry)?;
                 Ok(Box::new(UnionStream::new(left_stream, right_stream)))
             }
             Node::Intersect(left, right, all) => {
-                let left_stream = left.get(variables.clone())?;
-                let right_stream = right.get(variables)?;
+                let left_stream = left.get(variables.clone(), registry.clone())?;
+                let right_stream = right.get(variables, registry)?;
                 Ok(Box::new(IntersectStream::new(left_stream, right_stream, *all)?))
             }
             Node::Except(left, right, all) => {
-                let left_stream = left.get(variables.clone())?;
-                let right_stream = right.get(variables)?;
+                let left_stream = left.get(variables.clone(), registry.clone())?;
+                let right_stream = right.get(variables, registry)?;
                 Ok(Box::new(ExceptStream::new(left_stream, right_stream, *all)?))
             }
         }
@@ -1717,6 +1250,10 @@ impl ApproxCountDistinctAggregate {
 mod tests {
     use super::*;
 
+    fn test_registry() -> Arc<FunctionRegistry> {
+        Arc::new(crate::functions::register_all().unwrap())
+    }
+
     #[test]
     fn test_avg_aggregate_with_one_element() {
         let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
@@ -1823,34 +1360,36 @@ mod tests {
 
     #[test]
     fn test_evaluate_host_functions() {
+        let registry = test_registry();
         let v = Value::Host(common::types::parse_host("192.168.131.39:2817").unwrap());
-        let name = evaluate_host_functions("host_name", &vec![v.clone()]).unwrap();
+        let name = registry.call("host_name", &vec![v.clone()]).unwrap();
         assert_eq!(name, Value::String("192.168.131.39".to_string()));
-        let port = evaluate_host_functions("host_port", &vec![v]).unwrap();
+        let port = registry.call("host_port", &vec![v]).unwrap();
         assert_eq!(port, Value::Int(2817));
     }
 
     #[test]
     fn test_evaluate_url_functions() {
+        let registry = test_registry();
         let v = Value::HttpRequest(
             common::types::parse_http_request(
                 "GET http://example.com:8000/users/123?mode=json&after=&iteration=1 HTTP/1.1",
             )
             .unwrap(),
         );
-        let name = evaluate_url_functions("url_host", &vec![v.clone()]).unwrap();
+        let name = registry.call("url_host", &vec![v.clone()]).unwrap();
         assert_eq!(name, Value::String("example.com".to_string()));
-        let port = evaluate_url_functions("url_port", &vec![v.clone()]).unwrap();
+        let port = registry.call("url_port", &vec![v.clone()]).unwrap();
         assert_eq!(port, Value::Int(8000));
-        let path = evaluate_url_functions("url_path", &vec![v.clone()]).unwrap();
+        let path = registry.call("url_path", &vec![v.clone()]).unwrap();
         assert_eq!(path, Value::String("/users/123".to_string()));
-        let fragment = evaluate_url_functions("url_fragment", &vec![v.clone()]).unwrap();
+        let fragment = registry.call("url_fragment", &vec![v.clone()]).unwrap();
         assert_eq!(fragment, Value::Null);
-        let query = evaluate_url_functions("url_query", &vec![v.clone()]).unwrap();
+        let query = registry.call("url_query", &vec![v.clone()]).unwrap();
         assert_eq!(query, Value::String("mode=json&after=&iteration=1".to_string()));
-        let path_segments = evaluate_url_functions("url_path_segments", &vec![v.clone(), Value::Int(1)]).unwrap();
+        let path_segments = registry.call("url_path_segments", &vec![v.clone(), Value::Int(1)]).unwrap();
         assert_eq!(path_segments, Value::String("123".to_string()));
-        let mapped_path = evaluate_url_functions(
+        let mapped_path = registry.call(
             "url_path_bucket",
             &vec![v.clone(), Value::Int(1), Value::String("_".to_string())],
         )
@@ -1860,58 +1399,61 @@ mod tests {
 
     #[test]
     fn test_evaluate() {
-        let v = evaluate("Plus", &vec![Value::Int(1), Value::Int(2)]).unwrap();
+        let registry = test_registry();
+        let v = registry.call("Plus", &vec![Value::Int(1), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(3));
 
-        let v = evaluate("Minus", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        let v = registry.call("Minus", &vec![Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(0));
 
-        let v = evaluate("Times", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        let v = registry.call("Times", &vec![Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(4));
 
-        let v = evaluate("Divide", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        let v = registry.call("Divide", &vec![Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(1));
 
         let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:35.000000Z").unwrap());
-        let bucket_dt = evaluate("time_bucket", &vec![Value::String("5 seconds".to_string()), dt.clone()]).unwrap();
+        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 seconds".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:00.000000Z").unwrap());
-        let bucket_dt = evaluate("time_bucket", &vec![Value::String("5 minutes".to_string()), dt.clone()]).unwrap();
+        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 minutes".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:00:00.000000Z").unwrap());
-        let bucket_dt = evaluate("time_bucket", &vec![Value::String("1 hour".to_string()), dt.clone()]).unwrap();
+        let bucket_dt = registry.call("time_bucket", &vec![Value::String("1 hour".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
-        let hour = evaluate("date_part", &vec![Value::String("second".to_string()), dt.clone()]).unwrap();
+        let hour = registry.call("date_part", &vec![Value::String("second".to_string()), dt.clone()]).unwrap();
         assert_eq!(Value::Float(OrderedFloat::from(37.0)), hour);
     }
 
     #[test]
     fn test_arithmetic_null_propagation() {
-        assert_eq!(evaluate("Plus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(evaluate("Plus", &vec![Value::Int(1), Value::Null]), Ok(Value::Null));
-        assert_eq!(evaluate("Plus", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
-        assert_eq!(evaluate("Minus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(evaluate("Times", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(evaluate("Divide", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        let registry = test_registry();
+        assert_eq!(registry.call("Plus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Plus", &vec![Value::Int(1), Value::Null]), Ok(Value::Null));
+        assert_eq!(registry.call("Plus", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
+        assert_eq!(registry.call("Minus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Times", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Divide", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
     }
 
     #[test]
     fn test_float_arithmetic() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("Plus", &vec![Value::Float(OrderedFloat::from(1.5f32)), Value::Float(OrderedFloat::from(2.5f32))]),
+            registry.call("Plus", &vec![Value::Float(OrderedFloat::from(1.5f32)), Value::Float(OrderedFloat::from(2.5f32))]),
             Ok(Value::Float(OrderedFloat::from(4.0f32)))
         );
         // Mixed Int/Float promotion
         assert_eq!(
-            evaluate("Plus", &vec![Value::Int(1), Value::Float(OrderedFloat::from(2.5f32))]),
+            registry.call("Plus", &vec![Value::Int(1), Value::Float(OrderedFloat::from(2.5f32))]),
             Ok(Value::Float(OrderedFloat::from(3.5f32)))
         );
         assert_eq!(
-            evaluate("Plus", &vec![Value::Float(OrderedFloat::from(2.5f32)), Value::Int(1)]),
+            registry.call("Plus", &vec![Value::Float(OrderedFloat::from(2.5f32)), Value::Int(1)]),
             Ok(Value::Float(OrderedFloat::from(3.5f32)))
         );
     }
@@ -1919,76 +1461,82 @@ mod tests {
     #[test]
     fn test_comparison_int_float_coercion() {
         let vars = Variables::default();
+        let registry = test_registry();
         let rel = Relation::MoreThan;
         let left = Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)));
         let right = Expression::Constant(Value::Int(1));
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(Some(true)));
+        assert_eq!(rel.apply(&vars, &left, &right, &registry), Ok(Some(true)));
 
         let rel = Relation::LessThan;
         let left = Expression::Constant(Value::Int(1));
         let right = Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)));
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(Some(true)));
+        assert_eq!(rel.apply(&vars, &left, &right, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_comparison_null_returns_none() {
         let vars = Variables::default();
+        let registry = test_registry();
         let rel = Relation::Equal;
         let left = Expression::Constant(Value::Null);
         let right = Expression::Constant(Value::Int(1));
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(None));
+        assert_eq!(rel.apply(&vars, &left, &right, &registry), Ok(None));
 
         let left = Expression::Constant(Value::Null);
         let right = Expression::Constant(Value::Null);
-        assert_eq!(rel.apply(&vars, &left, &right), Ok(None));
+        assert_eq!(rel.apply(&vars, &left, &right, &registry), Ok(None));
     }
 
     #[test]
     fn test_three_valued_and() {
         let vars = Variables::default();
+        let registry = test_registry();
         // TRUE AND TRUE = TRUE
         let f = Formula::And(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(true)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // FALSE AND TRUE = FALSE
         let f = Formula::And(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(true)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // TRUE AND FALSE = FALSE
         let f = Formula::And(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(false)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // FALSE AND FALSE = FALSE
         let f = Formula::And(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(false)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
 
     #[test]
     fn test_three_valued_or() {
         let vars = Variables::default();
+        let registry = test_registry();
         // TRUE OR FALSE = TRUE
         let f = Formula::Or(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(false)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // FALSE OR FALSE = FALSE
         let f = Formula::Or(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(false)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // FALSE OR TRUE = TRUE
         let f = Formula::Or(Box::new(Formula::Constant(false)), Box::new(Formula::Constant(true)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // TRUE OR TRUE = TRUE
         let f = Formula::Or(Box::new(Formula::Constant(true)), Box::new(Formula::Constant(true)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_three_valued_not() {
         let vars = Variables::default();
+        let registry = test_registry();
         let f = Formula::Not(Box::new(Formula::Constant(true)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         let f = Formula::Not(Box::new(Formula::Constant(false)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_three_valued_and_with_null() {
         let vars = Variables::default();
+        let registry = test_registry();
         // NULL comparison produces None; TRUE AND None = None
         let null_pred = Formula::Predicate(
             Relation::Equal,
@@ -1996,15 +1544,16 @@ mod tests {
             Box::new(Expression::Constant(Value::Int(1))),
         );
         let f = Formula::And(Box::new(Formula::Constant(true)), Box::new(null_pred.clone()));
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
         // FALSE AND None = FALSE (false dominates)
         let f = Formula::And(Box::new(Formula::Constant(false)), Box::new(null_pred));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
 
     #[test]
     fn test_three_valued_or_with_null() {
         let vars = Variables::default();
+        let registry = test_registry();
         let null_pred = Formula::Predicate(
             Relation::Equal,
             Box::new(Expression::Constant(Value::Null)),
@@ -2012,15 +1561,16 @@ mod tests {
         );
         // TRUE OR None = TRUE (true dominates)
         let f = Formula::Or(Box::new(Formula::Constant(true)), Box::new(null_pred.clone()));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // FALSE OR None = None
         let f = Formula::Or(Box::new(Formula::Constant(false)), Box::new(null_pred));
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
     }
 
     #[test]
     fn test_three_valued_not_with_null() {
         let vars = Variables::default();
+        let registry = test_registry();
         let null_pred = Formula::Predicate(
             Relation::Equal,
             Box::new(Expression::Constant(Value::Null)),
@@ -2028,93 +1578,100 @@ mod tests {
         );
         // NOT None = None
         let f = Formula::Not(Box::new(null_pred));
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
     }
 
     #[test]
     fn test_is_null() {
         let vars = Variables::default();
+        let registry = test_registry();
         // IS NULL on Null => true
         let f = Formula::IsNull(Box::new(Expression::Constant(Value::Null)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // IS NULL on non-null => false
         let f = Formula::IsNull(Box::new(Expression::Constant(Value::Int(1))));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // IS NULL on Missing => false
         let f = Formula::IsNull(Box::new(Expression::Constant(Value::Missing)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
 
     #[test]
     fn test_is_not_null() {
         let vars = Variables::default();
+        let registry = test_registry();
         // IS NOT NULL on Null => false
         let f = Formula::IsNotNull(Box::new(Expression::Constant(Value::Null)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // IS NOT NULL on non-null => true
         let f = Formula::IsNotNull(Box::new(Expression::Constant(Value::Int(1))));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // IS NOT NULL on Missing => true
         let f = Formula::IsNotNull(Box::new(Expression::Constant(Value::Missing)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_is_missing() {
         let vars = Variables::default();
+        let registry = test_registry();
         // IS MISSING on Missing => true
         let f = Formula::IsMissing(Box::new(Expression::Constant(Value::Missing)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // IS MISSING on non-missing => false
         let f = Formula::IsMissing(Box::new(Expression::Constant(Value::Int(1))));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // IS MISSING on Null => false
         let f = Formula::IsMissing(Box::new(Expression::Constant(Value::Null)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
 
     #[test]
     fn test_is_not_missing() {
         let vars = Variables::default();
+        let registry = test_registry();
         // IS NOT MISSING on Missing => false
         let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Missing)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
         // IS NOT MISSING on non-missing => true
         let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Int(1))));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
         // IS NOT MISSING on Null => true
         let f = Formula::IsNotMissing(Box::new(Expression::Constant(Value::Null)));
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_string_concat_evaluation() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("Concat", &vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
+            registry.call("Concat", &vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
             Ok(Value::String("foobar".to_string()))
         );
     }
 
     #[test]
     fn test_string_concat_null_propagation() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("Concat", &vec![Value::Null, Value::String("bar".to_string())]),
+            registry.call("Concat", &vec![Value::Null, Value::String("bar".to_string())]),
             Ok(Value::Null)
         );
         assert_eq!(
-            evaluate("Concat", &vec![Value::String("foo".to_string()), Value::Null]),
+            registry.call("Concat", &vec![Value::String("foo".to_string()), Value::Null]),
             Ok(Value::Null)
         );
     }
 
     #[test]
     fn test_string_concat_missing_propagation() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("Concat", &vec![Value::Missing, Value::String("bar".to_string())]),
+            registry.call("Concat", &vec![Value::Missing, Value::String("bar".to_string())]),
             Ok(Value::Missing)
         );
         assert_eq!(
-            evaluate("Concat", &vec![Value::String("foo".to_string()), Value::Missing]),
+            registry.call("Concat", &vec![Value::String("foo".to_string()), Value::Missing]),
             Ok(Value::Missing)
         );
     }
@@ -2134,88 +1691,92 @@ mod tests {
     #[test]
     fn test_like_evaluation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // Basic match: 'foobar' LIKE '%foo%' => true
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::String("foobar".to_string()))),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // No match: 'hello' LIKE '%foo%' => false
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::String("hello".to_string()))),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
 
         // Underscore wildcard: 'abc' LIKE 'a_c' => true
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::String("abc".to_string()))),
             Box::new(Expression::Constant(Value::String("a_c".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // Underscore wildcard: 'ac' LIKE 'a_c' => false (underscore matches exactly one char)
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::String("ac".to_string()))),
             Box::new(Expression::Constant(Value::String("a_c".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
 
         // Exact match: 'hello' LIKE 'hello' => true
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::String("hello".to_string()))),
             Box::new(Expression::Constant(Value::String("hello".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_not_like_evaluation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // 'hello' NOT LIKE '%foo%' => true
         let f = Formula::NotLike(
             Box::new(Expression::Constant(Value::String("hello".to_string()))),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // 'foobar' NOT LIKE '%foo%' => false
         let f = Formula::NotLike(
             Box::new(Expression::Constant(Value::String("foobar".to_string()))),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
 
     #[test]
     fn test_like_null_propagation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // NULL LIKE '%foo%' => None
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::Null)),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
 
         // 'hello' LIKE NULL => None
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::String("hello".to_string()))),
             Box::new(Expression::Constant(Value::Null)),
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
 
         // MISSING LIKE '%foo%' => None
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::Missing)),
             Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
     }
 
     #[test]
     fn test_in_evaluation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // 2 IN (1, 2, 3) => true
         let f = Formula::In(
             Box::new(Expression::Constant(Value::Int(2))),
@@ -2225,7 +1786,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // 4 IN (1, 2, 3) => false
         let f = Formula::In(
@@ -2236,7 +1797,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
 
         // String IN check: "b" IN ("a", "b", "c") => true
         let f = Formula::In(
@@ -2247,12 +1808,13 @@ mod tests {
                 Expression::Constant(Value::String("c".to_string())),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
 
     #[test]
     fn test_not_in_evaluation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // 4 NOT IN (1, 2, 3) => true
         let f = Formula::NotIn(
             Box::new(Expression::Constant(Value::Int(4))),
@@ -2262,7 +1824,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // 2 NOT IN (1, 2, 3) => false
         let f = Formula::NotIn(
@@ -2273,12 +1835,13 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(false)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
 
     #[test]
     fn test_in_null_propagation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // NULL IN (1, 2, 3) => None (unknown)
         let f = Formula::In(
             Box::new(Expression::Constant(Value::Null)),
@@ -2288,7 +1851,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
 
         // 2 IN (1, NULL, 3) where x=2 => None (unknown, because NULL could be 2)
         let f = Formula::In(
@@ -2299,7 +1862,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
 
         // 1 IN (1, NULL, 3) => true (found match before considering NULL)
         let f = Formula::In(
@@ -2310,7 +1873,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(Some(true)));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // MISSING IN (1, 2, 3) => None (unknown)
         let f = Formula::In(
@@ -2321,12 +1884,13 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
     }
 
     #[test]
     fn test_not_in_null_propagation() {
         let vars = Variables::default();
+        let registry = test_registry();
         // NULL NOT IN (1, 2, 3) => None
         let f = Formula::NotIn(
             Box::new(Expression::Constant(Value::Null)),
@@ -2336,7 +1900,7 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
 
         // 2 NOT IN (1, NULL, 3) => None (because IN returns None)
         let f = Formula::NotIn(
@@ -2347,116 +1911,123 @@ mod tests {
                 Expression::Constant(Value::Int(3)),
             ],
         );
-        assert_eq!(f.evaluate(&vars), Ok(None));
+        assert_eq!(f.evaluate(&vars, &registry), Ok(None));
     }
 
     #[test]
     fn test_upper() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("upper", &vec![Value::String("hello".to_string())]),
+            registry.call("upper", &vec![Value::String("hello".to_string())]),
             Ok(Value::String("HELLO".to_string()))
         );
         // Case-insensitive function name
         assert_eq!(
-            evaluate("UPPER", &vec![Value::String("hello".to_string())]),
+            registry.call("UPPER", &vec![Value::String("hello".to_string())]),
             Ok(Value::String("HELLO".to_string()))
         );
     }
 
     #[test]
     fn test_lower() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("lower", &vec![Value::String("HELLO".to_string())]),
+            registry.call("lower", &vec![Value::String("HELLO".to_string())]),
             Ok(Value::String("hello".to_string()))
         );
         // Case-insensitive function name
         assert_eq!(
-            evaluate("LOWER", &vec![Value::String("HELLO".to_string())]),
+            registry.call("LOWER", &vec![Value::String("HELLO".to_string())]),
             Ok(Value::String("hello".to_string()))
         );
     }
 
     #[test]
     fn test_char_length() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("char_length", &vec![Value::String("hello".to_string())]),
+            registry.call("char_length", &vec![Value::String("hello".to_string())]),
             Ok(Value::Int(5))
         );
         assert_eq!(
-            evaluate("character_length", &vec![Value::String("hello".to_string())]),
+            registry.call("character_length", &vec![Value::String("hello".to_string())]),
             Ok(Value::Int(5))
         );
         assert_eq!(
-            evaluate("CHAR_LENGTH", &vec![Value::String("hello".to_string())]),
+            registry.call("CHAR_LENGTH", &vec![Value::String("hello".to_string())]),
             Ok(Value::Int(5))
         );
     }
 
     #[test]
     fn test_substring() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("substring", &vec![Value::String("hello".to_string()), Value::Int(2)]),
+            registry.call("substring", &vec![Value::String("hello".to_string()), Value::Int(2)]),
             Ok(Value::String("ello".to_string()))
         );
         assert_eq!(
-            evaluate("substring", &vec![Value::String("hello".to_string()), Value::Int(2), Value::Int(3)]),
+            registry.call("substring", &vec![Value::String("hello".to_string()), Value::Int(2), Value::Int(3)]),
             Ok(Value::String("ell".to_string()))
         );
         // Case-insensitive
         assert_eq!(
-            evaluate("SUBSTRING", &vec![Value::String("hello".to_string()), Value::Int(1)]),
+            registry.call("SUBSTRING", &vec![Value::String("hello".to_string()), Value::Int(1)]),
             Ok(Value::String("hello".to_string()))
         );
     }
 
     #[test]
     fn test_trim() {
+        let registry = test_registry();
         assert_eq!(
-            evaluate("trim", &vec![Value::String("  hello  ".to_string())]),
+            registry.call("trim", &vec![Value::String("  hello  ".to_string())]),
             Ok(Value::String("hello".to_string()))
         );
         assert_eq!(
-            evaluate("TRIM", &vec![Value::String("  hello  ".to_string())]),
+            registry.call("TRIM", &vec![Value::String("  hello  ".to_string())]),
             Ok(Value::String("hello".to_string()))
         );
     }
 
     #[test]
     fn test_string_functions_null_propagation() {
-        assert_eq!(evaluate("upper", &vec![Value::Null]), Ok(Value::Null));
-        assert_eq!(evaluate("lower", &vec![Value::Missing]), Ok(Value::Missing));
-        assert_eq!(evaluate("char_length", &vec![Value::Null]), Ok(Value::Null));
-        assert_eq!(evaluate("substring", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(evaluate("substring", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
-        assert_eq!(evaluate("trim", &vec![Value::Null]), Ok(Value::Null));
-        assert_eq!(evaluate("trim", &vec![Value::Missing]), Ok(Value::Missing));
+        let registry = test_registry();
+        assert_eq!(registry.call("upper", &vec![Value::Null]), Ok(Value::Null));
+        assert_eq!(registry.call("lower", &vec![Value::Missing]), Ok(Value::Missing));
+        assert_eq!(registry.call("char_length", &vec![Value::Null]), Ok(Value::Null));
+        assert_eq!(registry.call("substring", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("substring", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
+        assert_eq!(registry.call("trim", &vec![Value::Null]), Ok(Value::Null));
+        assert_eq!(registry.call("trim", &vec![Value::Missing]), Ok(Value::Missing));
     }
 
     #[test]
     fn test_date_part_all_units() {
+        let registry = test_registry();
         let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
         assert_eq!(
-            evaluate("date_part", &vec![Value::String("second".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("second".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(37.0)))
         );
         assert_eq!(
-            evaluate("date_part", &vec![Value::String("minute".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("minute".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(45.0)))
         );
         assert_eq!(
-            evaluate("date_part", &vec![Value::String("hour".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("hour".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(18.0)))
         );
         assert_eq!(
-            evaluate("date_part", &vec![Value::String("day".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("day".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(7.0)))
         );
         assert_eq!(
-            evaluate("date_part", &vec![Value::String("month".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("month".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(11.0)))
         );
         assert_eq!(
-            evaluate("date_part", &vec![Value::String("year".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("year".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(2015.0)))
         );
     }
@@ -2464,160 +2035,174 @@ mod tests {
     #[test]
     fn test_cast_int_to_string() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Int(42))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::String("42".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("42".to_string())));
     }
 
     #[test]
     fn test_cast_string_to_int() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::String("123".to_string()))),
             CastType::Int,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Int(123)));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Int(123)));
     }
 
     #[test]
     fn test_cast_string_to_int_invalid() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::String("abc".to_string()))),
             CastType::Int,
         );
-        assert_eq!(expr.expression_value(&vars), Err(ExpressionError::TypeMismatch));
+        assert_eq!(expr.expression_value(&vars, &registry), Err(ExpressionError::TypeMismatch));
     }
 
     #[test]
     fn test_cast_float_to_int() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Float(OrderedFloat::from(3.7f32)))),
             CastType::Int,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Int(3)));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Int(3)));
     }
 
     #[test]
     fn test_cast_int_to_float() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Int(5))),
             CastType::Float,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Float(OrderedFloat::from(5.0f32))));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Float(OrderedFloat::from(5.0f32))));
     }
 
     #[test]
     fn test_cast_string_to_float() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::String("3.14".to_string()))),
             CastType::Float,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Float(OrderedFloat::from(3.14f32))));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Float(OrderedFloat::from(3.14f32))));
     }
 
     #[test]
     fn test_cast_bool_to_int() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr_true = Expression::Cast(
             Box::new(Expression::Constant(Value::Boolean(true))),
             CastType::Int,
         );
-        assert_eq!(expr_true.expression_value(&vars), Ok(Value::Int(1)));
+        assert_eq!(expr_true.expression_value(&vars, &registry), Ok(Value::Int(1)));
 
         let expr_false = Expression::Cast(
             Box::new(Expression::Constant(Value::Boolean(false))),
             CastType::Int,
         );
-        assert_eq!(expr_false.expression_value(&vars), Ok(Value::Int(0)));
+        assert_eq!(expr_false.expression_value(&vars, &registry), Ok(Value::Int(0)));
     }
 
     #[test]
     fn test_cast_bool_to_string() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Boolean(true))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::String("true".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("true".to_string())));
     }
 
     #[test]
     fn test_cast_string_to_bool() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr_true = Expression::Cast(
             Box::new(Expression::Constant(Value::String("true".to_string()))),
             CastType::Boolean,
         );
-        assert_eq!(expr_true.expression_value(&vars), Ok(Value::Boolean(true)));
+        assert_eq!(expr_true.expression_value(&vars, &registry), Ok(Value::Boolean(true)));
 
         let expr_false = Expression::Cast(
             Box::new(Expression::Constant(Value::String("FALSE".to_string()))),
             CastType::Boolean,
         );
-        assert_eq!(expr_false.expression_value(&vars), Ok(Value::Boolean(false)));
+        assert_eq!(expr_false.expression_value(&vars, &registry), Ok(Value::Boolean(false)));
     }
 
     #[test]
     fn test_cast_string_to_bool_invalid() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::String("yes".to_string()))),
             CastType::Boolean,
         );
-        assert_eq!(expr.expression_value(&vars), Err(ExpressionError::TypeMismatch));
+        assert_eq!(expr.expression_value(&vars, &registry), Err(ExpressionError::TypeMismatch));
     }
 
     #[test]
     fn test_cast_null_propagation() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Null)),
             CastType::Int,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Null));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Null));
     }
 
     #[test]
     fn test_cast_missing_propagation() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Missing)),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Missing));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Missing));
     }
 
     #[test]
     fn test_cast_identity() {
         let vars = Variables::default();
+        let registry = test_registry();
         // Casting Int to Int should be identity
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Int(42))),
             CastType::Int,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::Int(42)));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Int(42)));
 
         // Casting String to Varchar should be identity
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::String("hello".to_string()))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::String("hello".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("hello".to_string())));
     }
 
     #[test]
     fn test_cast_float_to_string() {
         let vars = Variables::default();
+        let registry = test_registry();
         let expr = Expression::Cast(
             Box::new(Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars), Ok(Value::String("2.5".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("2.5".to_string())));
     }
 }

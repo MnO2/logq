@@ -3,9 +3,11 @@ use nom::error::VerboseError;
 use prettytable::{Row, Table};
 use std::result;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::common;
 use crate::execution;
+use crate::functions;
 use crate::logical;
 use crate::syntax;
 
@@ -33,6 +35,8 @@ pub(crate) enum AppError {
     WriteCsv(#[from] csv::Error),
     #[error("{0}")]
     WriteJson(#[from] json::Error),
+    #[error("{0}")]
+    Registry(#[from] functions::RegistryError),
 }
 
 impl PartialEq for AppError {
@@ -48,6 +52,7 @@ impl PartialEq for AppError {
             (AppError::InvalidTableSpecString, AppError::InvalidTableSpecString) => true,
             (AppError::WriteCsv(_), AppError::WriteCsv(_)) => true,
             (AppError::WriteJson(_), AppError::WriteJson(_)) => true,
+            (AppError::Registry(_), AppError::Registry(_)) => true,
             _ => false,
         }
     }
@@ -108,7 +113,8 @@ pub(crate) fn explain(query_str: &str, data_source: common::types::DataSource) -
     }
     let q = syntax::desugar::desugar_query(q);
 
-    let node = logical::parser::parse_query_top(q, data_source.clone())?;
+    let registry = Arc::new(functions::register_all()?);
+    let node = logical::parser::parse_query_top(q, data_source.clone(), registry)?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -124,11 +130,12 @@ pub(crate) fn run(query_str: &str, data_source: common::types::DataSource, outpu
     }
     let q = syntax::desugar::desugar_query(q);
 
-    let node = logical::parser::parse_query_top(q, data_source.clone())?;
+    let registry = Arc::new(functions::register_all()?);
+    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables)?;
+    let mut stream = physical_plan.get(variables, registry)?;
 
     match output_mode {
         OutputMode::Table => {
@@ -208,11 +215,12 @@ pub(crate) fn run_to_vec(
     }
     let q = syntax::desugar::desugar_query(q);
 
-    let node = logical::parser::parse_query_top(q, data_source.clone())?;
+    let registry = Arc::new(functions::register_all()?);
+    let node = logical::parser::parse_query_top(q, data_source.clone(), registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new(data_source);
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables)?;
+    let mut stream = physical_plan.get(variables, registry)?;
     let mut results = Vec::new();
 
     while let Some(record) = stream.next()? {

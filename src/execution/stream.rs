@@ -2,11 +2,13 @@ use super::datasource::RecordRead;
 use super::types::{Aggregate, Formula, Named, NamedAggregate, Node, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
+use crate::functions::FunctionRegistry;
 use crate::syntax::ast;
 use linked_hash_map::LinkedHashMap;
 use prettytable::Cell;
 use std::collections::hash_set;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Record {
@@ -121,14 +123,16 @@ pub(crate) struct MapStream {
     pub(crate) named_list: Vec<Named>,
     pub(crate) variables: Variables,
     pub(crate) source: Box<dyn RecordStream>,
+    pub(crate) registry: Arc<FunctionRegistry>,
 }
 
 impl MapStream {
-    pub(crate) fn new(named_list: Vec<Named>, variables: Variables, source: Box<dyn RecordStream>) -> Self {
+    pub(crate) fn new(named_list: Vec<Named>, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
         MapStream {
             named_list,
             variables,
             source,
+            registry,
         }
     }
 }
@@ -156,7 +160,7 @@ impl RecordStream for MapStream {
                         };
 
                         field_names.push(name);
-                        let v = expr.expression_value(&variables)?;
+                        let v = expr.expression_value(&variables, &self.registry)?;
                         data.push(v);
                     }
                     Named::Star => {
@@ -217,14 +221,16 @@ pub(crate) struct FilterStream {
     formula: Formula,
     variables: Variables,
     source: Box<dyn RecordStream>,
+    registry: Arc<FunctionRegistry>,
 }
 
 impl FilterStream {
-    pub(crate) fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>) -> Self {
+    pub(crate) fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
         FilterStream {
             formula,
             variables,
             source,
+            registry,
         }
     }
 }
@@ -233,7 +239,7 @@ impl RecordStream for FilterStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         while let Some(record) = self.source.next()? {
             let variables = common::types::merge(&self.variables, record.to_variables());
-            let predicate = self.formula.evaluate(&variables)?;
+            let predicate = self.formula.evaluate(&variables, &self.registry)?;
 
             if predicate == Some(true) {
                 return Ok(Some(record));
@@ -276,6 +282,7 @@ pub(crate) struct GroupByStream {
     aggregates: Vec<NamedAggregate>,
     source: Box<dyn RecordStream>,
     group_iterator: Option<hash_set::IntoIter<Option<Tuple>>>,
+    registry: Arc<FunctionRegistry>,
 }
 
 impl<'a> GroupByStream {
@@ -284,6 +291,7 @@ impl<'a> GroupByStream {
         variables: Variables,
         aggregates: Vec<NamedAggregate>,
         source: Box<dyn RecordStream>,
+        registry: Arc<FunctionRegistry>,
     ) -> Self {
         GroupByStream {
             keys,
@@ -291,6 +299,7 @@ impl<'a> GroupByStream {
             aggregates,
             source,
             group_iterator: None,
+            registry,
         }
     }
 }
@@ -323,7 +332,7 @@ impl RecordStream for GroupByStream {
                         }
                         Aggregate::Avg(ref mut inner, named) => {
                             let val = match named {
-                                Named::Expression(expr, _) => expr.expression_value(&variables)?,
+                                Named::Expression(expr, _) => expr.expression_value(&variables, &self.registry)?,
                                 Named::Star => {
                                     unreachable!();
                                 }
@@ -334,7 +343,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Count(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -345,7 +354,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::First(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -356,7 +365,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Last(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -367,7 +376,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Max(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -378,7 +387,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Min(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -389,7 +398,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::Sum(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -400,7 +409,7 @@ impl RecordStream for GroupByStream {
                         Aggregate::ApproxCountDistinct(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables)?;
+                                    let val = expr.expression_value(&variables, &self.registry)?;
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {
@@ -632,16 +641,18 @@ pub(crate) struct CrossJoinStream {
     right_variables: Variables,
     current_left: Option<Record>,
     right_stream: Option<Box<dyn RecordStream>>,
+    registry: Arc<FunctionRegistry>,
 }
 
 impl CrossJoinStream {
-    pub(crate) fn new(left: Box<dyn RecordStream>, right_node: Node, right_variables: Variables) -> Self {
+    pub(crate) fn new(left: Box<dyn RecordStream>, right_node: Node, right_variables: Variables, registry: Arc<FunctionRegistry>) -> Self {
         CrossJoinStream {
             left,
             right_node,
             right_variables,
             current_left: None,
             right_stream: None,
+            registry,
         }
     }
 }
@@ -663,7 +674,7 @@ impl RecordStream for CrossJoinStream {
                 Some(left_record) => {
                     self.current_left = Some(left_record);
                     // Re-create right stream from scratch
-                    let right_stream = self.right_node.get(self.right_variables.clone())
+                    let right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone())
                         .map_err(|e| super::types::StreamError::Get(e))?;
                     self.right_stream = Some(right_stream);
                 }
@@ -686,6 +697,7 @@ pub(crate) struct LeftJoinStream {
     right_stream: Option<Box<dyn RecordStream>>,
     matched: bool,
     right_field_names: Option<Vec<String>>,
+    registry: Arc<FunctionRegistry>,
 }
 
 impl LeftJoinStream {
@@ -694,6 +706,7 @@ impl LeftJoinStream {
         right_node: Node,
         right_variables: Variables,
         condition: Formula,
+        registry: Arc<FunctionRegistry>,
     ) -> Self {
         LeftJoinStream {
             left,
@@ -704,6 +717,7 @@ impl LeftJoinStream {
             right_stream: None,
             matched: false,
             right_field_names: None,
+            registry,
         }
     }
 
@@ -740,7 +754,7 @@ impl RecordStream for LeftJoinStream {
 
                     // Evaluate ON condition
                     let merged_vars = common::types::merge(&self.right_variables, merged.to_variables());
-                    let predicate = self.condition.evaluate(&merged_vars)?;
+                    let predicate = self.condition.evaluate(&merged_vars, &self.registry)?;
 
                     if predicate == Some(true) {
                         self.matched = true;
@@ -773,7 +787,7 @@ impl RecordStream for LeftJoinStream {
                     // Re-create right stream from scratch
                     let right_stream = self
                         .right_node
-                        .get(self.right_variables.clone())
+                        .get(self.right_variables.clone(), self.registry.clone())
                         .map_err(|e| super::types::StreamError::Get(e))?;
                     self.right_stream = Some(right_stream);
 
@@ -783,7 +797,7 @@ impl RecordStream for LeftJoinStream {
                         // Create a temporary stream to discover field names
                         let mut peek_stream = self
                             .right_node
-                            .get(self.right_variables.clone())
+                            .get(self.right_variables.clone(), self.registry.clone())
                             .map_err(|e| super::types::StreamError::Get(e))?;
                         if let Some(peek_record) = peek_stream.next()? {
                             self.right_field_names = Some(
@@ -1031,7 +1045,8 @@ mod tests {
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut filtered_stream = FilterStream::new(predicate, variables, stream);
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let mut filtered_stream = FilterStream::new(predicate, variables, stream, registry);
 
         let mut result = Vec::new();
         while let Some(n) = filtered_stream.next().unwrap() {
@@ -1068,7 +1083,8 @@ mod tests {
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut filtered_stream = MapStream::new(named_list, variables, stream);
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let mut filtered_stream = MapStream::new(named_list, variables, stream, registry);
 
         let mut result = Vec::new();
         while let Some(n) = filtered_stream.next().unwrap() {
@@ -1119,7 +1135,8 @@ mod tests {
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut filtered_stream = MapStream::new(named_list, variables, stream);
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let mut filtered_stream = MapStream::new(named_list, variables, stream, registry);
 
         let mut result = Vec::new();
         while let Some(n) = filtered_stream.next().unwrap() {
