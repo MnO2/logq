@@ -1,4 +1,5 @@
 pub mod arithmetic;
+pub mod bitwise;
 pub mod datetime;
 pub mod host;
 pub mod json;
@@ -12,6 +13,7 @@ pub use registry::{FunctionRegistry, FunctionDef, Arity, NullHandling, RegistryE
 pub fn register_all() -> Result<FunctionRegistry, RegistryError> {
     let mut registry = FunctionRegistry::new();
     arithmetic::register(&mut registry)?;
+    bitwise::register(&mut registry)?;
     string::register(&mut registry)?;
     url::register(&mut registry)?;
     host::register(&mut registry)?;
