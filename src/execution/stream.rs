@@ -149,6 +149,8 @@ pub struct MapStream {
     is_star_only: bool,
     /// Pre-computed (source_field, output_column) pairs for simple_projection fast path
     projection_map: Vec<(String, String)>,
+    /// True when all projection entries keep the same field name (no rename)
+    projection_rename_free: bool,
 }
 
 impl MapStream {
@@ -186,6 +188,8 @@ impl MapStream {
         } else {
             Vec::new()
         };
+        let projection_rename_free = simple_projection
+            && projection_map.iter().all(|(src, out)| src == out);
         MapStream {
             named_list,
             column_names,
@@ -195,6 +199,7 @@ impl MapStream {
             simple_projection,
             is_star_only,
             projection_map,
+            projection_rename_free,
         }
     }
 }
@@ -212,8 +217,16 @@ impl RecordStream for MapStream {
             }
 
             // Fast path: all expressions are simple variable projections, no merge needed.
-            // Move values out of source record instead of cloning.
             if self.simple_projection {
+                if self.projection_rename_free {
+                    // Zero-clone path: iterate source, keep matching entries by owned key
+                    let map = &self.projection_map;
+                    let out: Variables = record.into_variables().into_iter()
+                        .filter(|(k, _)| map.iter().any(|(src, _)| src == k))
+                        .collect();
+                    return Ok(Some(Record::new_with_variables(out)));
+                }
+                // Move values out of source record instead of cloning.
                 let mut source_vars = record.into_variables();
                 let mut out = Variables::with_capacity(self.projection_map.len());
                 for (src_field, out_name) in &self.projection_map {
