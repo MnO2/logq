@@ -221,9 +221,12 @@ impl RecordStream for MapStream {
                 if self.projection_rename_free {
                     // Zero-clone path: iterate source, keep matching entries by owned key
                     let map = &self.projection_map;
-                    let out: Variables = record.into_variables().into_iter()
-                        .filter(|(k, _)| map.iter().any(|(src, _)| src == k))
-                        .collect();
+                    let mut out = Variables::with_capacity(map.len());
+                    for (k, v) in record.into_variables().into_iter() {
+                        if map.iter().any(|(src, _)| src == &k) {
+                            out.insert(k, v);
+                        }
+                    }
                     return Ok(Some(Record::new_with_variables(out)));
                 }
                 // Move values out of source record instead of cloning.
