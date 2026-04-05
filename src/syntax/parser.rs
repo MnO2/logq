@@ -796,7 +796,14 @@ fn parse_expression_at_precedence<'a>(
     let (i1, expr) = parse_postfix_in(i1, expr)?;
     let (mut i1, mut expr) = parse_postfix_between(i1, expr)?;
     while let Ok((i2, op)) = parse_expression_op(i1) {
-        let (op_precedence, op_left_associative) = *precedence_table.get(op.to_ascii_lowercase().as_str()).unwrap();
+        let (op_precedence, op_left_associative) = match precedence_table.get(op) {
+            Some(&v) => v,
+            None => {
+                // Handle case-insensitive keywords (AND, OR, etc.)
+                let lowered = op.to_ascii_lowercase();
+                *precedence_table.get(lowered.as_str()).unwrap()
+            }
+        };
 
         if op_precedence < current_precedence {
             break;
