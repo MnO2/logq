@@ -373,7 +373,9 @@ impl RecordStream for GroupByStream {
                     Some(record.get_many(&self.keys))
                 };
 
-                groups.insert(key.clone());
+                if !groups.contains(&key) {
+                    groups.insert(key.clone());
+                }
                 for named_agg in self.aggregates.iter_mut() {
                     match &mut named_agg.aggregate {
                         Aggregate::GroupAs(ref mut inner, named) => {
