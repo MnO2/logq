@@ -21,6 +21,83 @@ lazy_static! {
         Regex::new(r#"[^\s"'\[\]]+|"([^"]*)"|'([^']*)'|\[([^\[\]]*)\]"#).unwrap();
 }
 
+/// Hand-written tokenizer replacing the regex-based SPLIT_READER_LINE_REGEX.
+/// Splits log lines into tokens, handling unquoted tokens, double-quoted strings,
+/// single-quoted strings, and bracket-enclosed strings.
+struct LogTokenizer<'a> {
+    input: &'a str,
+    pos: usize,
+}
+
+impl<'a> LogTokenizer<'a> {
+    fn new(input: &'a str) -> Self {
+        LogTokenizer { input, pos: 0 }
+    }
+}
+
+impl<'a> Iterator for LogTokenizer<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let bytes = self.input.as_bytes();
+        let len = bytes.len();
+
+        // Skip whitespace
+        while self.pos < len && bytes[self.pos].is_ascii_whitespace() {
+            self.pos += 1;
+        }
+
+        if self.pos >= len {
+            return None;
+        }
+
+        match bytes[self.pos] {
+            b'"' => {
+                // Double-quoted string: return full match including quotes
+                // (matches regex behavior where find_iter returns the full match)
+                let start = self.pos;
+                self.pos += 1;
+                while self.pos < len && bytes[self.pos] != b'"' {
+                    self.pos += 1;
+                }
+                if self.pos < len { self.pos += 1; } // skip closing quote
+                Some(&self.input[start..self.pos])
+            }
+            b'\'' => {
+                // Single-quoted string: return full match including quotes
+                let start = self.pos;
+                self.pos += 1;
+                while self.pos < len && bytes[self.pos] != b'\'' {
+                    self.pos += 1;
+                }
+                if self.pos < len { self.pos += 1; }
+                Some(&self.input[start..self.pos])
+            }
+            b'[' => {
+                // Bracket-enclosed: return full match including brackets
+                let start = self.pos;
+                self.pos += 1;
+                while self.pos < len && bytes[self.pos] != b']' {
+                    self.pos += 1;
+                }
+                if self.pos < len { self.pos += 1; }
+                Some(&self.input[start..self.pos])
+            }
+            _ => {
+                // Unquoted token: scan until whitespace, quote, or bracket
+                let start = self.pos;
+                while self.pos < len {
+                    match bytes[self.pos] {
+                        b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'[' | b']' => break,
+                        _ => self.pos += 1,
+                    }
+                }
+                Some(&self.input[start..self.pos])
+            }
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum DataType {
     DateTime,
@@ -725,12 +802,10 @@ impl<R: io::Read> RecordRead for Reader<R> {
             let mut record_vars = common::types::Variables::with_capacity(field_count);
             let mut value_cnt: usize = 0;
 
-            for (i, m) in SPLIT_READER_LINE_REGEX.find_iter(&self.buf).enumerate() {
+            for (i, s) in LogTokenizer::new(&self.buf).enumerate() {
                 if i >= field_count {
                     break;
                 }
-
-                let s = m.as_str();
                 let datatype = &datatypes[i];
 
                 match datatype {

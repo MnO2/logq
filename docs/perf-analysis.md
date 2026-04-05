@@ -277,16 +277,58 @@
 | map_keys | 72.6 ns | 55.1 ns | **-24%** |
 | regexp_like | 2.82 us | 2.90 us | ~0% |
 
+## Round 7 Optimizations (2026-04-05)
+
+27. **Hand-written log tokenizer**: Replaced regex-based `SPLIT_READER_LINE_REGEX.find_iter()` with a hand-written `LogTokenizer` iterator. The tokenizer handles the same 4 token types (unquoted, double-quoted, single-quoted, bracket-enclosed) using byte-level scanning instead of regex NFA/DFA execution. ~24-29% faster for all structured log formats.
+
+## Cumulative Results (Original Baseline → Current, Round 7)
+
+| Benchmark | Baseline | Current | Improvement |
+|---|---|---|---|
+| **Parser** | | | |
+| L1_trivial | 2.55 us | 820 ns | **-68%** |
+| L2_where | 8.09 us | 2.04 us | **-75%** |
+| L3_group_order_limit | 9.40 us | 2.54 us | **-73%** |
+| L4_having_like | 16.12 us | 4.18 us | **-74%** |
+| L5_casewhen_join | 18.52 us | 5.00 us | **-73%** |
+| L6_in_union | 8.70 us | 1.98 us | **-77%** |
+| **Execution (synthetic)** | | | |
+| execution_map/1K | 754 us | 258 us | **-66%** |
+| execution_map/10K | 7.71 ms | 2.55 ms | **-67%** |
+| execution_map/100K | 75.4 ms | 25.8 ms | **-66%** |
+| execution_filter/1K | 526 us | 157 us | **-70%** |
+| execution_filter/10K | 5.28 ms | 1.62 ms | **-69%** |
+| execution_filter/100K | 52.8 ms | 15.9 ms | **-70%** |
+| execution_limit/1K | 132 us | 120 us | **-9%** |
+| execution_limit/10K | 1.32 ms | 1.19 ms | **-10%** |
+| execution_limit/100K | 13.3 ms | 12.1 ms | **-9%** |
+| **Execution (e2e)** | | | |
+| E1_scan_limit | 121 us | 61 us | **-50%** |
+| E2_groupby_count | 6.79 ms | 3.05 ms | **-55%** |
+| E3_filter_orderby | 8.58 us | 2.29 us | **-73%** |
+| **Datasource** | | | |
+| ELB | 2.89 ms | 1.63 ms | **-44%** |
+| ALB | 4.52 ms | 2.84 ms | **-37%** |
+| S3 | 3.12 ms | 1.80 ms | **-42%** |
+| Squid | 1.29 ms | 746 us | **-42%** |
+| JSONL | 819 us | 780 us | **-5%** |
+| **UDF** | | | |
+| upper | 40.2 ns | 30.2 ns | **-25%** |
+| round | 25.9 ns | 19.5 ns | **-25%** |
+| date_part | 32.1 ns | 26.4 ns | **-18%** |
+| array_contains | 33.2 ns | 21.6 ns | **-35%** |
+| map_keys | 72.6 ns | 54.9 ns | **-24%** |
+| regexp_like | 2.82 us | 2.88 us | ~0% |
+
 ## Summary
 
-- **Parser: 71-77% faster** — VerboseError→Error, first-char keyword dispatch
-- **Execution map: 65-66% faster** — merge elimination + Value boxing + move-based projections
-- **Execution filter: 70% faster** — merge elimination + Value boxing + pre-allocation
-- **Execution limit: 8-10% faster** — Value boxing + general overhead reduction
-- **E1 scan_limit e2e: 42% faster** — SELECT * passthrough + parser speedup
-- **E2 groupby e2e: 46% faster** — merge + capacity + function registry + regex-free parsing
-- **E3 filter e2e: 74% faster** — VerboseError→Error + optimized evaluation
-- **Datasource ELB/ALB: 21% faster** — regex-free host/HTTP parsing + format resolution + Value boxing
-- **Datasource S3/Squid: 15-17% faster** — format resolution + pre-allocation + buffer reuse
-- **UDFs: 18-34% faster** — pre-lowercased function names
+- **Parser: 68-77% faster** — VerboseError→Error, first-char keyword dispatch
+- **Execution map: 66-67% faster** — merge elimination + Value boxing + move-based projections
+- **Execution filter: 69-70% faster** — merge elimination + Value boxing + pre-allocation
+- **Execution limit: 9-10% faster** — Value boxing + general overhead reduction
+- **E1 scan_limit e2e: 50% faster** — SELECT * passthrough + hand-written tokenizer
+- **E2 groupby e2e: 55% faster** — all optimizations combined
+- **E3 filter e2e: 73% faster** — VerboseError→Error + optimized evaluation
+- **Datasource: 37-44% faster** — hand-written tokenizer + regex-free host/HTTP parsing
+- **UDFs: 18-35% faster** — pre-lowercased function names
 - No new dependencies, all 488 tests pass, all changes backwards-compatible
