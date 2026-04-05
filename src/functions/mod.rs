@@ -8,6 +8,7 @@ pub mod map;
 pub mod regexp;
 pub mod registry;
 pub mod string;
+pub mod type_conversion;
 pub mod url;
 
 pub use registry::{FunctionRegistry, FunctionDef, Arity, NullHandling, RegistryError};
@@ -24,5 +25,6 @@ pub fn register_all() -> Result<FunctionRegistry, RegistryError> {
     regexp::register(&mut registry)?;
     json::register(&mut registry)?;
     map::register(&mut registry)?;
+    type_conversion::register(&mut registry)?;
     Ok(registry)
 }
