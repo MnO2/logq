@@ -15,6 +15,78 @@ use std::path::Path;
 use std::result;
 use std::str::FromStr;
 
+/// Fast UTC ISO 8601 timestamp parser for the common AWS log format.
+/// Handles timestamps like "2019-06-07T18:45:33.559871Z".
+/// Falls back to chrono::DateTime::parse_from_rfc3339 for other formats.
+fn parse_utc_timestamp(s: &str) -> result::Result<chrono::DateTime<chrono::FixedOffset>, chrono::ParseError> {
+    let b = s.as_bytes();
+    // Fast path: YYYY-MM-DDTHH:MM:SS[.fraction]Z format
+    if b.len() >= 20 && b[b.len() - 1] == b'Z' && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' {
+        let year = parse_4digit(b, 0);
+        let month = parse_2digit(b, 5);
+        let day = parse_2digit(b, 8);
+        let hour = parse_2digit(b, 11);
+        let min = parse_2digit(b, 14);
+        let sec = parse_2digit(b, 17);
+
+        if let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(s_val)) =
+            (year, month, day, hour, min, sec)
+        {
+            let nanos = if b.len() > 20 && b[19] == b'.' {
+                // Parse fractional seconds
+                let frac_str = &s[20..b.len() - 1]; // between '.' and 'Z'
+                let mut nanos: u32 = 0;
+                let mut multiplier = 100_000_000u32;
+                for &ch in frac_str.as_bytes().iter().take(9) {
+                    if ch >= b'0' && ch <= b'9' {
+                        nanos += (ch - b'0') as u32 * multiplier;
+                        multiplier /= 10;
+                    } else {
+                        return chrono::DateTime::parse_from_rfc3339(s);
+                    }
+                }
+                nanos
+            } else {
+                0
+            };
+
+            use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+            if let Some(date) = NaiveDate::from_ymd_opt(y, mo, d) {
+                if let Some(time) = NaiveTime::from_hms_nano_opt(h, mi, s_val, nanos) {
+                    let naive_dt = NaiveDateTime::new(date, time);
+                    let utc_offset = FixedOffset::east_opt(0).unwrap();
+                    return Ok(utc_offset.from_utc_datetime(&naive_dt));
+                }
+            }
+        }
+    }
+    chrono::DateTime::parse_from_rfc3339(s)
+}
+
+#[inline(always)]
+fn parse_2digit(b: &[u8], pos: usize) -> Option<u32> {
+    let d1 = b[pos].wrapping_sub(b'0');
+    let d2 = b[pos + 1].wrapping_sub(b'0');
+    if d1 <= 9 && d2 <= 9 {
+        Some(d1 as u32 * 10 + d2 as u32)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+fn parse_4digit(b: &[u8], pos: usize) -> Option<i32> {
+    let d1 = b[pos].wrapping_sub(b'0');
+    let d2 = b[pos + 1].wrapping_sub(b'0');
+    let d3 = b[pos + 2].wrapping_sub(b'0');
+    let d4 = b[pos + 3].wrapping_sub(b'0');
+    if d1 <= 9 && d2 <= 9 && d3 <= 9 && d4 <= 9 {
+        Some(d1 as i32 * 1000 + d2 as i32 * 100 + d3 as i32 * 10 + d4 as i32)
+    } else {
+        None
+    }
+}
+
 /// Hand-written tokenizer for log line parsing.
 /// Splits log lines into tokens, handling unquoted tokens, double-quoted strings,
 /// single-quoted strings, and bracket-enclosed strings.
@@ -820,7 +892,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
 
                 match datatype {
                     DataType::DateTime => {
-                        let dt = chrono::DateTime::parse_from_rfc3339(s)?;
+                        let dt = parse_utc_timestamp(s)?;
                         record_vars.insert(field_names[i].clone(), Value::DateTime(Box::new(dt)));
                     }
                     DataType::String => {
