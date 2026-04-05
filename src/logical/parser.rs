@@ -516,48 +516,43 @@ fn check_contains_group_as_var(named_list: &[types::Named], group_as_var: &Strin
     false
 }
 
-fn check_env_ref(table_name: &String, table_reference: &TableReference) -> ParseResult<()> {
-    match &table_reference.path_expr.path_segments[0] {
+fn check_env_ref(data_sources: &common::DataSourceRegistry, table_reference: &TableReference) -> ParseResult<()> {
+    let path_expr = &table_reference.path_expr;
+    if path_expr.path_segments.is_empty() {
+        return Err(ParseError::FromClausePathInvalidTableReference);
+    }
+
+    match &path_expr.path_segments[0] {
         PathSegment::AttrName(s) => {
-            if !s.eq(table_name) {
-                return Err(ParseError::FromClausePathInvalidTableReference);
+            if !data_sources.contains_key(s) {
+                let mut available: Vec<_> = data_sources.keys().cloned().collect();
+                available.sort();
+                return Err(ParseError::UnknownTable(s.clone(), available.join(", ")));
             }
         }
         _ => return Err(ParseError::FromClausePathInvalidTableReference),
-    }
-    let path_expr = &table_reference.path_expr;
-
-    if path_expr.path_segments.is_empty() {
-        return Err(ParseError::FromClausePathInvalidTableReference);
     }
 
     if path_expr.path_segments.len() > 1 && table_reference.as_clause.is_none() {
         return Err(ParseError::FromClauseMissingAsForPathExpr);
     }
-
     Ok(())
 }
 
-fn check_env(table_name: &String, from_clause: &FromClause) -> ParseResult<()> {
+fn check_env(data_sources: &common::DataSourceRegistry, from_clause: &FromClause) -> ParseResult<()> {
     let refs = from_clause.collect_table_references();
     for table_reference in refs {
-        check_env_ref(table_name, table_reference)?;
+        check_env_ref(data_sources, table_reference)?;
     }
     Ok(())
 }
 
-fn to_bindings_for_ref(table_name: &String, table_reference: &TableReference) -> Vec<common::Binding> {
+fn to_bindings_for_ref(data_sources: &common::DataSourceRegistry, table_reference: &TableReference) -> Vec<common::Binding> {
     let path_expr = match &table_reference.path_expr.path_segments[0] {
         PathSegment::AttrName(s) => {
-            if s.eq(table_name) {
+            if data_sources.contains_key(s) {
                 PathExpr::new(
-                    table_reference
-                        .path_expr
-                        .path_segments
-                        .iter()
-                        .skip(1)
-                        .cloned()
-                        .collect(),
+                    table_reference.path_expr.path_segments.iter().skip(1).cloned().collect(),
                 )
             } else {
                 table_reference.path_expr.clone()
@@ -577,10 +572,10 @@ fn to_bindings_for_ref(table_name: &String, table_reference: &TableReference) ->
     }
 }
 
-fn to_bindings(table_name: &String, table_references: &Vec<TableReference>) -> Vec<common::Binding> {
+fn to_bindings(data_sources: &common::DataSourceRegistry, table_references: &Vec<TableReference>) -> Vec<common::Binding> {
     table_references
         .iter()
-        .flat_map(|table_reference| to_bindings_for_ref(table_name, table_reference))
+        .flat_map(|table_reference| to_bindings_for_ref(data_sources, table_reference))
         .collect()
 }
 
