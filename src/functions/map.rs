@@ -101,7 +101,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         _ => return Err(ExpressionError::InvalidArguments),
                     }
                 }
-                Ok(Value::Object(map))
+                Ok(Value::Object(Box::new(map)))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -128,7 +128,7 @@ mod tests {
         for (k, v) in pairs {
             map.insert(k.to_string(), v.clone());
         }
-        Value::Object(map)
+        Value::Object(Box::new(map))
     }
 
     #[test]

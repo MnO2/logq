@@ -639,7 +639,7 @@ fn json_to_data_model(parsed: &JsonValue) -> Value {
         json::JsonValue::Object(o) => {
             let t: LinkedHashMap<String, Value> =
                 o.iter().map(|(k, v)| (k.to_string(), json_to_data_model(v))).collect();
-            Value::Object(t)
+            Value::Object(Box::new(t))
         }
         json::JsonValue::Array(a) => {
             let a: Vec<Value> = a.iter().map(|v| json_to_data_model(v)).collect();
@@ -736,7 +736,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
                 match datatype {
                     DataType::DateTime => {
                         let dt = chrono::DateTime::parse_from_rfc3339(s)?;
-                        record_vars.insert(field_names[i].clone(), Value::DateTime(dt));
+                        record_vars.insert(field_names[i].clone(), Value::DateTime(Box::new(dt)));
                     }
                     DataType::String => {
                         record_vars.insert(field_names[i].clone(), Value::String(s.to_string()));
@@ -754,13 +754,13 @@ impl<R: io::Read> RecordRead for Reader<R> {
                             record_vars.insert(field_names[i].clone(), Value::Null);
                         } else {
                             let host = common::types::parse_host(s)?;
-                            record_vars.insert(field_names[i].clone(), Value::Host(host));
+                            record_vars.insert(field_names[i].clone(), Value::Host(Box::new(host)));
                         }
                     }
                     DataType::HttpRequest => {
                         let s = s.trim_matches('"');
                         let request = common::types::parse_http_request(s)?;
-                        record_vars.insert(field_names[i].clone(), Value::HttpRequest(request));
+                        record_vars.insert(field_names[i].clone(), Value::HttpRequest(Box::new(request)));
                     }
                 }
 
@@ -781,7 +781,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
 
             match data_model {
                 Value::Object(o) => {
-                    let record = Record::new_with_variables(o);
+                    let record = Record::new_with_variables(*o);
                     Ok(Some(record))
                 }
                 _ => {
@@ -809,10 +809,10 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
-            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:33.559871Z").unwrap()),
+            Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:33.559871Z").unwrap())),
             Value::String("elb1".to_string()),
-            Value::Host(common::types::parse_host("78.168.134.92:4586").unwrap()),
-            Value::Host(common::types::parse_host("10.0.0.215:80").unwrap()),
+            Value::Host(Box::new(common::types::parse_host("78.168.134.92:4586").unwrap())),
+            Value::Host(Box::new(common::types::parse_host("10.0.0.215:80").unwrap())),
             Value::Float(OrderedFloat::from(0.000_036)),
             Value::Float(OrderedFloat::from(0.001_035)),
             Value::Float(OrderedFloat::from(0.000_025)),
@@ -820,7 +820,7 @@ mod tests {
             Value::String("200".to_string()),
             Value::Int(0),
             Value::Int(42355),
-            Value::HttpRequest(common::types::parse_http_request("GET https://example.com:443/ HTTP/1.1").unwrap()),
+            Value::HttpRequest(Box::new(common::types::parse_http_request("GET https://example.com:443/ HTTP/1.1").unwrap())),
             Value::String("\"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36\"".to_string()),
             Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
             Value::String("TLSv1.2".to_string()),
@@ -836,10 +836,10 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
-            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap()),
+            Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap())),
             Value::String("elb1".to_string()),
-            Value::Host(common::types::parse_host("176.219.166.226:48384").unwrap()),
-            Value::Host(common::types::parse_host("10.0.2.143:80").unwrap()),
+            Value::Host(Box::new(common::types::parse_host("176.219.166.226:48384").unwrap())),
+            Value::Host(Box::new(common::types::parse_host("10.0.2.143:80").unwrap())),
             Value::Float(OrderedFloat::from(0.000_023)),
             Value::Float(OrderedFloat::from(0.000_348)),
             Value::Float(OrderedFloat::from(0.000_025)),
@@ -847,7 +847,7 @@ mod tests {
             Value::String("200".to_string()),
             Value::Int(0),
             Value::Int(41690),
-            Value::HttpRequest(common::types::parse_http_request("GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1").unwrap()),
+            Value::HttpRequest(Box::new(common::types::parse_http_request("GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1").unwrap())),
             Value::String("\"Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]\"".to_string()),
             Value::String("-".to_string()),
             Value::String("-".to_string()),
@@ -867,10 +867,10 @@ mod tests {
         let fields = ApplicationLoadBalancerLogField::field_names();
         let data = vec![
             Value::String("http".to_string()),
-            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2018-07-02T22:23:00.186641Z").unwrap()),
+            Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2018-07-02T22:23:00.186641Z").unwrap())),
             Value::String("app/my-loadbalancer/50dc6c495c0c9188".to_string()),
-            Value::Host(common::types::parse_host("192.168.131.39:2817").unwrap()),
-            Value::Host(common::types::parse_host("10.0.0.1:80").unwrap()),
+            Value::Host(Box::new(common::types::parse_host("192.168.131.39:2817").unwrap())),
+            Value::Host(Box::new(common::types::parse_host("10.0.0.1:80").unwrap())),
             Value::Float(OrderedFloat::from(0.000)),
             Value::Float(OrderedFloat::from(0.001)),
             Value::Float(OrderedFloat::from(0.000)),
@@ -878,7 +878,7 @@ mod tests {
             Value::String("200".to_string()),
             Value::Int(34),
             Value::Int(366),
-            Value::HttpRequest(common::types::parse_http_request("GET http://www.example.com:80/ HTTP/1.1").unwrap()),
+            Value::HttpRequest(Box::new(common::types::parse_http_request("GET http://www.example.com:80/ HTTP/1.1").unwrap())),
             Value::String("\"curl/7.46.0\"".to_string()),
             Value::String("-".to_string()),
             Value::String("-".to_string()),

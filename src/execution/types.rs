@@ -1366,7 +1366,7 @@ mod tests {
     #[test]
     fn test_evaluate_host_functions() {
         let registry = test_registry();
-        let v = Value::Host(common::types::parse_host("192.168.131.39:2817").unwrap());
+        let v = Value::Host(Box::new(common::types::parse_host("192.168.131.39:2817").unwrap()));
         let name = registry.call("host_name", &vec![v.clone()]).unwrap();
         assert_eq!(name, Value::String("192.168.131.39".to_string()));
         let port = registry.call("host_port", &vec![v]).unwrap();
@@ -1376,12 +1376,12 @@ mod tests {
     #[test]
     fn test_evaluate_url_functions() {
         let registry = test_registry();
-        let v = Value::HttpRequest(
+        let v = Value::HttpRequest(Box::new(
             common::types::parse_http_request(
                 "GET http://example.com:8000/users/123?mode=json&after=&iteration=1 HTTP/1.1",
             )
             .unwrap(),
-        );
+        ));
         let name = registry.call("url_host", &vec![v.clone()]).unwrap();
         assert_eq!(name, Value::String("example.com".to_string()));
         let port = registry.call("url_port", &vec![v.clone()]).unwrap();
@@ -1417,16 +1417,16 @@ mod tests {
         let v = registry.call("Divide", &vec![Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(1));
 
-        let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
-        let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:35.000000Z").unwrap());
+        let dt = Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap()));
+        let expected_dt = Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:35.000000Z").unwrap()));
         let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 seconds".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
-        let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:00.000000Z").unwrap());
+        let expected_dt = Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:00.000000Z").unwrap()));
         let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 minutes".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
-        let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:00:00.000000Z").unwrap());
+        let expected_dt = Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:00:00.000000Z").unwrap()));
         let bucket_dt = registry.call("time_bucket", &vec![Value::String("1 hour".to_string()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
@@ -2010,7 +2010,7 @@ mod tests {
     #[test]
     fn test_date_part_all_units() {
         let registry = test_registry();
-        let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
+        let dt = Value::DateTime(Box::new(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap()));
         assert_eq!(
             registry.call("date_part", &vec![Value::String("second".to_string()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(37.0)))

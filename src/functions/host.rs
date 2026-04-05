@@ -44,10 +44,10 @@ mod tests {
     }
 
     fn make_host(hostname: &str, port: u16) -> Value {
-        Value::Host(Host {
+        Value::Host(Box::new(Host {
             hostname: hostname.to_string(),
             port,
-        })
+        }))
     }
 
     #[test]

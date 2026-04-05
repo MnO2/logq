@@ -177,11 +177,11 @@ mod tests {
 
     fn make_request(url_str: &str) -> Value {
         let url = Url::parse(url_str).unwrap();
-        Value::HttpRequest(HttpRequest {
+        Value::HttpRequest(Box::new(HttpRequest {
             http_method: "GET".to_string(),
             url,
             http_version: "HTTP/1.1".to_string(),
-        })
+        }))
     }
 
     #[test]

@@ -25,11 +25,11 @@ pub enum Value {
     Boolean(bool),
     String(String),
     Null,
-    DateTime(chrono::DateTime<chrono::offset::FixedOffset>),
-    HttpRequest(common::types::HttpRequest),
-    Host(common::types::Host),
+    DateTime(Box<chrono::DateTime<chrono::offset::FixedOffset>>),
+    HttpRequest(Box<common::types::HttpRequest>),
+    Host(Box<common::types::Host>),
     Missing,
-    Object(LinkedHashMap<String, Value>),
+    Object(Box<LinkedHashMap<String, Value>>),
     Array(Vec<Value>),
 }
 
@@ -515,7 +515,7 @@ mod tests {
         let mut obj = LinkedHashMap::default();
         obj.insert("x".to_string(), Value::Int(1));
         obj.insert("y".to_string(), Value::Int(2));
-        variables.insert("a".to_string(), Value::Object(obj));
+        variables.insert("a".to_string(), Value::Object(Box::new(obj)));
         let path = ast::PathExpr::new(vec![
             ast::PathSegment::AttrName("a".to_string()),
             ast::PathSegment::WildcardAttr,
@@ -551,7 +551,7 @@ mod tests {
         obj2.insert("b".to_string(), Value::Int(20));
         variables.insert(
             "a".to_string(),
-            Value::Array(vec![Value::Object(obj1), Value::Object(obj2)]),
+            Value::Array(vec![Value::Object(Box::new(obj1)), Value::Object(Box::new(obj2))]),
         );
         let path = ast::PathExpr::new(vec![
             ast::PathSegment::AttrName("a".to_string()),

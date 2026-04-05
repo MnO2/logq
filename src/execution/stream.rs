@@ -337,7 +337,7 @@ impl RecordStream for GroupByStream {
                     match &mut named_agg.aggregate {
                         Aggregate::GroupAs(ref mut inner, named) => {
                             let val = match named {
-                                Named::Expression(_expr, _) => Value::Object(record.to_variables().clone()),
+                                Named::Expression(_expr, _) => Value::Object(Box::new(record.to_variables().clone())),
                                 Named::Star => {
                                     unreachable!();
                                 }

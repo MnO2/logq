@@ -36,7 +36,7 @@ fn bench_udfs(c: &mut Criterion) {
     let fixed_dt = chrono::DateTime::parse_from_rfc3339("2024-06-15T10:30:00+00:00").unwrap();
     let args_datepart = vec![
         Value::String("month".to_string()),
-        Value::DateTime(fixed_dt),
+        Value::DateTime(Box::new(fixed_dt)),
     ];
     group.bench_function("date_part", |b| {
         b.iter(|| {
@@ -62,7 +62,7 @@ fn bench_udfs(c: &mut Criterion) {
     let mut map = LinkedHashMap::new();
     map.insert("a".to_string(), Value::Int(1));
     map.insert("b".to_string(), Value::Int(2));
-    let args_map = vec![Value::Object(map)];
+    let args_map = vec![Value::Object(Box::new(map))];
     group.bench_function("map_keys", |b| {
         b.iter(|| {
             let _ = black_box(registry.call("map_keys", black_box(&args_map)));

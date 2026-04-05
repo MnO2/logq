@@ -557,7 +557,7 @@ mod tests {
         obj.insert("a".to_string(), Value::Int(1));
         obj.insert("b".to_string(), Value::Int(2));
         assert_eq!(
-            r.call("cardinality", &[Value::Object(obj)]),
+            r.call("cardinality", &[Value::Object(Box::new(obj))]),
             Ok(Value::Int(2))
         );
     }
