@@ -6,6 +6,7 @@ pub mod batch_project;
 pub mod batch_scan;
 pub mod batch_tokenizer;
 pub mod datasource;
+pub mod field_analysis;
 pub mod field_parser;
 pub mod log_schema;
 pub mod stream;
