@@ -18,7 +18,7 @@ use std::str::FromStr;
 /// Fast UTC ISO 8601 timestamp parser for the common AWS log format.
 /// Handles timestamps like "2019-06-07T18:45:33.559871Z".
 /// Falls back to chrono::DateTime::parse_from_rfc3339 for other formats.
-fn parse_utc_timestamp(s: &str) -> result::Result<chrono::DateTime<chrono::FixedOffset>, chrono::ParseError> {
+pub(crate) fn parse_utc_timestamp(s: &str) -> result::Result<chrono::DateTime<chrono::FixedOffset>, chrono::ParseError> {
     let b = s.as_bytes();
     // Fast path: YYYY-MM-DDTHH:MM:SS[.fraction]Z format
     if b.len() >= 20 && b[b.len() - 1] == b'Z' && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' {
