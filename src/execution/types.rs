@@ -2,6 +2,11 @@ use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{CrossJoinStream, DistinctStream, ExceptStream, FilterStream, GroupByStream, InMemoryStream, IntersectStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream, UnionStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
+use crate::execution::batch::{BatchToRowAdapter, BatchStream};
+use crate::execution::batch_filter::BatchFilterOperator;
+use crate::execution::batch_limit::BatchLimitOperator;
+use crate::execution::batch_scan::BatchScanOperator;
+use crate::execution::log_schema::LogSchema;
 use crate::execution::stream::ProjectionStream;
 use crate::functions::FunctionRegistry;
 use crate::syntax::ast::{CastType, PathExpr, PathSegment};
@@ -576,7 +581,74 @@ pub enum Node {
 }
 
 impl Node {
+    /// Try to build a batch pipeline for this node subtree.
+    /// Returns None if this node pattern isn't supported for batch execution.
+    fn try_get_batch(
+        &self,
+        variables: &Variables,
+        registry: &Arc<FunctionRegistry>,
+    ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
+        match self {
+            Node::DataSource(data_source, bindings) => {
+                if !bindings.is_empty() {
+                    return None; // bindings need row-based ProjectionStream
+                }
+                match data_source {
+                    DataSource::File(path, file_format, _) => {
+                        if file_format == "jsonl" {
+                            return None; // JSONL has no fixed schema
+                        }
+                        let schema = LogSchema::from_format(file_format);
+                        let all_fields: Vec<usize> = (0..schema.field_count()).collect();
+                        match std::fs::File::open(path) {
+                            Ok(file) => {
+                                let reader: Box<dyn std::io::BufRead> =
+                                    Box::new(std::io::BufReader::new(file));
+                                let scan = BatchScanOperator::new(reader, schema, all_fields);
+                                Some(Ok(Box::new(scan) as Box<dyn BatchStream>))
+                            }
+                            Err(_) => Some(Err(CreateStreamError::Io)),
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            Node::Filter(source, formula) => {
+                match source.try_get_batch(variables, registry) {
+                    Some(Ok(batch_stream)) => {
+                        let filter = BatchFilterOperator::new(
+                            batch_stream,
+                            *formula.clone(),
+                            variables.clone(),
+                            registry.clone(),
+                        );
+                        Some(Ok(Box::new(filter) as Box<dyn BatchStream>))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    None => None,
+                }
+            }
+            Node::Limit(count, source) => {
+                match source.try_get_batch(variables, registry) {
+                    Some(Ok(batch_stream)) => {
+                        let limit = BatchLimitOperator::new(batch_stream, *count);
+                        Some(Ok(Box::new(limit) as Box<dyn BatchStream>))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    None => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
+        // Try batch pipeline first for supported node patterns
+        if let Some(batch_result) = self.try_get_batch(&variables, &registry) {
+            let batch_stream = batch_result?;
+            return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
+        }
+
         match self {
             Node::Filter(source, formula) => {
                 let record_stream = source.get(variables.clone(), registry.clone())?;
