@@ -200,4 +200,21 @@ mod tests {
         let bm2 = Bitmap::all_set(64);
         assert!(bm2.any());
     }
+
+    #[test]
+    fn test_bitmap_ops_at_batch_size() {
+        let mut a = Bitmap::all_unset(1024);
+        let mut b = Bitmap::all_unset(1024);
+        for i in (0..1024).step_by(2) { a.set(i); }  // evens
+        for i in (0..1024).step_by(3) { b.set(i); }  // multiples of 3
+
+        let and_result = a.and(&b);
+        // evens AND multiples-of-3 = multiples of 6
+        let expected_count = (0..1024).filter(|i| i % 6 == 0).count();
+        assert_eq!(and_result.count_ones(), expected_count);
+
+        let or_result = a.or(&b);
+        let expected_or = (0..1024).filter(|i| i % 2 == 0 || i % 3 == 0).count();
+        assert_eq!(or_result.count_ones(), expected_or);
+    }
 }
