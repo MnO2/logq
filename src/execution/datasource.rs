@@ -806,7 +806,7 @@ fn json_to_data_model(parsed: &JsonValue) -> Value {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum LogFormat {
+pub(crate) enum LogFormat {
     Elb,
     Alb,
     S3,
@@ -815,7 +815,7 @@ enum LogFormat {
 }
 
 impl LogFormat {
-    fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         match s {
             "elb" => LogFormat::Elb,
             "alb" => LogFormat::Alb,
@@ -826,7 +826,7 @@ impl LogFormat {
         }
     }
 
-    fn field_info(self) -> (&'static Vec<String>, &'static Vec<DataType>, usize) {
+    pub(crate) fn field_info(self) -> (&'static Vec<String>, &'static Vec<DataType>, usize) {
         match self {
             LogFormat::Elb => (ClassicLoadBalancerLogField::field_names(), &*AWS_ELB_DATATYPES, ClassicLoadBalancerLogField::len()),
             LogFormat::Alb => (ApplicationLoadBalancerLogField::field_names(), &*AWS_ALB_DATATYPES, ApplicationLoadBalancerLogField::len()),
