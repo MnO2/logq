@@ -581,12 +581,41 @@ pub enum Node {
 }
 
 impl Node {
+    /// Walk down the plan tree to find the datasource format and path.
+    fn find_datasource_format(&self) -> Option<(String, std::path::PathBuf)> {
+        match self {
+            Node::DataSource(DataSource::File(path, format, _), _) => {
+                Some((format.clone(), path.clone()))
+            }
+            Node::Filter(source, _)
+            | Node::Map(_, source)
+            | Node::Limit(_, source)
+            | Node::Distinct(source)
+            | Node::OrderBy(_, _, source) => source.find_datasource_format(),
+            Node::GroupBy(_, _, source) => source.find_datasource_format(),
+            _ => None,
+        }
+    }
+
+    /// Compute the set of field indices needed by this plan tree.
+    /// Returns an empty vec for JSONL or when the format is unknown.
+    fn compute_required_fields_for_batch(&self) -> Vec<usize> {
+        if let Some((format, _)) = self.find_datasource_format() {
+            if format != "jsonl" {
+                let schema = LogSchema::from_format(&format);
+                return crate::execution::field_analysis::extract_required_fields(self, &schema);
+            }
+        }
+        vec![]
+    }
+
     /// Try to build a batch pipeline for this node subtree.
     /// Returns None if this node pattern isn't supported for batch execution.
     fn try_get_batch(
         &self,
         variables: &Variables,
         registry: &Arc<FunctionRegistry>,
+        required_fields: &[usize],
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
         match self {
             Node::DataSource(data_source, bindings) => {
@@ -599,12 +628,16 @@ impl Node {
                             return None; // JSONL has no fixed schema
                         }
                         let schema = LogSchema::from_format(file_format);
-                        let all_fields: Vec<usize> = (0..schema.field_count()).collect();
+                        let fields = if required_fields.is_empty() {
+                            (0..schema.field_count()).collect()
+                        } else {
+                            required_fields.to_vec()
+                        };
                         match std::fs::File::open(path) {
                             Ok(file) => {
                                 let reader: Box<dyn std::io::BufRead> =
                                     Box::new(std::io::BufReader::new(file));
-                                let scan = BatchScanOperator::new(reader, schema, all_fields);
+                                let scan = BatchScanOperator::new(reader, schema, fields);
                                 Some(Ok(Box::new(scan) as Box<dyn BatchStream>))
                             }
                             Err(_) => Some(Err(CreateStreamError::Io)),
@@ -614,7 +647,7 @@ impl Node {
                 }
             }
             Node::Filter(source, formula) => {
-                match source.try_get_batch(variables, registry) {
+                match source.try_get_batch(variables, registry, required_fields) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
                             batch_stream,
@@ -629,7 +662,7 @@ impl Node {
                 }
             }
             Node::Limit(count, source) => {
-                match source.try_get_batch(variables, registry) {
+                match source.try_get_batch(variables, registry, required_fields) {
                     Some(Ok(batch_stream)) => {
                         let limit = BatchLimitOperator::new(batch_stream, *count);
                         Some(Ok(Box::new(limit) as Box<dyn BatchStream>))
@@ -644,7 +677,8 @@ impl Node {
 
     pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
         // Try batch pipeline first for supported node patterns
-        if let Some(batch_result) = self.try_get_batch(&variables, &registry) {
+        let required = self.compute_required_fields_for_batch();
+        if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required) {
             let batch_stream = batch_result?;
             return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
         }
