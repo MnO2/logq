@@ -602,4 +602,33 @@ mod tests {
         }
         assert!(adapter.next_batch().unwrap().is_none());
     }
+
+    #[test]
+    fn test_adapter_round_trip() {
+        use crate::execution::stream::{RecordStream, InMemoryStream};
+        use std::collections::VecDeque;
+        use crate::common::types::Value;
+
+        let records: Vec<Record> = (0..3).map(|i| {
+            let mut v = LinkedHashMap::new();
+            v.insert("id".to_string(), Value::Int(i));
+            v.insert("name".to_string(), Value::String(format!("item_{}", i)));
+            Record::new_with_variables(v)
+        }).collect();
+
+        let source = InMemoryStream::new(VecDeque::from(records));
+        let schema = BatchSchema {
+            names: vec!["id".to_string(), "name".to_string()],
+            types: vec![ColumnType::Int32, ColumnType::Utf8],
+        };
+        let batch_stream = RowToBatchAdapter::new(Box::new(source), schema);
+        let mut row_stream = BatchToRowAdapter::new(Box::new(batch_stream));
+
+        for i in 0..3 {
+            let record = row_stream.next().unwrap().unwrap();
+            assert_eq!(record.to_variables()["id"], Value::Int(i));
+            assert_eq!(record.to_variables()["name"], Value::String(format!("item_{}", i)));
+        }
+        assert!(row_stream.next().unwrap().is_none());
+    }
 }
