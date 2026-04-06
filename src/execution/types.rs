@@ -647,13 +647,48 @@ impl Node {
                 }
             }
             Node::Filter(source, formula) => {
+                // Try predicate pushdown into DataSource
+                if let Node::DataSource(ds, bindings) = &**source {
+                    if bindings.is_empty() {
+                        if let DataSource::File(path, file_format, _) = ds {
+                            if file_format != "jsonl" {
+                                let schema = LogSchema::from_format(file_format);
+                                let filter_fields = crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
+                                // Union filter fields with required_fields from parent
+                                let mut all_fields = required_fields.to_vec();
+                                for &fi in &filter_fields {
+                                    if !all_fields.contains(&fi) {
+                                        all_fields.push(fi);
+                                    }
+                                }
+                                all_fields.sort();
+                                all_fields.dedup();
+                                if all_fields.is_empty() {
+                                    all_fields = (0..schema.field_count()).collect();
+                                }
+
+                                match std::fs::File::open(path) {
+                                    Ok(file) => {
+                                        let reader: Box<dyn std::io::BufRead> =
+                                            Box::new(std::io::BufReader::new(file));
+                                        let scan = BatchScanOperator::new(
+                                            reader, schema, all_fields,
+                                            filter_fields,
+                                            Some((*formula.clone(), variables.clone(), registry.clone())),
+                                        );
+                                        return Some(Ok(Box::new(scan) as Box<dyn BatchStream>));
+                                    }
+                                    Err(_) => return Some(Err(CreateStreamError::Io)),
+                                }
+                            }
+                        }
+                    }
+                }
+                // Fallback: wrap with BatchFilterOperator for non-DataSource children
                 match source.try_get_batch(variables, registry, required_fields) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
-                            batch_stream,
-                            *formula.clone(),
-                            variables.clone(),
-                            registry.clone(),
+                            batch_stream, *formula.clone(), variables.clone(), registry.clone(),
                         );
                         Some(Ok(Box::new(filter) as Box<dyn BatchStream>))
                     }
@@ -2334,5 +2369,48 @@ mod tests {
             CastType::Varchar,
         );
         assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("2.5".to_string())));
+    }
+
+    #[test]
+    fn test_predicate_pushdown_produces_correct_results() {
+        use crate::syntax::ast::{PathExpr, PathSegment};
+
+        let path = std::path::PathBuf::from("data/AWSELB.log");
+        if !path.exists() {
+            return;
+        }
+        // Build: SELECT elb_status_code FROM elb WHERE elb_status_code = '200'
+        let data_source = Node::DataSource(
+            DataSource::File(path, "elb".to_string(), "it".to_string()),
+            vec![],
+        );
+        let formula = Box::new(Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())]))),
+            Box::new(Expression::Constant(Value::String("200".to_string()))),
+        ));
+        let filter = Node::Filter(Box::new(data_source), formula);
+        let select = Node::Map(
+            vec![Named::Expression(
+                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())])),
+                Some("elb_status_code".to_string()),
+            )],
+            Box::new(filter),
+        );
+
+        let vars = Variables::default();
+        let registry = test_registry();
+        let mut stream = select.get(vars, registry).expect("should create stream");
+        let mut count = 0;
+        while let Some(record) = stream.next().unwrap() {
+            let tuples = record.to_tuples();
+            for (key, value) in &tuples {
+                if key == "elb_status_code" {
+                    assert_eq!(value, &Value::String("200".to_string()), "all filtered rows should have status 200");
+                }
+            }
+            count += 1;
+        }
+        assert!(count > 0, "should have at least one matching record");
     }
 }
