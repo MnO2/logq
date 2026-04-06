@@ -8,20 +8,20 @@ Platform: macOS (Darwin 25.4.0), Apple Silicon
 
 | Benchmark | Phase 0 Baseline | Phase 2-3 (regression) | Phase 4 (this) | Speedup vs Phase 0 | Speedup vs Phase 2-3 |
 |-----------|-----------------|----------------------|----------------|--------------------|--------------------|
-| profiling/scan_only | 1.113 ms | 1.298 ms | 1.270 ms | 0.88x | 1.02x |
-| profiling/scan_filter | 3.538 ms | 3.969 ms | 1.271 ms | **2.78x** | **3.12x** |
-| profiling/scan_filter_groupby | 4.019 ms | 4.529 ms | 0.744 ms | **5.40x** | **6.09x** |
+| profiling/scan_only | 1.113 ms | 1.298 ms | 1.089 ms | **1.02x** | 1.19x |
+| profiling/scan_filter | 3.538 ms | 3.969 ms | 1.295 ms | **2.73x** | **3.07x** |
+| profiling/scan_filter_groupby | 4.019 ms | 4.529 ms | 0.718 ms | **5.60x** | **6.32x** |
 
 ## Analysis
 
 ### scan_only (SELECT *)
-- Marginal change (0.88x vs baseline). SELECT * requests all fields, so selective parsing provides no benefit. The small difference is within measurement noise.
+- Slightly faster than Phase 0 baseline (1.02x). SELECT * with no filter skips the batch path entirely, avoiding the columnar round-trip overhead. The bare DataSource uses the direct row-based LogFileStream.
 
 ### scan_filter (WHERE clause)
-- **2.78x speedup** over Phase 0 baseline. The two-phase lazy parsing + predicate pushdown eliminates parsing of non-filter fields for filtered-out rows. SIMD batch predicate evaluation replaces row-at-a-time HashMap lookups.
+- **2.73x speedup** over Phase 0 baseline. The two-phase lazy parsing + predicate pushdown eliminates parsing of non-filter fields for filtered-out rows. SIMD batch predicate evaluation replaces row-at-a-time HashMap lookups.
 
 ### scan_filter_groupby (WHERE + GROUP BY + COUNT)
-- **5.40x speedup** over Phase 0 baseline, far exceeding the 2.4x target. The batch-native GroupBy eliminates the BatchToRowAdapter materialization overhead. Combined with selective parsing and two-phase lazy parsing, the full batch pipeline (DataSource → Filter → GroupBy → Map) runs entirely in columnar mode.
+- **5.60x speedup** over Phase 0 baseline, far exceeding the 2.4x target. The batch-native GroupBy eliminates the BatchToRowAdapter materialization overhead. Combined with selective parsing and two-phase lazy parsing, the full batch pipeline (DataSource → Filter → GroupBy → Map) runs entirely in columnar mode.
 
 ## Cost Breakdown (Phase 4)
 
@@ -57,5 +57,6 @@ The filtering cost has been reduced from 2.425 ms to effectively zero overhead a
 
 | Metric | Target | Actual |
 |--------|--------|--------|
-| scan_filter speedup | 2.4x | **2.78x** |
-| scan_filter_groupby speedup | 2.4x | **5.40x** |
+| scan_only regression | none | **none (1.02x faster)** |
+| scan_filter speedup | 2.4x | **2.73x** |
+| scan_filter_groupby speedup | 2.4x | **5.60x** |
