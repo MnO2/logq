@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod batch_scan;
 pub mod batch_tokenizer;
 pub mod datasource;
 pub mod field_parser;
