@@ -1,0 +1,1301 @@
+warning: unused import: `TableReference`
+  --> src/syntax/parser.rs:18:100
+   |
+18 |     ArrayConstructor, FromClause, JoinType, PathExpr, PathSegment, SelectClause, SelectExpression, TableReference,
+   |                                                                                                    ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: type `CastType` is more private than the item `execution::types::Expression::Cast::1`
+   --> src/execution/types.rs:130:27
+    |
+130 |     Cast(Box<Expression>, CastType),
+    |                           ^^^^^^^^ field `execution::types::Expression::Cast::1` is reachable at visibility `pub`
+    |
+note: but type `CastType` is only usable at visibility `pub(crate)`
+   --> src/syntax/ast.rs:217:1
+    |
+217 | pub(crate) enum CastType {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `Binding` is more private than the item `execution::types::Node::DataSource::1`
+   --> src/execution/types.rs:564:28
+    |
+564 |     DataSource(DataSource, Vec<common::types::Binding>),
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `execution::types::Node::DataSource::1` is reachable at visibility `pub`
+    |
+note: but type `Binding` is only usable at visibility `pub(crate)`
+   --> src/common/types.rs:391:1
+    |
+391 | pub(crate) struct Binding {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `AvgAggregate` is more private than the item `execution::types::Aggregate::Avg::0`
+   --> src/execution/types.rs:724:9
+    |
+724 |     Avg(AvgAggregate, Named),
+    |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Avg::0` is reachable at visibility `pub`
+    |
+note: but type `AvgAggregate` is only usable at visibility `pub(crate)`
+   --> src/execution/types.rs:939:1
+    |
+939 | pub(crate) struct AvgAggregate {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `CountAggregate` is more private than the item `execution::types::Aggregate::Count::0`
+    --> src/execution/types.rs:725:11
+     |
+ 725 |     Count(CountAggregate, Named),
+     |           ^^^^^^^^^^^^^^ field `execution::types::Aggregate::Count::0` is reachable at visibility `pub`
+     |
+note: but type `CountAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1022:1
+     |
+1022 | pub(crate) struct CountAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `FirstAggregate` is more private than the item `execution::types::Aggregate::First::0`
+    --> src/execution/types.rs:726:11
+     |
+ 726 |     First(FirstAggregate, Named),
+     |           ^^^^^^^^^^^^^^ field `execution::types::Aggregate::First::0` is reachable at visibility `pub`
+     |
+note: but type `FirstAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1174:1
+     |
+1174 | pub(crate) struct FirstAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `LastAggregate` is more private than the item `execution::types::Aggregate::Last::0`
+    --> src/execution/types.rs:727:10
+     |
+ 727 |     Last(LastAggregate, Named),
+     |          ^^^^^^^^^^^^^ field `execution::types::Aggregate::Last::0` is reachable at visibility `pub`
+     |
+note: but type `LastAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1200:1
+     |
+1200 | pub(crate) struct LastAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `MaxAggregate` is more private than the item `execution::types::Aggregate::Max::0`
+    --> src/execution/types.rs:728:9
+     |
+ 728 |     Max(MaxAggregate, Named),
+     |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Max::0` is reachable at visibility `pub`
+     |
+note: but type `MaxAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1092:1
+     |
+1092 | pub(crate) struct MaxAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `MinAggregate` is more private than the item `execution::types::Aggregate::Min::0`
+    --> src/execution/types.rs:729:9
+     |
+ 729 |     Min(MinAggregate, Named),
+     |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Min::0` is reachable at visibility `pub`
+     |
+note: but type `MinAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1133:1
+     |
+1133 | pub(crate) struct MinAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `SumAggregate` is more private than the item `execution::types::Aggregate::Sum::0`
+   --> src/execution/types.rs:730:9
+    |
+730 |     Sum(SumAggregate, Named),
+    |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Sum::0` is reachable at visibility `pub`
+    |
+note: but type `SumAggregate` is only usable at visibility `pub(crate)`
+   --> src/execution/types.rs:984:1
+    |
+984 | pub(crate) struct SumAggregate {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `ApproxCountDistinctAggregate` is more private than the item `execution::types::Aggregate::ApproxCountDistinct::0`
+    --> src/execution/types.rs:731:25
+     |
+ 731 |     ApproxCountDistinct(ApproxCountDistinctAggregate, Named),
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `execution::types::Aggregate::ApproxCountDistinct::0` is reachable at visibility `pub`
+     |
+note: but type `ApproxCountDistinctAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1224:1
+     |
+1224 | pub(crate) struct ApproxCountDistinctAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `PercentileDiscAggregate` is more private than the item `execution::types::Aggregate::PercentileDisc::0`
+   --> src/execution/types.rs:732:20
+    |
+732 |     PercentileDisc(PercentileDiscAggregate, String),
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^ field `execution::types::Aggregate::PercentileDisc::0` is reachable at visibility `pub`
+    |
+note: but type `PercentileDiscAggregate` is only usable at visibility `pub(crate)`
+   --> src/execution/types.rs:772:1
+    |
+772 | pub(crate) struct PercentileDiscAggregate {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `ApproxPercentileAggregate` is more private than the item `execution::types::Aggregate::ApproxPercentile::0`
+   --> src/execution/types.rs:733:22
+    |
+733 |     ApproxPercentile(ApproxPercentileAggregate, String),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^ field `execution::types::Aggregate::ApproxPercentile::0` is reachable at visibility `pub`
+    |
+note: but type `ApproxPercentileAggregate` is only usable at visibility `pub(crate)`
+   --> src/execution/types.rs:850:1
+    |
+850 | pub(crate) struct ApproxPercentileAggregate {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `GroupAsAggregate` is more private than the item `execution::types::Aggregate::GroupAs::0`
+    --> src/execution/types.rs:734:13
+     |
+ 734 |     GroupAs(GroupAsAggregate, Named),
+     |             ^^^^^^^^^^^^^^^^ field `execution::types::Aggregate::GroupAs::0` is reachable at visibility `pub`
+     |
+note: but type `GroupAsAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1064:1
+     |
+1064 | pub(crate) struct GroupAsAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `ast::Query` is more private than the item `syntax::parser::query`
+   --> src/syntax/parser.rs:963:1
+    |
+963 | pub fn query(i: &str) -> IResult<&str, ast::Query, nom::error::Error<&str>> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `syntax::parser::query` is reachable at visibility `pub`
+    |
+note: but type `ast::Query` is only usable at visibility `pub(crate)`
+   --> src/syntax/ast.rs:15:1
+    |
+ 15 | pub(crate) enum Query {
+    | ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `IndexBinding` is never constructed
+   --> src/common/types.rs:385:19
+    |
+385 | pub(crate) struct IndexBinding {
+    |                   ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `datatype` is never used
+   --> src/execution/datasource.rs:487:19
+    |
+474 | impl ClassicLoadBalancerLogField {
+    | -------------------------------- associated function in this implementation
+...
+487 |     pub(crate) fn datatype(idx: usize) -> DataType {
+    |                   ^^^^^^^^
+
+warning: associated function `datatype` is never used
+   --> src/execution/datasource.rs:575:19
+    |
+562 | impl ApplicationLoadBalancerLogField {
+    | ------------------------------------ associated function in this implementation
+...
+575 |     pub(crate) fn datatype(idx: usize) -> DataType {
+    |                   ^^^^^^^^
+
+warning: associated function `datatype` is never used
+   --> src/execution/datasource.rs:661:19
+    |
+648 | impl S3Field {
+    | ------------ associated function in this implementation
+...
+661 |     pub(crate) fn datatype(idx: usize) -> DataType {
+    |                   ^^^^^^^^
+
+warning: associated function `datatype` is never used
+   --> src/execution/datasource.rs:719:19
+    |
+706 | impl SquidLogField {
+    | ------------------ associated function in this implementation
+...
+719 |     pub(crate) fn datatype(idx: usize) -> DataType {
+    |                   ^^^^^^^^
+
+warning: function `to_bindings` is never used
+   --> src/logical/parser.rs:575:4
+    |
+575 | fn to_bindings(data_sources: &common::DataSourceRegistry, table_references: &Vec<TableReference>) -> Vec<common::Binding> {
+    |    ^^^^^^^^^^^
+
+warning: variant `Cross` is never constructed
+  --> src/syntax/ast.rs:27:5
+   |
+26 | pub(crate) enum JoinType {
+   |                 -------- variant in this enum
+27 |     Cross,
+   |     ^^^^^
+   |
+   = note: `JoinType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `FuncCallExpression` is never constructed
+   --> src/syntax/ast.rs:386:19
+    |
+386 | pub(crate) struct FuncCallExpression {
+    |                   ^^^^^^^^^^^^^^^^^^
+
+warning: `logq` (lib) generated 23 warnings (run `cargo fix --lib -p logq` to apply 1 suggestion)
+   Compiling logq v0.1.19 (/Users/paulmeng/Develop/logq)
+warning: constant `PARSE_L1` is never used
+ --> benches/helpers/queries.rs:2:11
+  |
+2 | pub const PARSE_L1: &str = "SELECT a FROM t";
+  |           ^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `PARSE_L2` is never used
+ --> benches/helpers/queries.rs:3:11
+  |
+3 | pub const PARSE_L2: &str = "SELECT a, b, c FROM t WHERE a > 10";
+  |           ^^^^^^^^
+
+warning: constant `PARSE_L3` is never used
+ --> benches/helpers/queries.rs:4:11
+  |
+4 | pub const PARSE_L3: &str = "SELECT a, count(b) FROM t WHERE a > 10 GROUP BY a ORDER BY a DESC LIMIT 100";
+  |           ^^^^^^^^
+
+warning: constant `PARSE_L4` is never used
+ --> benches/helpers/queries.rs:5:11
+  |
+5 | pub const PARSE_L4: &str = r#"SELECT a, sum(b) FROM t WHERE a > 10 AND c LIKE "%foo%" GROUP BY a HAVING sum(b) > 100 ORDER BY a"#;
+  |           ^^^^^^^^
+
+warning: constant `PARSE_L5` is never used
+ --> benches/helpers/queries.rs:6:11
+  |
+6 | pub const PARSE_L5: &str = r#"SELECT a, CASE WHEN b > 10 THEN "high" WHEN b > 5 THEN "mid" ELSE "low" END AS tier, count(*) FROM t AS...
+  |           ^^^^^^^^
+
+warning: constant `PARSE_L6` is never used
+ --> benches/helpers/queries.rs:7:11
+  |
+7 | pub const PARSE_L6: &str = "SELECT a, b FROM t WHERE a IN (10, 20, 30) AND b IS NOT NULL UNION SELECT c, d FROM t2 ORDER BY a LIMIT 50";
+  |           ^^^^^^^^
+
+warning: `logq` (bench "bench_execution") generated 6 warnings
+warning: constant `EXEC_E1` is never used
+  --> benches/helpers/queries.rs:10:11
+   |
+10 | pub const EXEC_E1: &str = "SELECT * FROM elb LIMIT 10";
+   |           ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `EXEC_E2` is never used
+  --> benches/helpers/queries.rs:11:11
+   |
+11 | pub const EXEC_E2: &str = "SELECT elbname, count(*) FROM elb GROUP BY elbname";
+   |           ^^^^^^^
+
+warning: constant `EXEC_E3` is never used
+  --> benches/helpers/queries.rs:12:11
+   |
+12 | pub const EXEC_E3: &str = r#"SELECT elbname, elb_status_code FROM elb WHERE elb_status_code = "200" ORDER BY elbname"#;
+   |           ^^^^^^^
+
+warning: constant `PROF_SCAN_ONLY` is never used
+  --> benches/helpers/queries.rs:15:11
+   |
+15 | pub const PROF_SCAN_ONLY: &str = "SELECT * FROM elb";
+   |           ^^^^^^^^^^^^^^
+
+warning: constant `PROF_SCAN_FILTER` is never used
+  --> benches/helpers/queries.rs:16:11
+   |
+16 | pub const PROF_SCAN_FILTER: &str = r#"SELECT * FROM elb WHERE elb_status_code = "200""#;
+   |           ^^^^^^^^^^^^^^^^
+
+warning: constant `PROF_SCAN_FILTER_GROUPBY` is never used
+  --> benches/helpers/queries.rs:17:11
+   |
+17 | pub const PROF_SCAN_FILTER_GROUPBY: &str = r#"SELECT elb_status_code, count(*) FROM elb WHERE elb_status_code = "200" GROUP BY elb_s...
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `generate_records` is never used
+ --> benches/helpers/synthetic.rs:8:8
+  |
+8 | pub fn generate_records(count: usize) -> VecDeque<Record> {
+  |        ^^^^^^^^^^^^^^^^
+
+warning: `logq` (bench "bench_parser") generated 7 warnings
+warning: type `syntax::ast::CastType` is more private than the item `execution::types::Expression::Cast::1`
+   --> src/execution/types.rs:130:27
+    |
+130 |     Cast(Box<Expression>, CastType),
+    |                           ^^^^^^^^ field `execution::types::Expression::Cast::1` is reachable at visibility `pub`
+    |
+note: but type `syntax::ast::CastType` is only usable at visibility `pub(crate)`
+   --> src/syntax/ast.rs:217:1
+    |
+217 | pub(crate) enum CastType {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: type `execution::types::AvgAggregate` is more private than the item `execution::types::Aggregate::Avg::0`
+   --> src/execution/types.rs:724:9
+    |
+724 |     Avg(AvgAggregate, Named),
+    |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Avg::0` is reachable at visibility `pub`
+    |
+note: but type `execution::types::AvgAggregate` is only usable at visibility `pub(crate)`
+   --> src/execution/types.rs:939:1
+    |
+939 | pub(crate) struct AvgAggregate {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `execution::types::CountAggregate` is more private than the item `execution::types::Aggregate::Count::0`
+    --> src/execution/types.rs:725:11
+     |
+ 725 |     Count(CountAggregate, Named),
+     |           ^^^^^^^^^^^^^^ field `execution::types::Aggregate::Count::0` is reachable at visibility `pub`
+     |
+note: but type `execution::types::CountAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1022:1
+     |
+1022 | pub(crate) struct CountAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `execution::types::FirstAggregate` is more private than the item `execution::types::Aggregate::First::0`
+    --> src/execution/types.rs:726:11
+     |
+ 726 |     First(FirstAggregate, Named),
+     |           ^^^^^^^^^^^^^^ field `execution::types::Aggregate::First::0` is reachable at visibility `pub`
+     |
+note: but type `execution::types::FirstAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1174:1
+     |
+1174 | pub(crate) struct FirstAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `execution::types::LastAggregate` is more private than the item `execution::types::Aggregate::Last::0`
+    --> src/execution/types.rs:727:10
+     |
+ 727 |     Last(LastAggregate, Named),
+     |          ^^^^^^^^^^^^^ field `execution::types::Aggregate::Last::0` is reachable at visibility `pub`
+     |
+note: but type `execution::types::LastAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1200:1
+     |
+1200 | pub(crate) struct LastAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `execution::types::MaxAggregate` is more private than the item `execution::types::Aggregate::Max::0`
+    --> src/execution/types.rs:728:9
+     |
+ 728 |     Max(MaxAggregate, Named),
+     |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Max::0` is reachable at visibility `pub`
+     |
+note: but type `execution::types::MaxAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1092:1
+     |
+1092 | pub(crate) struct MaxAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `execution::types::MinAggregate` is more private than the item `execution::types::Aggregate::Min::0`
+    --> src/execution/types.rs:729:9
+     |
+ 729 |     Min(MinAggregate, Named),
+     |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Min::0` is reachable at visibility `pub`
+     |
+note: but type `execution::types::MinAggregate` is only usable at visibility `pub(crate)`
+    --> src/execution/types.rs:1133:1
+     |
+1133 | pub(crate) struct MinAggregate {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `execution::types::SumAggregate` is more private than the item `execution::types::Aggregate::Sum::0`
+   --> src/execution/types.rs:730:9
+    |
+730 |     Sum(SumAggregate, Named),
+    |         ^^^^^^^^^^^^ field `execution::types::Aggregate::Sum::0` is reachable at visibility `pub`
+    |
+note: but type `execution::types::SumAggregate` is only usable at visibility `pub(crate)`
+   --> src/execution/types.rs:984:1
+    |
+984 | pub(crate) struct SumAggregate {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: type `syntax::ast::Query` is more private than the item `syntax::parser::query`
+   --> src/syntax/parser.rs:963:1
+    |
+963 | pub fn query(i: &str) -> IResult<&str, ast::Query, nom::error::Error<&str>> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `syntax::parser::query` is reachable at visibility `pub`
+    |
+note: but type `syntax::ast::Query` is only usable at visibility `pub(crate)`
+   --> src/syntax/ast.rs:15:1
+    |
+ 15 | pub(crate) enum Query {
+    | ^^^^^^^^^^^^^^^^^^^^^
+
+warning: `logq` (lib test) generated 23 warnings (14 duplicates)
+    Finished `bench` profile [optimized] target(s) in 3.88s
+warning: the following packages contain code that will be rejected by a future version of Rust: criterion v0.3.3
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/release/deps/logq-7e4d188a5330fa48)
+
+running 496 tests
+test app::tests::test_alb_aggregate_processing_times ... ignored
+test app::tests::test_alb_filter_by_type ... ignored
+test app::tests::test_alb_order_by_received_bytes ... ignored
+test app::tests::test_elb_limit_with_order ... ignored
+test app::tests::test_elb_numeric_aggregation ... ignored
+test app::tests::test_elb_order_by_timestamp ... ignored
+test app::tests::test_elb_select_and_where_filter ... ignored
+test app::tests::test_integration_case_when ... ignored
+test app::tests::test_integration_cast_and_concat ... ignored
+test app::tests::test_integration_distinct_and_order_by ... ignored
+test app::tests::test_integration_join_with_aggregation ... ignored
+test app::tests::test_integration_json_output_mode ... ignored
+test app::tests::test_integration_like_between_in ... ignored
+test app::tests::test_integration_mixed_case_keywords ... ignored
+test app::tests::test_integration_nested_path_and_array ... ignored
+test app::tests::test_integration_null_missing_propagation ... ignored
+test app::tests::test_integration_nullif ... ignored
+test app::tests::test_integration_string_functions ... ignored
+test app::tests::test_integration_subquery_and_union ... ignored
+test app::tests::test_multi_table_backward_compat ... ignored
+test app::tests::test_multi_table_case_sensitive_name_error ... ignored
+test app::tests::test_multi_table_comma_join ... ignored
+test app::tests::test_multi_table_cross_join ... ignored
+test app::tests::test_multi_table_left_join ... ignored
+test app::tests::test_multi_table_stdin_in_join_right_side_error ... ignored
+test app::tests::test_multi_table_unknown_table_error ... ignored
+test app::tests::test_multi_table_with_where_filter ... ignored
+test app::tests::test_run_cross_join_comma_syntax ... ignored
+test app::tests::test_run_cross_join_jsonl ... ignored
+test app::tests::test_run_cross_join_with_where ... ignored
+test app::tests::test_run_except ... ignored
+test app::tests::test_run_explain_mode ... ignored
+test app::tests::test_run_intersect ... ignored
+test app::tests::test_run_left_join_jsonl ... ignored
+test app::tests::test_run_left_join_no_match ... ignored
+test app::tests::test_run_left_outer_join_jsonl ... ignored
+test app::tests::test_run_real_flat_log ... ignored
+test app::tests::test_run_real_jsonl_log ... ignored
+test app::tests::test_run_subquery_in_select ... ignored
+test app::tests::test_run_subquery_in_where ... ignored
+test app::tests::test_run_union ... ignored
+test app::tests::test_s3_dash_placeholders ... ignored
+test app::tests::test_s3_filter_by_operation ... ignored
+test app::tests::test_s3_group_by_http_status ... ignored
+test app::tests::test_s3_string_functions ... ignored
+test app::tests::test_squid_count_by_status ... ignored
+test app::tests::test_squid_filter_by_method ... ignored
+test app::tests::test_squid_like_on_url ... ignored
+test app::tests::test_unknown_function_error_at_planning ... ignored
+test common::types::tests::test_parse_time_interval ... ignored
+test common::types::tests::test_wildcard_array_nested_path ... ignored
+test common::types::tests::test_wildcard_array_on_non_array ... ignored
+test common::types::tests::test_wildcard_array_path_expr ... ignored
+test common::types::tests::test_wildcard_attr_on_non_object ... ignored
+test common::types::tests::test_wildcard_attr_path_expr ... ignored
+test execution::datasource::tests::test_aws_alb_reader ... ignored
+test execution::datasource::tests::test_aws_elb_reader ... ignored
+test execution::datasource::tests::test_aws_s3_reader ... ignored
+test execution::datasource::tests::test_idempotent_property ... ignored
+test execution::datasource::tests::test_reader_on_empty_input ... ignored
+test execution::datasource::tests::test_reader_on_malformed_input ... ignored
+test execution::datasource::tests::test_squid_reader ... ignored
+test execution::stream::tests::test_distinct_stream ... ignored
+test execution::stream::tests::test_distinct_stream_all_unique ... ignored
+test execution::stream::tests::test_distinct_stream_empty ... ignored
+test execution::stream::tests::test_filter_stream ... ignored
+test execution::stream::tests::test_limit_stream ... ignored
+test execution::stream::tests::test_map_stream_with_names ... ignored
+test execution::stream::tests::test_map_stream_with_star ... ignored
+test execution::stream::tests::test_record_merge ... ignored
+test execution::stream::tests::test_record_merge_overlapping_keys ... ignored
+test execution::types::tests::test_arithmetic_null_propagation ... ignored
+test execution::types::tests::test_avg_aggregate_with_many_elements ... ignored
+test execution::types::tests::test_avg_aggregate_with_one_element ... ignored
+test execution::types::tests::test_cast_bool_to_int ... ignored
+test execution::types::tests::test_cast_bool_to_string ... ignored
+test execution::types::tests::test_cast_float_to_int ... ignored
+test execution::types::tests::test_cast_float_to_string ... ignored
+test execution::types::tests::test_cast_identity ... ignored
+test execution::types::tests::test_cast_int_to_float ... ignored
+test execution::types::tests::test_cast_int_to_string ... ignored
+test execution::types::tests::test_cast_missing_propagation ... ignored
+test execution::types::tests::test_cast_null_propagation ... ignored
+test execution::types::tests::test_cast_string_to_bool ... ignored
+test execution::types::tests::test_cast_string_to_bool_invalid ... ignored
+test execution::types::tests::test_cast_string_to_float ... ignored
+test execution::types::tests::test_cast_string_to_int ... ignored
+test execution::types::tests::test_cast_string_to_int_invalid ... ignored
+test execution::types::tests::test_char_length ... ignored
+test execution::types::tests::test_comparison_int_float_coercion ... ignored
+test execution::types::tests::test_comparison_null_returns_none ... ignored
+test execution::types::tests::test_count_aggregate ... ignored
+test execution::types::tests::test_date_part_all_units ... ignored
+test execution::types::tests::test_evaluate ... ignored
+test execution::types::tests::test_evaluate_host_functions ... ignored
+test execution::types::tests::test_evaluate_url_functions ... ignored
+test execution::types::tests::test_first_aggregate ... ignored
+test execution::types::tests::test_float_arithmetic ... ignored
+test execution::types::tests::test_in_evaluation ... ignored
+test execution::types::tests::test_in_null_propagation ... ignored
+test execution::types::tests::test_is_missing ... ignored
+test execution::types::tests::test_is_not_missing ... ignored
+test execution::types::tests::test_is_not_null ... ignored
+test execution::types::tests::test_is_null ... ignored
+test execution::types::tests::test_last_aggregate ... ignored
+test execution::types::tests::test_like_evaluation ... ignored
+test execution::types::tests::test_like_null_propagation ... ignored
+test execution::types::tests::test_like_pattern_to_regex ... ignored
+test execution::types::tests::test_lower ... ignored
+test execution::types::tests::test_max_aggregate ... ignored
+test execution::types::tests::test_min_aggregate ... ignored
+test execution::types::tests::test_not_in_evaluation ... ignored
+test execution::types::tests::test_not_in_null_propagation ... ignored
+test execution::types::tests::test_not_like_evaluation ... ignored
+test execution::types::tests::test_string_concat_evaluation ... ignored
+test execution::types::tests::test_string_concat_missing_propagation ... ignored
+test execution::types::tests::test_string_concat_null_propagation ... ignored
+test execution::types::tests::test_string_functions_null_propagation ... ignored
+test execution::types::tests::test_substring ... ignored
+test execution::types::tests::test_sum_aggregate_with_many_elements ... ignored
+test execution::types::tests::test_three_valued_and ... ignored
+test execution::types::tests::test_three_valued_and_with_null ... ignored
+test execution::types::tests::test_three_valued_not ... ignored
+test execution::types::tests::test_three_valued_not_with_null ... ignored
+test execution::types::tests::test_three_valued_or ... ignored
+test execution::types::tests::test_three_valued_or_with_null ... ignored
+test execution::types::tests::test_trim ... ignored
+test execution::types::tests::test_upper ... ignored
+test functions::arithmetic::tests::test_abs_float ... ignored
+test functions::arithmetic::tests::test_abs_int ... ignored
+test functions::arithmetic::tests::test_acos ... ignored
+test functions::arithmetic::tests::test_asin ... ignored
+test functions::arithmetic::tests::test_atan ... ignored
+test functions::arithmetic::tests::test_atan2 ... ignored
+test functions::arithmetic::tests::test_ceil ... ignored
+test functions::arithmetic::tests::test_ceil_int_passthrough ... ignored
+test functions::arithmetic::tests::test_ceiling_alias ... ignored
+test functions::arithmetic::tests::test_cos ... ignored
+test functions::arithmetic::tests::test_cosh ... ignored
+test functions::arithmetic::tests::test_degrees ... ignored
+test functions::arithmetic::tests::test_divide_by_zero ... ignored
+test functions::arithmetic::tests::test_e_constant ... ignored
+test functions::arithmetic::tests::test_exp ... ignored
+test functions::arithmetic::tests::test_exp_int ... ignored
+test functions::arithmetic::tests::test_floor ... ignored
+test functions::arithmetic::tests::test_floor_int_passthrough ... ignored
+test functions::arithmetic::tests::test_infinity ... ignored
+test functions::arithmetic::tests::test_is_finite ... ignored
+test functions::arithmetic::tests::test_is_infinite ... ignored
+test functions::arithmetic::tests::test_is_nan ... ignored
+test functions::arithmetic::tests::test_ln ... ignored
+test functions::arithmetic::tests::test_ln_e ... ignored
+test functions::arithmetic::tests::test_log10 ... ignored
+test functions::arithmetic::tests::test_log2 ... ignored
+test functions::arithmetic::tests::test_minus_int ... ignored
+test functions::arithmetic::tests::test_mod_by_zero ... ignored
+test functions::arithmetic::tests::test_mod_int ... ignored
+test functions::arithmetic::tests::test_modulus_alias ... ignored
+test functions::arithmetic::tests::test_nan_constant ... ignored
+test functions::arithmetic::tests::test_pi ... ignored
+test functions::arithmetic::tests::test_plus_float ... ignored
+test functions::arithmetic::tests::test_plus_int ... ignored
+test functions::arithmetic::tests::test_plus_int_float_coercion ... ignored
+test functions::arithmetic::tests::test_plus_null_propagation ... ignored
+test functions::arithmetic::tests::test_pow_alias ... ignored
+test functions::arithmetic::tests::test_power ... ignored
+test functions::arithmetic::tests::test_power_float ... ignored
+test functions::arithmetic::tests::test_radians ... ignored
+test functions::arithmetic::tests::test_rand_returns_float ... ignored
+test functions::arithmetic::tests::test_random_alias ... ignored
+test functions::arithmetic::tests::test_round ... ignored
+test functions::arithmetic::tests::test_round_down ... ignored
+test functions::arithmetic::tests::test_round_int_passthrough ... ignored
+test functions::arithmetic::tests::test_round_two_args ... ignored
+test functions::arithmetic::tests::test_sign ... ignored
+test functions::arithmetic::tests::test_sign_float ... ignored
+test functions::arithmetic::tests::test_sin ... ignored
+test functions::arithmetic::tests::test_sqrt ... ignored
+test functions::arithmetic::tests::test_sqrt_int ... ignored
+test functions::arithmetic::tests::test_tan ... ignored
+test functions::arithmetic::tests::test_tanh ... ignored
+test functions::arithmetic::tests::test_times_int ... ignored
+test functions::arithmetic::tests::test_trig_with_int ... ignored
+test functions::arithmetic::tests::test_trunc_alias ... ignored
+test functions::arithmetic::tests::test_truncate ... ignored
+test functions::array::tests::test_array_contains ... ignored
+test functions::array::tests::test_array_distinct ... ignored
+test functions::array::tests::test_array_except ... ignored
+test functions::array::tests::test_array_intersect ... ignored
+test functions::array::tests::test_array_join ... ignored
+test functions::array::tests::test_array_join_with_null_replacement ... ignored
+test functions::array::tests::test_array_join_with_nulls_skip ... ignored
+test functions::array::tests::test_array_max ... ignored
+test functions::array::tests::test_array_min ... ignored
+test functions::array::tests::test_array_null_propagation ... ignored
+test functions::array::tests::test_array_position ... ignored
+test functions::array::tests::test_array_remove ... ignored
+test functions::array::tests::test_array_sort ... ignored
+test functions::array::tests::test_array_sort_strings ... ignored
+test functions::array::tests::test_array_union ... ignored
+test functions::array::tests::test_cardinality ... ignored
+test functions::array::tests::test_cardinality_object ... ignored
+test functions::array::tests::test_flatten ... ignored
+test functions::array::tests::test_flatten_mixed ... ignored
+test functions::array::tests::test_shuffle ... ignored
+test functions::array::tests::test_slice ... ignored
+test functions::array::tests::test_slice_out_of_bounds ... ignored
+test functions::bitwise::tests::test_bit_count ... ignored
+test functions::bitwise::tests::test_bitwise_and ... ignored
+test functions::bitwise::tests::test_bitwise_not ... ignored
+test functions::bitwise::tests::test_bitwise_null_propagation ... ignored
+test functions::bitwise::tests::test_bitwise_or ... ignored
+test functions::bitwise::tests::test_bitwise_shift_left ... ignored
+test functions::bitwise::tests::test_bitwise_shift_right ... ignored
+test functions::bitwise::tests::test_bitwise_xor ... ignored
+test functions::datetime::tests::test_date_add_day ... ignored
+test functions::datetime::tests::test_date_add_hour ... ignored
+test functions::datetime::tests::test_date_add_minute ... ignored
+test functions::datetime::tests::test_date_add_second ... ignored
+test functions::datetime::tests::test_date_diff_day ... ignored
+test functions::datetime::tests::test_date_diff_hour ... ignored
+test functions::datetime::tests::test_date_diff_minute ... ignored
+test functions::datetime::tests::test_date_diff_second ... ignored
+test functions::datetime::tests::test_date_part_day ... ignored
+test functions::datetime::tests::test_date_part_hour ... ignored
+test functions::datetime::tests::test_date_part_minute ... ignored
+test functions::datetime::tests::test_date_part_month ... ignored
+test functions::datetime::tests::test_date_part_null_propagation ... ignored
+test functions::datetime::tests::test_date_part_second ... ignored
+test functions::datetime::tests::test_date_part_year ... ignored
+test functions::datetime::tests::test_date_trunc_day ... ignored
+test functions::datetime::tests::test_date_trunc_hour ... ignored
+test functions::datetime::tests::test_date_trunc_minute ... ignored
+test functions::datetime::tests::test_date_trunc_second ... ignored
+test functions::datetime::tests::test_day ... ignored
+test functions::datetime::tests::test_day_of_week ... ignored
+test functions::datetime::tests::test_day_of_year ... ignored
+test functions::datetime::tests::test_from_unixtime ... ignored
+test functions::datetime::tests::test_hour ... ignored
+test functions::datetime::tests::test_millisecond ... ignored
+test functions::datetime::tests::test_minute ... ignored
+test functions::datetime::tests::test_month ... ignored
+test functions::datetime::tests::test_now ... ignored
+test functions::datetime::tests::test_quarter ... ignored
+test functions::datetime::tests::test_second ... ignored
+test functions::datetime::tests::test_time_bucket_15_seconds ... ignored
+test functions::datetime::tests::test_time_bucket_2_hours ... ignored
+test functions::datetime::tests::test_time_bucket_5_minutes ... ignored
+test functions::datetime::tests::test_time_bucket_null_propagation ... ignored
+test functions::datetime::tests::test_time_bucket_unsupported_interval ... ignored
+test functions::datetime::tests::test_time_bucket_zero_interval ... ignored
+test functions::datetime::tests::test_to_unixtime ... ignored
+test functions::datetime::tests::test_week ... ignored
+test functions::datetime::tests::test_year ... ignored
+test functions::host::tests::test_host_name ... ignored
+test functions::host::tests::test_host_name_invalid_type ... ignored
+test functions::host::tests::test_host_name_null_missing ... ignored
+test functions::host::tests::test_host_port ... ignored
+test functions::host::tests::test_host_port_null_missing ... ignored
+test functions::host::tests::test_host_port_zero ... ignored
+test functions::json::tests::test_is_json_scalar ... ignored
+test functions::json::tests::test_json_array_contains ... ignored
+test functions::json::tests::test_json_array_length ... ignored
+test functions::json::tests::test_json_array_length_not_array ... ignored
+test functions::json::tests::test_json_extract ... ignored
+test functions::json::tests::test_json_extract_array_index ... ignored
+test functions::json::tests::test_json_extract_nested ... ignored
+test functions::json::tests::test_json_extract_scalar ... ignored
+test functions::json::tests::test_json_null_propagation ... ignored
+test functions::json::tests::test_json_parse_invalid ... ignored
+test functions::json::tests::test_json_parse_valid ... ignored
+test functions::json::tests::test_json_size_array ... ignored
+test functions::json::tests::test_json_size_object ... ignored
+test functions::map::tests::test_element_at_array ... ignored
+test functions::map::tests::test_element_at_object ... ignored
+test functions::map::tests::test_map_concat ... ignored
+test functions::map::tests::test_map_entries ... ignored
+test functions::map::tests::test_map_from_entries ... ignored
+test functions::map::tests::test_map_keys ... ignored
+test functions::map::tests::test_map_null_propagation ... ignored
+test functions::map::tests::test_map_values ... ignored
+test functions::regexp::tests::test_regexp_count ... ignored
+test functions::regexp::tests::test_regexp_extract ... ignored
+test functions::regexp::tests::test_regexp_extract_all ... ignored
+test functions::regexp::tests::test_regexp_extract_no_match ... ignored
+test functions::regexp::tests::test_regexp_extract_with_group ... ignored
+test functions::regexp::tests::test_regexp_like ... ignored
+test functions::regexp::tests::test_regexp_null_propagation ... ignored
+test functions::regexp::tests::test_regexp_replace ... ignored
+test functions::regexp::tests::test_regexp_split ... ignored
+test functions::registry::tests::test_case_insensitive_lookup ... ignored
+test functions::registry::tests::test_custom_null_handling ... ignored
+test functions::registry::tests::test_duplicate_registration_error ... ignored
+test functions::registry::tests::test_null_propagation_missing_precedence ... ignored
+test functions::registry::tests::test_register_and_call ... ignored
+test functions::registry::tests::test_validate_arity_mismatch ... ignored
+test functions::registry::tests::test_validate_range_arity ... ignored
+test functions::registry::tests::test_validate_unknown_function ... ignored
+test functions::registry::tests::test_validate_variadic_arity ... ignored
+test functions::string::tests::test_char_length ... ignored
+test functions::string::tests::test_character_length_alias ... ignored
+test functions::string::tests::test_chr ... ignored
+test functions::string::tests::test_codepoint ... ignored
+test functions::string::tests::test_codepoint_error_multi_char ... ignored
+test functions::string::tests::test_concat_null_propagation_behavioral_change ... ignored
+test functions::string::tests::test_concat_operator ... ignored
+test functions::string::tests::test_concat_ws ... ignored
+test functions::string::tests::test_concat_ws_null_separator ... ignored
+test functions::string::tests::test_concat_ws_skip_nulls ... ignored
+test functions::string::tests::test_ends_with ... ignored
+test functions::string::tests::test_hamming_distance ... ignored
+test functions::string::tests::test_hamming_distance_different_lengths ... ignored
+test functions::string::tests::test_levenshtein_distance ... ignored
+test functions::string::tests::test_levenshtein_distance_same ... ignored
+test functions::string::tests::test_lower ... ignored
+test functions::string::tests::test_lpad ... ignored
+test functions::string::tests::test_lpad_truncate ... ignored
+test functions::string::tests::test_ltrim ... ignored
+test functions::string::tests::test_position ... ignored
+test functions::string::tests::test_repeat ... ignored
+test functions::string::tests::test_replace ... ignored
+test functions::string::tests::test_reverse ... ignored
+test functions::string::tests::test_reverse_array ... ignored
+test functions::string::tests::test_rpad ... ignored
+test functions::string::tests::test_rpad_truncate ... ignored
+test functions::string::tests::test_rtrim ... ignored
+test functions::string::tests::test_split ... ignored
+test functions::string::tests::test_split_part ... ignored
+test functions::string::tests::test_split_part_out_of_bounds ... ignored
+test functions::string::tests::test_starts_with ... ignored
+test functions::string::tests::test_strpos ... ignored
+test functions::string::tests::test_substring_three_args ... ignored
+test functions::string::tests::test_substring_two_args ... ignored
+test functions::string::tests::test_trim ... ignored
+test functions::string::tests::test_upper ... ignored
+test functions::type_conversion::tests::test_format_number ... ignored
+test functions::type_conversion::tests::test_from_base ... ignored
+test functions::type_conversion::tests::test_to_base ... ignored
+test functions::type_conversion::tests::test_try_cast_int_to_string ... ignored
+test functions::type_conversion::tests::test_try_cast_invalid_returns_null ... ignored
+test functions::type_conversion::tests::test_try_cast_string_to_boolean ... ignored
+test functions::type_conversion::tests::test_try_cast_string_to_int ... ignored
+test functions::type_conversion::tests::test_typeof_int ... ignored
+test functions::type_conversion::tests::test_typeof_null ... ignored
+test functions::type_conversion::tests::test_typeof_string ... ignored
+test functions::url::tests::test_url_fragment ... ignored
+test functions::url::tests::test_url_fragment_none ... ignored
+test functions::url::tests::test_url_host ... ignored
+test functions::url::tests::test_url_host_null_missing ... ignored
+test functions::url::tests::test_url_path ... ignored
+test functions::url::tests::test_url_path_bucket ... ignored
+test functions::url::tests::test_url_path_bucket_null_missing ... ignored
+test functions::url::tests::test_url_path_segments ... ignored
+test functions::url::tests::test_url_path_segments_null_missing ... ignored
+test functions::url::tests::test_url_port ... ignored
+test functions::url::tests::test_url_port_none ... ignored
+test functions::url::tests::test_url_query ... ignored
+test functions::url::tests::test_url_query_none ... ignored
+test logical::parser::test::test_parse_aggregate ... ignored
+test logical::parser::test::test_parse_condition ... ignored
+test logical::parser::test::test_parse_condition_non_binary_expression ... ignored
+test logical::parser::test::test_parse_logic_case_when_in_boolean_context ... ignored
+test logical::parser::test::test_parse_logic_column_in_boolean_context ... ignored
+test logical::parser::test::test_parse_logic_expression ... ignored
+test logical::parser::test::test_parse_logic_func_call_in_boolean_context ... ignored
+test logical::parser::test::test_parse_query_cross_join_produces_cross_join_node ... ignored
+test logical::parser::test::test_parse_query_group_by_mismatch_fields ... ignored
+test logical::parser::test::test_parse_query_group_by_without_aggregate ... ignored
+test logical::parser::test::test_parse_query_left_join_produces_left_join_node ... ignored
+test logical::parser::test::test_parse_query_select_value_expression ... ignored
+test logical::parser::test::test_parse_query_select_value_literal ... ignored
+test logical::parser::test::test_parse_query_single_from_no_cross_join ... ignored
+test logical::parser::test::test_parse_query_with_group_by ... ignored
+test logical::parser::test::test_parse_query_with_simple_select_where_no_from_clause_bindings ... ignored
+test logical::parser::test::test_parse_query_with_simple_select_where_with_bindings ... ignored
+test logical::parser::test::test_parse_value_expression ... ignored
+test logical::types::test::test_expression_gen_physical ... ignored
+test logical::types::test::test_filter_with_map_gen_physical ... ignored
+test logical::types::test::test_formula_gen_physical ... ignored
+test logical::types::test::test_group_by_gen_physical ... ignored
+test logical::types::test::test_relation_gen_physical ... ignored
+test syntax::desugar::tests::test_desugar_between ... ignored
+test syntax::desugar::tests::test_desugar_coalesce_case_insensitive ... ignored
+test syntax::desugar::tests::test_desugar_coalesce_no_args ... ignored
+test syntax::desugar::tests::test_desugar_coalesce_single_arg ... ignored
+test syntax::desugar::tests::test_desugar_coalesce_three_args ... ignored
+test syntax::desugar::tests::test_desugar_coalesce_two_args ... ignored
+test syntax::desugar::tests::test_desugar_identity ... ignored
+test syntax::desugar::tests::test_desugar_nested_expression ... ignored
+test syntax::desugar::tests::test_desugar_not_between ... ignored
+test syntax::desugar::tests::test_desugar_nullif ... ignored
+test syntax::desugar::tests::test_desugar_nullif_case_insensitive ... ignored
+test syntax::desugar::tests::test_desugar_nullif_wrong_arg_count ... ignored
+test syntax::parser::test::test_array_constructor ... ignored
+test syntax::parser::test::test_between_case_insensitive ... ignored
+test syntax::parser::test::test_between_expression_structure ... ignored
+test syntax::parser::test::test_between_parsing ... ignored
+test syntax::parser::test::test_between_with_logical_and ... ignored
+test syntax::parser::test::test_boolean ... ignored
+test syntax::parser::test::test_case_when_expression ... ignored
+test syntax::parser::test::test_case_when_no_else ... ignored
+test syntax::parser::test::test_cast_bool_alias ... ignored
+test syntax::parser::test::test_cast_boolean_type ... ignored
+test syntax::parser::test::test_cast_float_type ... ignored
+test syntax::parser::test::test_cast_in_select ... ignored
+test syntax::parser::test::test_cast_in_where ... ignored
+test syntax::parser::test::test_cast_integer_alias ... ignored
+test syntax::parser::test::test_cast_parsing ... ignored
+test syntax::parser::test::test_cast_parsing_uppercase ... ignored
+test syntax::parser::test::test_cast_string_alias ... ignored
+test syntax::parser::test::test_cast_with_expression ... ignored
+test syntax::parser::test::test_coalesce_in_select ... ignored
+test syntax::parser::test::test_coalesce_in_where ... ignored
+test syntax::parser::test::test_coalesce_parsing ... ignored
+test syntax::parser::test::test_coalesce_three_args_parsing ... ignored
+test syntax::parser::test::test_condition_expression ... ignored
+test syntax::parser::test::test_cross_join_and_comma_both_work ... ignored
+test syntax::parser::test::test_cross_join_case_insensitive ... ignored
+test syntax::parser::test::test_cross_join_parsing ... ignored
+test syntax::parser::test::test_cross_join_three_way ... ignored
+test syntax::parser::test::test_cross_join_with_where ... ignored
+test syntax::parser::test::test_except_parsing ... ignored
+test syntax::parser::test::test_expression_term ... ignored
+test syntax::parser::test::test_float ... ignored
+test syntax::parser::test::test_func_call ... ignored
+test syntax::parser::test::test_group_by_expression ... ignored
+test syntax::parser::test::test_identifier ... ignored
+test syntax::parser::test::test_in_case_insensitive ... ignored
+test syntax::parser::test::test_in_expression_structure ... ignored
+test syntax::parser::test::test_in_parsing ... ignored
+test syntax::parser::test::test_in_with_and ... ignored
+test syntax::parser::test::test_integral ... ignored
+test syntax::parser::test::test_intersect_parsing ... ignored
+test syntax::parser::test::test_is_missing_expression_structure ... ignored
+test syntax::parser::test::test_is_missing_parsing ... ignored
+test syntax::parser::test::test_is_not_missing_expression_structure ... ignored
+test syntax::parser::test::test_is_not_missing_parsing ... ignored
+test syntax::parser::test::test_is_not_null_expression_structure ... ignored
+test syntax::parser::test::test_is_not_null_parsing ... ignored
+test syntax::parser::test::test_is_null_expression_structure ... ignored
+test syntax::parser::test::test_is_null_parsing ... ignored
+test syntax::parser::test::test_keyword_as_identifier_rejected_case_insensitive ... ignored
+test syntax::parser::test::test_left_join_parsing ... ignored
+test syntax::parser::test::test_left_outer_join_parsing ... ignored
+test syntax::parser::test::test_like_case_insensitive_keyword ... ignored
+test syntax::parser::test::test_like_expression_structure ... ignored
+test syntax::parser::test::test_like_parsing ... ignored
+test syntax::parser::test::test_like_with_and ... ignored
+test syntax::parser::test::test_missing_literal ... ignored
+test syntax::parser::test::test_mixed_case_query ... ignored
+test syntax::parser::test::test_multi_branch_case_when ... ignored
+test syntax::parser::test::test_not_between_expression_structure ... ignored
+test syntax::parser::test::test_not_between_parsing ... ignored
+test syntax::parser::test::test_not_in_expression_structure ... ignored
+test syntax::parser::test::test_not_in_parsing ... ignored
+test syntax::parser::test::test_not_like_expression_structure ... ignored
+test syntax::parser::test::test_not_like_parsing ... ignored
+test syntax::parser::test::test_null_literal ... ignored
+test syntax::parser::test::test_null_literal_uppercase ... ignored
+test syntax::parser::test::test_nullif_in_select ... ignored
+test syntax::parser::test::test_nullif_in_where ... ignored
+test syntax::parser::test::test_nullif_parsing ... ignored
+test syntax::parser::test::test_order_by_clause ... ignored
+test syntax::parser::test::test_ordering_term ... ignored
+test syntax::parser::test::test_parse_expression_at_precedence ... ignored
+test syntax::parser::test::test_parse_expression_atom ... ignored
+test syntax::parser::test::test_parse_expression_op ... ignored
+test syntax::parser::test::test_path_expr ... ignored
+test syntax::parser::test::test_select_distinct_parsing ... ignored
+test syntax::parser::test::test_select_expression_list ... ignored
+test syntax::parser::test::test_select_statement ... ignored
+test syntax::parser::test::test_select_statement_with_as ... ignored
+test syntax::parser::test::test_select_statement_with_func_call ... ignored
+test syntax::parser::test::test_select_statement_with_limit ... ignored
+test syntax::parser::test::test_select_statement_with_order ... ignored
+test syntax::parser::test::test_select_statement_with_within_group ... ignored
+test syntax::parser::test::test_select_stmt_error ... ignored
+test syntax::parser::test::test_select_value_statement ... ignored
+test syntax::parser::test::test_select_without_distinct ... ignored
+test syntax::parser::test::test_single_quote_literal_string ... ignored
+test syntax::parser::test::test_string_concat_chained ... ignored
+test syntax::parser::test::test_string_concat_parsing ... ignored
+test syntax::parser::test::test_string_literal ... ignored
+test syntax::parser::test::test_string_literal_case_preserved ... ignored
+test syntax::parser::test::test_subquery_in_select ... ignored
+test syntax::parser::test::test_subquery_in_where ... ignored
+test syntax::parser::test::test_tuple_constructor ... ignored
+test syntax::parser::test::test_union_all_parsing ... ignored
+test syntax::parser::test::test_union_parsing ... ignored
+test syntax::parser::test::test_uppercase_logical_operators ... ignored
+test syntax::parser::test::test_value_constructor ... ignored
+test syntax::parser::test::test_value_expression ... ignored
+test syntax::parser::test::test_wildcard_array_path ... ignored
+test syntax::parser::test::test_wildcard_array_path_nested ... ignored
+test syntax::parser::test::test_wildcard_attr_path ... ignored
+test syntax::parser::test::test_wildcard_attr_path_nested ... ignored
+
+test result: ok. 0 passed; 0 failed; 496 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/release/deps/logq-d748184d2426d684)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/bench_datasource.rs (target/release/deps/bench_datasource-7bf4fe191abf886b)
+Gnuplot not found, using plotters backend
+Benchmarking datasource/ELB
+Benchmarking datasource/ELB: Warming up for 3.0000 s
+Benchmarking datasource/ELB: Collecting 100 samples in estimated 9.2434 s (10k iterations)
+Benchmarking datasource/ELB: Analyzing
+datasource/ELB          time:   [904.37 us 909.31 us 914.39 us]
+                        thrpt:  [730.54 Kelem/s 734.63 Kelem/s 738.63 Kelem/s]
+                 change:
+                        time:   [+1.1542% +1.9083% +2.6261%] (p = 0.00 < 0.05)
+                        thrpt:  [-2.5589% -1.8726% -1.1411%]
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) high mild
+Benchmarking datasource/ALB
+Benchmarking datasource/ALB: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.6s, enable flat sampling, or reduce sample count to 50.
+Benchmarking datasource/ALB: Collecting 100 samples in estimated 9.6270 s (5050 iterations)
+Benchmarking datasource/ALB: Analyzing
+datasource/ALB          time:   [1.9080 ms 1.9223 ms 1.9400 ms]
+                        thrpt:  [515.99 Kelem/s 520.73 Kelem/s 524.64 Kelem/s]
+                 change:
+                        time:   [-0.6986% +0.4536% +1.7556%] (p = 0.53 > 0.05)
+                        thrpt:  [-1.7253% -0.4516% +0.7035%]
+                        No change in performance detected.
+Found 9 outliers among 100 measurements (9.00%)
+  5 (5.00%) high mild
+  4 (4.00%) high severe
+Benchmarking datasource/S3
+Benchmarking datasource/S3: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.2s, enable flat sampling, or reduce sample count to 50.
+Benchmarking datasource/S3: Collecting 100 samples in estimated 9.1656 s (5050 iterations)
+Benchmarking datasource/S3: Analyzing
+datasource/S3           time:   [1.8020 ms 1.8102 ms 1.8185 ms]
+                        thrpt:  [549.92 Kelem/s 552.44 Kelem/s 554.94 Kelem/s]
+                 change:
+                        time:   [-1.4663% -0.7144% -0.0458%] (p = 0.05 > 0.05)
+                        thrpt:  [+0.0458% +0.7195% +1.4881%]
+                        No change in performance detected.
+Found 7 outliers among 100 measurements (7.00%)
+  6 (6.00%) high mild
+  1 (1.00%) high severe
+Benchmarking datasource/Squid
+Benchmarking datasource/Squid: Warming up for 3.0000 s
+Benchmarking datasource/Squid: Collecting 100 samples in estimated 7.6177 s (10k iterations)
+Benchmarking datasource/Squid: Analyzing
+datasource/Squid        time:   [730.99 us 732.39 us 733.82 us]
+                        thrpt:  [1.3627 Melem/s 1.3654 Melem/s 1.3680 Melem/s]
+                 change:
+                        time:   [-5.1235% -3.9998% -2.9544%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.0443% +4.1665% +5.4002%]
+                        Performance has improved.
+Found 8 outliers among 100 measurements (8.00%)
+  6 (6.00%) high mild
+  2 (2.00%) high severe
+Benchmarking datasource/JSONL
+Benchmarking datasource/JSONL: Warming up for 3.0000 s
+Benchmarking datasource/JSONL: Collecting 100 samples in estimated 8.1342 s (10k iterations)
+Benchmarking datasource/JSONL: Analyzing
+datasource/JSONL        time:   [783.01 us 785.17 us 787.61 us]
+                        thrpt:  [1.2722 Melem/s 1.2762 Melem/s 1.2797 Melem/s]
+                 change:
+                        time:   [+0.2569% +0.6888% +1.1504%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.1373% -0.6841% -0.2563%]
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+     Running benches/bench_execution.rs (target/release/deps/bench_execution-74d7b901e82c6a54)
+Gnuplot not found, using plotters backend
+Benchmarking execution_e2e/E1_scan_limit
+Benchmarking execution_e2e/E1_scan_limit: Warming up for 3.0000 s
+Benchmarking execution_e2e/E1_scan_limit: Collecting 100 samples in estimated 5.1574 s (157k iterations)
+Benchmarking execution_e2e/E1_scan_limit: Analyzing
+execution_e2e/E1_scan_limit
+                        time:   [32.431 us 32.785 us 33.232 us]
+                        change: [+2.3559% +3.8177% +5.4286%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+Benchmarking execution_e2e/E2_groupby_count
+Benchmarking execution_e2e/E2_groupby_count: Warming up for 3.0000 s
+Benchmarking execution_e2e/E2_groupby_count: Collecting 100 samples in estimated 5.1313 s (2400 iterations)
+Benchmarking execution_e2e/E2_groupby_count: Analyzing
+execution_e2e/E2_groupby_count
+                        time:   [2.1007 ms 2.1070 ms 2.1149 ms]
+                        change: [-3.8124% -2.3777% -1.2413%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+Benchmarking execution_e2e/E3_filter_orderby
+Benchmarking execution_e2e/E3_filter_orderby: Warming up for 3.0000 s
+Benchmarking execution_e2e/E3_filter_orderby: Collecting 100 samples in estimated 5.0099 s (2.1M iterations)
+Benchmarking execution_e2e/E3_filter_orderby: Analyzing
+execution_e2e/E3_filter_orderby
+                        time:   [2.3199 us 2.3405 us 2.3638 us]
+                        change: [+9.0015% +10.178% +11.269%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low mild
+  9 (9.00%) high mild
+
+Benchmarking execution_map/1K
+Benchmarking execution_map/1K: Warming up for 3.0000 s
+Benchmarking execution_map/1K: Collecting 100 samples in estimated 5.1258 s (10k iterations)
+Benchmarking execution_map/1K: Analyzing
+execution_map/1K        time:   [211.65 us 212.94 us 214.36 us]
+                        change: [-0.8131% -0.0846% +0.6258%] (p = 0.83 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  5 (5.00%) high mild
+  1 (1.00%) high severe
+Benchmarking execution_map/10K
+Benchmarking execution_map/10K: Warming up for 3.0000 s
+Benchmarking execution_map/10K: Collecting 100 samples in estimated 5.2997 s (1100 iterations)
+Benchmarking execution_map/10K: Analyzing
+execution_map/10K       time:   [2.1540 ms 2.1667 ms 2.1801 ms]
+                        change: [+0.2293% +1.0195% +1.7774%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking execution_map/100K
+Benchmarking execution_map/100K: Warming up for 3.0000 s
+
+Warning: Unable to complete 20 samples in 10.0s. You may wish to increase target time to 10.8s, enable flat sampling, or reduce sample count to 10.
+Benchmarking execution_map/100K: Collecting 20 samples in estimated 10.775 s (210 iterations)
+Benchmarking execution_map/100K: Analyzing
+execution_map/100K      time:   [20.996 ms 21.202 ms 21.508 ms]
+                        change: [-0.8875% +0.1137% +1.0166%] (p = 0.82 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking execution_filter/1K
+Benchmarking execution_filter/1K: Warming up for 3.0000 s
+Benchmarking execution_filter/1K: Collecting 100 samples in estimated 6.1778 s (15k iterations)
+Benchmarking execution_filter/1K: Analyzing
+execution_filter/1K     time:   [140.48 us 141.50 us 142.57 us]
+                        change: [-6.0713% -5.2292% -4.3874%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking execution_filter/10K
+Benchmarking execution_filter/10K: Warming up for 3.0000 s
+Benchmarking execution_filter/10K: Collecting 100 samples in estimated 5.3613 s (1300 iterations)
+Benchmarking execution_filter/10K: Analyzing
+execution_filter/10K    time:   [1.4568 ms 1.4670 ms 1.4779 ms]
+                        change: [-1.5103% -0.3767% +0.6713%] (p = 0.52 > 0.05)
+                        No change in performance detected.
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking execution_filter/100K
+Benchmarking execution_filter/100K: Warming up for 3.0000 s
+Benchmarking execution_filter/100K: Collecting 20 samples in estimated 17.457 s (420 iterations)
+Benchmarking execution_filter/100K: Analyzing
+execution_filter/100K   time:   [14.288 ms 14.440 ms 14.596 ms]
+                        change: [-3.3926% -1.7032% -0.0728%] (p = 0.06 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking execution_limit/1K
+Benchmarking execution_limit/1K: Warming up for 3.0000 s
+Benchmarking execution_limit/1K: Collecting 100 samples in estimated 6.0418 s (15k iterations)
+Benchmarking execution_limit/1K: Analyzing
+execution_limit/1K      time:   [119.99 us 121.03 us 122.11 us]
+                        change: [+0.2735% +4.2467% +6.9641%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+Benchmarking execution_limit/10K
+Benchmarking execution_limit/10K: Warming up for 3.0000 s
+Benchmarking execution_limit/10K: Collecting 100 samples in estimated 5.1863 s (1300 iterations)
+Benchmarking execution_limit/10K: Analyzing
+execution_limit/10K     time:   [1.2504 ms 1.2706 ms 1.2936 ms]
+                        change: [+6.4930% +8.3698% +10.220%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 9 outliers among 100 measurements (9.00%)
+  5 (5.00%) high mild
+  4 (4.00%) high severe
+Benchmarking execution_limit/100K
+Benchmarking execution_limit/100K: Warming up for 3.0000 s
+Benchmarking execution_limit/100K: Collecting 100 samples in estimated 7.8723 s (200 iterations)
+Benchmarking execution_limit/100K: Analyzing
+execution_limit/100K    time:   [11.840 ms 11.911 ms 11.985 ms]
+                        change: [-1.0475% -0.1747% +0.7203%] (p = 0.70 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high mild
+
+Benchmarking profiling/scan_only
+Benchmarking profiling/scan_only: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.5s, enable flat sampling, or reduce sample count to 60.
+Benchmarking profiling/scan_only: Collecting 100 samples in estimated 5.4519 s (5050 iterations)
+Benchmarking profiling/scan_only: Analyzing
+profiling/scan_only     time:   [1.0965 ms 1.1134 ms 1.1350 ms]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking profiling/scan_filter
+Benchmarking profiling/scan_filter: Warming up for 3.0000 s
+Benchmarking profiling/scan_filter: Collecting 100 samples in estimated 5.2045 s (1500 iterations)
+Benchmarking profiling/scan_filter: Analyzing
+profiling/scan_filter   time:   [3.5111 ms 3.5381 ms 3.5684 ms]
+Found 9 outliers among 100 measurements (9.00%)
+  1 (1.00%) high mild
+  8 (8.00%) high severe
+Benchmarking profiling/scan_filter_groupby
+Benchmarking profiling/scan_filter_groupby: Warming up for 3.0000 s
+Benchmarking profiling/scan_filter_groupby: Collecting 100 samples in estimated 5.2456 s (1300 iterations)
+Benchmarking profiling/scan_filter_groupby: Analyzing
+profiling/scan_filter_groupby
+                        time:   [3.9989 ms 4.0192 ms 4.0409 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+     Running benches/bench_parser.rs (target/release/deps/bench_parser-bec79dfc3a666948)
+Gnuplot not found, using plotters backend
+Benchmarking parser/L1_trivial
+Benchmarking parser/L1_trivial: Warming up for 3.0000 s
+Benchmarking parser/L1_trivial: Collecting 100 samples in estimated 5.0017 s (6.8M iterations)
+Benchmarking parser/L1_trivial: Analyzing
+parser/L1_trivial       time:   [726.93 ns 731.35 ns 737.53 ns]
+                        change: [-5.3548% -4.8799% -4.3313%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high mild
+  2 (2.00%) high severe
+Benchmarking parser/L2_where
+Benchmarking parser/L2_where: Warming up for 3.0000 s
+Benchmarking parser/L2_where: Collecting 100 samples in estimated 5.0005 s (2.5M iterations)
+Benchmarking parser/L2_where: Analyzing
+parser/L2_where         time:   [1.9740 us 1.9862 us 2.0026 us]
+                        change: [-4.3176% -3.6822% -3.0073%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high severe
+Benchmarking parser/L3_group_order_limit
+Benchmarking parser/L3_group_order_limit: Warming up for 3.0000 s
+Benchmarking parser/L3_group_order_limit: Collecting 100 samples in estimated 5.0075 s (2.0M iterations)
+Benchmarking parser/L3_group_order_limit: Analyzing
+parser/L3_group_order_limit
+                        time:   [2.4467 us 2.4542 us 2.4621 us]
+                        change: [-4.4870% -4.1532% -3.8285%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking parser/L4_having_like
+Benchmarking parser/L4_having_like: Warming up for 3.0000 s
+Benchmarking parser/L4_having_like: Collecting 100 samples in estimated 5.0169 s (1.2M iterations)
+Benchmarking parser/L4_having_like: Analyzing
+parser/L4_having_like   time:   [4.1982 us 4.2273 us 4.2645 us]
+                        change: [-1.8392% -1.1214% -0.3659%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+Benchmarking parser/L5_casewhen_join
+Benchmarking parser/L5_casewhen_join: Warming up for 3.0000 s
+Benchmarking parser/L5_casewhen_join: Collecting 100 samples in estimated 5.0164 s (1.0M iterations)
+Benchmarking parser/L5_casewhen_join: Analyzing
+parser/L5_casewhen_join time:   [4.9557 us 4.9929 us 5.0377 us]
+                        change: [-2.6720% -2.0652% -1.3852%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+Benchmarking parser/L6_in_union
+Benchmarking parser/L6_in_union: Warming up for 3.0000 s
+Benchmarking parser/L6_in_union: Collecting 100 samples in estimated 5.0085 s (2.5M iterations)
+Benchmarking parser/L6_in_union: Analyzing
+parser/L6_in_union      time:   [1.9937 us 2.0027 us 2.0142 us]
+                        change: [-4.1702% -3.6041% -3.0629%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+
+     Running benches/bench_udf.rs (target/release/deps/bench_udf-c2109b63bda29645)
+Gnuplot not found, using plotters backend
+Benchmarking udf/upper
+Benchmarking udf/upper: Warming up for 3.0000 s
+Benchmarking udf/upper: Collecting 100 samples in estimated 5.0001 s (163M iterations)
+Benchmarking udf/upper: Analyzing
+udf/upper               time:   [30.121 ns 30.229 ns 30.366 ns]
+                        change: [-0.6309% +0.0488% +0.6015%] (p = 0.89 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking udf/round
+Benchmarking udf/round: Warming up for 3.0000 s
+Benchmarking udf/round: Collecting 100 samples in estimated 5.0000 s (263M iterations)
+Benchmarking udf/round: Analyzing
+udf/round               time:   [19.040 ns 19.081 ns 19.124 ns]
+                        change: [-5.0076% -3.9358% -3.1393%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low severe
+  2 (2.00%) low mild
+Benchmarking udf/date_part
+Benchmarking udf/date_part: Warming up for 3.0000 s
+Benchmarking udf/date_part: Collecting 100 samples in estimated 5.0000 s (191M iterations)
+Benchmarking udf/date_part: Analyzing
+udf/date_part           time:   [26.085 ns 26.236 ns 26.417 ns]
+                        change: [-2.7882% -2.2475% -1.6935%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 7 outliers among 100 measurements (7.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+Benchmarking udf/array_contains
+Benchmarking udf/array_contains: Warming up for 3.0000 s
+Benchmarking udf/array_contains: Collecting 100 samples in estimated 5.0001 s (236M iterations)
+Benchmarking udf/array_contains: Analyzing
+udf/array_contains      time:   [20.814 ns 20.904 ns 21.024 ns]
+                        change: [-5.4278% -4.8459% -4.0597%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+  5 (5.00%) high severe
+Benchmarking udf/map_keys
+Benchmarking udf/map_keys: Warming up for 3.0000 s
+Benchmarking udf/map_keys: Collecting 100 samples in estimated 5.0001 s (92M iterations)
+Benchmarking udf/map_keys: Analyzing
+udf/map_keys            time:   [54.028 ns 54.258 ns 54.540 ns]
+                        change: [-2.0419% -1.5196% -0.9738%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high severe
+Benchmarking udf/regexp_like
+Benchmarking udf/regexp_like: Warming up for 3.0000 s
+Benchmarking udf/regexp_like: Collecting 100 samples in estimated 5.0035 s (1.7M iterations)
+Benchmarking udf/regexp_like: Analyzing
+udf/regexp_like         time:   [2.8273 us 2.8528 us 2.8820 us]
+                        change: [-4.1641% -3.5110% -2.8722%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
