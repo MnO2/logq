@@ -11,6 +11,7 @@ pub mod execution;
 pub mod functions;
 pub mod logical;
 pub mod syntax;
+pub mod simd;
 
 #[cfg(feature = "bench-internals")]
 pub mod bench_internals {
