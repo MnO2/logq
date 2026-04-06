@@ -31,7 +31,8 @@ impl SelectionVector {
         }
     }
 
-    pub fn is_active(&self, idx: usize, _total: usize) -> bool {
+    pub fn is_active(&self, idx: usize, total: usize) -> bool {
+        debug_assert!(idx < total, "is_active index {} out of bounds (total {})", idx, total);
         match self {
             SelectionVector::All => true,
             SelectionVector::Bitmap(bm) => bm.is_set(idx),
