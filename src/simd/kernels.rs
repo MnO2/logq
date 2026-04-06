@@ -90,6 +90,40 @@ pub fn str_contains_scalar(
     }
 }
 
+// --- Aggregation kernels ---
+
+const HASH_MULT: u64 = 0x517cc1b727220a95;
+
+/// Sum i32 values where selection bitmap is set.
+/// Branch-free multiply-accumulate that LLVM auto-vectorizes.
+pub fn sum_i32_selected(data: &[i32], selection: &Bitmap) -> i64 {
+    let mask = selection.unpack_to_bytes(data.len());
+    let mut total: i64 = 0;
+    for i in 0..data.len() {
+        total += (data[i] as i64) * (mask[i] as i64);
+    }
+    total
+}
+
+/// Count active rows in a selection bitmap.
+pub fn count_selected(selection: &Bitmap) -> usize {
+    selection.count_ones()
+}
+
+/// Multiply-shift hash for integer column. Auto-vectorizable.
+pub fn hash_column_i32(data: &[i32], hashes: &mut [u64]) {
+    for i in 0..data.len() {
+        hashes[i] = (data[i] as u64).wrapping_mul(HASH_MULT);
+    }
+}
+
+/// Combine per-column hashes with rotation-xor-multiply.
+pub fn hash_combine(existing: &mut [u64], new: &[u64]) {
+    for (h, &n) in existing.iter_mut().zip(new.iter()) {
+        *h = (h.rotate_left(5) ^ n).wrapping_mul(HASH_MULT);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +178,51 @@ mod tests {
         let mut result = vec![0u8; 4];
         str_eq_batch(data, &offsets, needle, &mut result);
         assert_eq!(result, vec![1, 0, 1, 0]);
+    }
+
+    #[test]
+    fn test_sum_i32_selected() {
+        let data = [10i32, 20, 30, 40, 50];
+        let mut bm = Bitmap::all_unset(5);
+        bm.set(0); bm.set(2); bm.set(4); // select 10, 30, 50
+        assert_eq!(sum_i32_selected(&data, &bm), 90);
+    }
+
+    #[test]
+    fn test_sum_i32_all() {
+        let data = [1i32, 2, 3, 4, 5];
+        let bm = Bitmap::all_set(5);
+        assert_eq!(sum_i32_selected(&data, &bm), 15);
+    }
+
+    #[test]
+    fn test_count_selected() {
+        let mut bm = Bitmap::all_unset(100);
+        bm.set(0); bm.set(50); bm.set(99);
+        assert_eq!(count_selected(&bm), 3);
+    }
+
+    #[test]
+    fn test_hash_column_i32() {
+        let data = [1i32, 2, 3, 1];
+        let mut hashes = vec![0u64; 4];
+        hash_column_i32(&data, &mut hashes);
+        // Same input → same hash
+        assert_eq!(hashes[0], hashes[3]);
+        // Different inputs → different hashes (with high probability)
+        assert_ne!(hashes[0], hashes[1]);
+    }
+
+    #[test]
+    fn test_hash_combine() {
+        let mut a = vec![100u64, 200, 300];
+        let b = vec![1u64, 2, 3];
+        hash_combine(&mut a, &b);
+        // Verify combine changed values
+        assert_ne!(a[0], 100);
+        // Verify determinism
+        let mut a2 = vec![100u64, 200, 300];
+        hash_combine(&mut a2, &b);
+        assert_eq!(a, a2);
     }
 }
