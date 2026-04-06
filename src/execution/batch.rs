@@ -1,6 +1,7 @@
 // src/execution/batch.rs
 
 use crate::common::types::Value;
+use crate::execution::types::StreamResult;
 use crate::simd::bitmap::Bitmap;
 use crate::simd::padded_vec::PaddedVec;
 use crate::simd::selection::SelectionVector;
@@ -73,6 +74,13 @@ pub enum ColumnType {
     Mixed,
 }
 
+/// Batch-oriented stream trait. Replaces RecordStream for SIMD operators.
+pub trait BatchStream {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>>;
+    fn schema(&self) -> &BatchSchema;
+    fn close(&self);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +113,34 @@ mod tests {
         let offsets = offsets_builder.seal();
         assert_eq!(&*data, b"helloworld");
         assert_eq!(&*offsets, &[0u32, 5, 10]);
+    }
+
+    #[test]
+    fn test_batch_stream_trait_is_object_safe() {
+        // Verify trait can be used as dyn
+        fn _takes_stream(_s: &dyn BatchStream) {}
+    }
+
+    struct EmptyBatchStream {
+        schema: BatchSchema,
+    }
+
+    impl BatchStream for EmptyBatchStream {
+        fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
+            Ok(None)
+        }
+        fn schema(&self) -> &BatchSchema {
+            &self.schema
+        }
+        fn close(&self) {}
+    }
+
+    #[test]
+    fn test_empty_batch_stream() {
+        let mut stream = EmptyBatchStream {
+            schema: BatchSchema { names: vec![], types: vec![] },
+        };
+        assert!(stream.next_batch().unwrap().is_none());
     }
 
     #[test]
