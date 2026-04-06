@@ -5,6 +5,7 @@ use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::batch::{BatchToRowAdapter, BatchStream};
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
+use crate::execution::batch_project::BatchProjectOperator;
 use crate::execution::batch_scan::BatchScanOperator;
 use crate::execution::log_schema::LogSchema;
 use crate::execution::stream::ProjectionStream;
@@ -701,6 +702,60 @@ impl Node {
                     Some(Ok(batch_stream)) => {
                         let limit = BatchLimitOperator::new(batch_stream, *count);
                         Some(Ok(Box::new(limit) as Box<dyn BatchStream>))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    None => None,
+                }
+            }
+            Node::Map(named_list, source) => {
+                // Only handle simple variable projections in batch path
+                let is_simple = named_list.iter().all(|named| match named {
+                    Named::Expression(Expression::Variable(_), _) => true,
+                    Named::Star => true,
+                    _ => false,
+                });
+                if !is_simple {
+                    return None; // Complex expressions need row-based MapStream
+                }
+                match source.try_get_batch(variables, registry, required_fields) {
+                    Some(Ok(batch_stream)) => {
+                        // Extract output column names from named_list
+                        let output_names: Vec<String> = named_list.iter().filter_map(|named| {
+                            match named {
+                                Named::Expression(Expression::Variable(path), _) => {
+                                    path.path_segments.last().and_then(|seg| {
+                                        if let PathSegment::AttrName(name) = seg {
+                                            Some(name.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }).collect();
+                        if output_names.is_empty() && named_list.iter().any(|n| matches!(n, Named::Star)) {
+                            // SELECT * — pass through without projection
+                            return Some(Ok(batch_stream));
+                        }
+                        let project = BatchProjectOperator::new(batch_stream, output_names);
+                        Some(Ok(Box::new(project) as Box<dyn BatchStream>))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    None => None,
+                }
+            }
+            Node::GroupBy(keys, aggregates, source) => {
+                match source.try_get_batch(variables, registry, required_fields) {
+                    Some(Ok(batch_stream)) => {
+                        let groupby = crate::execution::batch_groupby::BatchGroupByOperator::new(
+                            batch_stream,
+                            keys.clone(),
+                            aggregates.clone(),
+                            variables.clone(),
+                            registry.clone(),
+                        );
+                        Some(Ok(Box::new(groupby) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
                     None => None,
@@ -2412,5 +2467,51 @@ mod tests {
             count += 1;
         }
         assert!(count > 0, "should have at least one matching record");
+    }
+
+    #[test]
+    fn test_batch_groupby_through_node_get() {
+        let path = std::path::PathBuf::from("data/AWSELB.log");
+        if !path.exists() { return; }
+
+        let registry = test_registry();
+
+        // SELECT elb_status_code, count(*) FROM elb GROUP BY elb_status_code
+        let ds = Node::DataSource(
+            DataSource::File(path, "elb".to_string(), "elb".to_string()),
+            vec![],
+        );
+        let groupby = Node::GroupBy(
+            vec![PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())])],
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("cnt".to_string()),
+            )],
+            Box::new(ds),
+        );
+        let map = Node::Map(vec![
+            Named::Expression(
+                Expression::Variable(PathExpr::new(vec![
+                    PathSegment::AttrName("elb_status_code".to_string()),
+                ])),
+                None,
+            ),
+            Named::Expression(
+                Expression::Variable(PathExpr::new(vec![
+                    PathSegment::AttrName("cnt".to_string()),
+                ])),
+                None,
+            ),
+        ], Box::new(groupby));
+
+        let mut stream = map.get(Variables::new(), registry).unwrap();
+        let mut total_rows = 0;
+        while let Some(record) = stream.next().unwrap() {
+            let vars = record.to_variables();
+            assert!(vars.contains_key("elb_status_code"));
+            assert!(vars.contains_key("cnt"));
+            total_rows += 1;
+        }
+        assert!(total_rows > 0);
     }
 }
