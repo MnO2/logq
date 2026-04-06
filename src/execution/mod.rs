@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod batch_filter;
 pub mod batch_predicate;
 pub mod batch_scan;
 pub mod batch_tokenizer;
