@@ -717,6 +717,13 @@ impl Node {
                 if !is_simple {
                     return None; // Complex expressions need row-based MapStream
                 }
+                // SELECT * over a bare DataSource gains nothing from batch —
+                // columnar parse + BatchToRowAdapter is pure overhead.
+                if named_list.iter().any(|n| matches!(n, Named::Star))
+                    && matches!(**source, Node::DataSource(..))
+                {
+                    return None;
+                }
                 match source.try_get_batch(variables, registry, required_fields) {
                     Some(Ok(batch_stream)) => {
                         // Extract output column names from named_list
@@ -766,11 +773,16 @@ impl Node {
     }
 
     pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
-        // Try batch pipeline first for supported node patterns
-        let required = self.compute_required_fields_for_batch();
-        if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required) {
-            let batch_stream = batch_result?;
-            return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
+        // Try batch pipeline first for supported node patterns.
+        // Skip for bare DataSource — the columnar round-trip (parse to columns →
+        // BatchToRowAdapter back to rows) is slower than direct row-based parsing
+        // when there's no downstream operator (Filter, GroupBy) that benefits.
+        if !matches!(self, Node::DataSource(..)) {
+            let required = self.compute_required_fields_for_batch();
+            if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required) {
+                let batch_stream = batch_result?;
+                return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
+            }
         }
 
         match self {
