@@ -42,4 +42,16 @@ pub mod bench_internals {
 
     // Common types
     pub use crate::common::types::{Value, Variables, VariableName, DataSource, DataSourceRegistry};
+
+    // SIMD foundation types
+    pub use crate::simd::bitmap::Bitmap;
+    pub use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
+    pub use crate::simd::selection::SelectionVector;
+    pub use crate::simd::kernels::*;
+    pub use crate::simd::filter_cache::evaluate_cached_two_pass;
+
+    // Batch execution types
+    pub use crate::execution::batch::{
+        TypedColumn, ColumnBatch, BatchSchema, ColumnType, BatchStream, BATCH_SIZE,
+    };
 }
