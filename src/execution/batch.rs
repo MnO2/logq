@@ -9,6 +9,11 @@ use crate::simd::selection::SelectionVector;
 pub const BATCH_SIZE: usize = 1024;
 
 /// A typed columnar array with NULL and MISSING tracking.
+///
+/// Each variant carries two bitmaps encoding PartiQL's three-valued logic:
+/// - `missing` bit 0: value is MISSING (`null` bit and data are don't-care)
+/// - `missing` bit 1, `null` bit 0: value is NULL
+/// - `missing` bit 1, `null` bit 1: value is present (read from `data`)
 pub enum TypedColumn {
     Int32 {
         data: PaddedVec<i32>,
