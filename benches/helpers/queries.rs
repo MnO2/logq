@@ -10,3 +10,8 @@ pub const PARSE_L6: &str = "SELECT a, b FROM t WHERE a IN (10, 20, 30) AND b IS 
 pub const EXEC_E1: &str = "SELECT * FROM elb LIMIT 10";
 pub const EXEC_E2: &str = "SELECT elbname, count(*) FROM elb GROUP BY elbname";
 pub const EXEC_E3: &str = r#"SELECT elbname, elb_status_code FROM elb WHERE elb_status_code = "200" ORDER BY elbname"#;
+
+/// Execution Tier C queries -- component-level profiling (run against data/AWSELB.log)
+pub const PROF_SCAN_ONLY: &str = "SELECT * FROM elb";
+pub const PROF_SCAN_FILTER: &str = r#"SELECT * FROM elb WHERE elb_status_code = "200""#;
+pub const PROF_SCAN_FILTER_GROUPBY: &str = r#"SELECT elb_status_code, count(*) FROM elb WHERE elb_status_code = "200" GROUP BY elb_status_code"#;

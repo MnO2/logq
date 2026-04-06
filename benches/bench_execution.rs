@@ -164,5 +164,46 @@ fn bench_execution_tier_b(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_execution_tier_a, bench_execution_tier_b);
+/// Tier C: Component-level profiling benchmarks using real AWSELB.log
+/// Measures each execution phase individually to establish profiling baseline.
+fn bench_execution_tier_c(c: &mut Criterion) {
+    let path = PathBuf::from("data/AWSELB.log");
+    if !path.exists() {
+        eprintln!("Skipping Tier C benchmarks: data/AWSELB.log not found");
+        return;
+    }
+
+    let registry = Arc::new(functions::register_all().unwrap());
+    let mut group = c.benchmark_group("profiling");
+
+    let queries = [
+        ("scan_only", PROF_SCAN_ONLY),
+        ("scan_filter", PROF_SCAN_FILTER),
+        ("scan_filter_groupby", PROF_SCAN_FILTER_GROUPBY),
+    ];
+
+    for (name, query) in &queries {
+        let data_source = ctypes::DataSource::File(
+            path.clone(),
+            "elb".to_string(),
+            "elb".to_string(),
+        );
+        let data_sources: ctypes::DataSourceRegistry = vec![("elb".to_string(), data_source)].into_iter().collect();
+        let reg = registry.clone();
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                let result = logq::app::run_to_records_with_registry(
+                    black_box(query),
+                    data_sources.clone(),
+                    reg.clone(),
+                );
+                let _ = black_box(result);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_execution_tier_a, bench_execution_tier_b, bench_execution_tier_c);
 criterion_main!(benches);
