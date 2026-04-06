@@ -4,7 +4,7 @@ use crate::common::types::Value;
 use crate::execution::stream::{Record, RecordStream};
 use crate::execution::types::StreamResult;
 use crate::simd::bitmap::Bitmap;
-use crate::simd::padded_vec::PaddedVec;
+use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
 use crate::simd::selection::SelectionVector;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
@@ -224,6 +224,191 @@ impl RecordStream for BatchToRowAdapter {
     }
 }
 
+/// Converts a [`RecordStream`] into a [`BatchStream`] by buffering up to
+/// [`BATCH_SIZE`] rows and packing them into columnar [`ColumnBatch`]es.
+pub struct RowToBatchAdapter {
+    source: Box<dyn RecordStream>,
+    schema: BatchSchema,
+    done: bool,
+}
+
+impl RowToBatchAdapter {
+    pub fn new(source: Box<dyn RecordStream>, schema: BatchSchema) -> Self {
+        RowToBatchAdapter {
+            source,
+            schema,
+            done: false,
+        }
+    }
+}
+
+impl BatchStream for RowToBatchAdapter {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        if self.done {
+            return Ok(None);
+        }
+
+        // Collect up to BATCH_SIZE records from the source.
+        let mut records = Vec::with_capacity(BATCH_SIZE);
+        for _ in 0..BATCH_SIZE {
+            match self.source.next()? {
+                Some(record) => records.push(record),
+                None => {
+                    self.done = true;
+                    break;
+                }
+            }
+        }
+
+        if records.is_empty() {
+            return Ok(None);
+        }
+
+        let num_rows = records.len();
+        let num_cols = self.schema.types.len();
+        let mut columns = Vec::with_capacity(num_cols);
+
+        for col_idx in 0..num_cols {
+            let col_name = &self.schema.names[col_idx];
+            let col_type = &self.schema.types[col_idx];
+
+            let column = match col_type {
+                ColumnType::Int32 => {
+                    let mut data = Vec::with_capacity(num_rows);
+                    let mut null_bm = Bitmap::all_set(num_rows);
+                    let mut missing_bm = Bitmap::all_set(num_rows);
+                    for (row_idx, record) in records.iter().enumerate() {
+                        match record.to_variables().get(col_name) {
+                            Some(Value::Int(v)) => data.push(*v),
+                            Some(Value::Null) => {
+                                data.push(0);
+                                null_bm.unset(row_idx);
+                            }
+                            Some(Value::Missing) | None => {
+                                data.push(0);
+                                missing_bm.unset(row_idx);
+                            }
+                            _ => {
+                                // Type mismatch — treat as null
+                                data.push(0);
+                                null_bm.unset(row_idx);
+                            }
+                        }
+                    }
+                    TypedColumn::Int32 {
+                        data: PaddedVec::from_vec(data),
+                        null: null_bm,
+                        missing: missing_bm,
+                    }
+                }
+                ColumnType::Float32 => {
+                    let mut data = Vec::with_capacity(num_rows);
+                    let mut null_bm = Bitmap::all_set(num_rows);
+                    let mut missing_bm = Bitmap::all_set(num_rows);
+                    for (row_idx, record) in records.iter().enumerate() {
+                        match record.to_variables().get(col_name) {
+                            Some(Value::Float(v)) => data.push(v.into_inner()),
+                            Some(Value::Null) => {
+                                data.push(0.0);
+                                null_bm.unset(row_idx);
+                            }
+                            Some(Value::Missing) | None => {
+                                data.push(0.0);
+                                missing_bm.unset(row_idx);
+                            }
+                            _ => {
+                                data.push(0.0);
+                                null_bm.unset(row_idx);
+                            }
+                        }
+                    }
+                    TypedColumn::Float32 {
+                        data: PaddedVec::from_vec(data),
+                        null: null_bm,
+                        missing: missing_bm,
+                    }
+                }
+                ColumnType::Utf8 => {
+                    let mut data_builder = PaddedVecBuilder::<u8>::new();
+                    let mut offsets_builder =
+                        PaddedVecBuilder::<u32>::with_capacity(num_rows + 1);
+                    offsets_builder.push(0);
+                    let mut null_bm = Bitmap::all_set(num_rows);
+                    let mut missing_bm = Bitmap::all_set(num_rows);
+                    for (row_idx, record) in records.iter().enumerate() {
+                        match record.to_variables().get(col_name) {
+                            Some(Value::String(s)) => {
+                                data_builder.extend_from_slice(s.as_bytes());
+                                offsets_builder.push(data_builder.len() as u32);
+                            }
+                            Some(Value::Null) => {
+                                null_bm.unset(row_idx);
+                                offsets_builder.push(data_builder.len() as u32);
+                            }
+                            Some(Value::Missing) | None => {
+                                missing_bm.unset(row_idx);
+                                offsets_builder.push(data_builder.len() as u32);
+                            }
+                            _ => {
+                                null_bm.unset(row_idx);
+                                offsets_builder.push(data_builder.len() as u32);
+                            }
+                        }
+                    }
+                    TypedColumn::Utf8 {
+                        data: data_builder.seal(),
+                        offsets: offsets_builder.seal(),
+                        null: null_bm,
+                        missing: missing_bm,
+                    }
+                }
+                ColumnType::Boolean | ColumnType::DateTime | ColumnType::Mixed => {
+                    let mut data = Vec::with_capacity(num_rows);
+                    let mut null_bm = Bitmap::all_set(num_rows);
+                    let mut missing_bm = Bitmap::all_set(num_rows);
+                    for (row_idx, record) in records.iter().enumerate() {
+                        match record.to_variables().get(col_name) {
+                            Some(Value::Null) => {
+                                data.push(Value::Null);
+                                null_bm.unset(row_idx);
+                            }
+                            Some(Value::Missing) | None => {
+                                data.push(Value::Missing);
+                                missing_bm.unset(row_idx);
+                            }
+                            Some(v) => {
+                                data.push(v.clone());
+                            }
+                        }
+                    }
+                    TypedColumn::Mixed {
+                        data,
+                        null: null_bm,
+                        missing: missing_bm,
+                    }
+                }
+            };
+
+            columns.push(column);
+        }
+
+        Ok(Some(ColumnBatch {
+            columns,
+            names: self.schema.names.clone(),
+            selection: SelectionVector::All,
+            len: num_rows,
+        }))
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.schema
+    }
+
+    fn close(&self) {
+        self.source.close();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +562,44 @@ mod tests {
         let r2 = adapter.next().unwrap().unwrap();
         assert_eq!(r2.to_variables()["x"], crate::common::types::Value::Int(30));
         assert!(adapter.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_row_to_batch_adapter() {
+        use crate::execution::stream::InMemoryStream;
+        use std::collections::VecDeque;
+        use crate::common::types::Value;
+
+        let records = vec![
+            Record::new_with_variables({
+                let mut v = LinkedHashMap::new();
+                v.insert("x".to_string(), Value::Int(1));
+                v.insert("y".to_string(), Value::String("hello".to_string()));
+                v
+            }),
+            Record::new_with_variables({
+                let mut v = LinkedHashMap::new();
+                v.insert("x".to_string(), Value::Int(2));
+                v.insert("y".to_string(), Value::String("world".to_string()));
+                v
+            }),
+        ];
+        let source = InMemoryStream::new(VecDeque::from(records));
+        let schema = BatchSchema {
+            names: vec!["x".to_string(), "y".to_string()],
+            types: vec![ColumnType::Int32, ColumnType::Utf8],
+        };
+        let mut adapter = RowToBatchAdapter::new(Box::new(source), schema);
+        let batch = adapter.next_batch().unwrap().unwrap();
+        assert_eq!(batch.len, 2);
+        assert_eq!(batch.columns.len(), 2);
+        match &batch.columns[0] {
+            TypedColumn::Int32 { data, .. } => {
+                assert_eq!(data[0], 1);
+                assert_eq!(data[1], 2);
+            }
+            _ => panic!("expected Int32"),
+        }
+        assert!(adapter.next_batch().unwrap().is_none());
     }
 }
