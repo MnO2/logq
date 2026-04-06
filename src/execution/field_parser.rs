@@ -178,7 +178,134 @@ pub(crate) fn parse_field_column_selected(
                 missing: missing_bm,
             }
         }
-        _ => parse_field_column(lines, fields, field_idx, datatype),
+        DataType::Integral => {
+            let mut data = Vec::with_capacity(len);
+            let mut null_bm = Bitmap::all_set(len);
+            let missing_bm = Bitmap::all_set(len);
+            for row in 0..len {
+                if !selection.is_active(row, len) {
+                    data.push(0);
+                    null_bm.unset(row);
+                    continue;
+                }
+                if field_idx < fields[row].len() {
+                    let (start, end) = fields[row][field_idx];
+                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("0");
+                    match s.parse::<i32>() {
+                        Ok(v) => data.push(v),
+                        Err(_) => { data.push(0); null_bm.unset(row); }
+                    }
+                } else {
+                    data.push(0);
+                    null_bm.unset(row);
+                }
+            }
+            TypedColumn::Int32 {
+                data: PaddedVec::from_vec(data),
+                null: null_bm,
+                missing: missing_bm,
+            }
+        }
+        DataType::Float => {
+            let mut data = Vec::with_capacity(len);
+            let mut null_bm = Bitmap::all_set(len);
+            let missing_bm = Bitmap::all_set(len);
+            for row in 0..len {
+                if !selection.is_active(row, len) {
+                    data.push(0.0);
+                    null_bm.unset(row);
+                    continue;
+                }
+                if field_idx < fields[row].len() {
+                    let (start, end) = fields[row][field_idx];
+                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("0");
+                    match s.parse::<f32>() {
+                        Ok(v) => data.push(v),
+                        Err(_) => { data.push(0.0); null_bm.unset(row); }
+                    }
+                } else {
+                    data.push(0.0);
+                    null_bm.unset(row);
+                }
+            }
+            TypedColumn::Float32 {
+                data: PaddedVec::from_vec(data),
+                null: null_bm,
+                missing: missing_bm,
+            }
+        }
+        DataType::DateTime => {
+            let mut data = Vec::with_capacity(len);
+            let null_bm = Bitmap::all_set(len);
+            let missing_bm = Bitmap::all_set(len);
+            for row in 0..len {
+                if !selection.is_active(row, len) {
+                    data.push(Value::Null);
+                    continue;
+                }
+                if field_idx < fields[row].len() {
+                    let (start, end) = fields[row][field_idx];
+                    let raw = &lines[row][start..end];
+                    let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
+                    match crate::execution::datasource::parse_utc_timestamp(s) {
+                        Ok(dt) => data.push(Value::DateTime(dt)),
+                        Err(_) => data.push(Value::Null),
+                    }
+                } else {
+                    data.push(Value::Null);
+                }
+            }
+            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+        }
+        DataType::Host => {
+            let mut data = Vec::with_capacity(len);
+            let null_bm = Bitmap::all_set(len);
+            let missing_bm = Bitmap::all_set(len);
+            for row in 0..len {
+                if !selection.is_active(row, len) {
+                    data.push(Value::Null);
+                    continue;
+                }
+                if field_idx < fields[row].len() {
+                    let (start, end) = fields[row][field_idx];
+                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("-");
+                    if s == "-" {
+                        data.push(Value::Null);
+                    } else {
+                        match crate::common::types::parse_host(s) {
+                            Ok(host) => data.push(Value::Host(Box::new(host))),
+                            Err(_) => data.push(Value::Null),
+                        }
+                    }
+                } else {
+                    data.push(Value::Null);
+                }
+            }
+            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+        }
+        DataType::HttpRequest => {
+            let mut data = Vec::with_capacity(len);
+            let null_bm = Bitmap::all_set(len);
+            let missing_bm = Bitmap::all_set(len);
+            for row in 0..len {
+                if !selection.is_active(row, len) {
+                    data.push(Value::Null);
+                    continue;
+                }
+                if field_idx < fields[row].len() {
+                    let (start, end) = fields[row][field_idx];
+                    let raw = &lines[row][start..end];
+                    let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
+                    match crate::common::types::parse_http_request(s) {
+                        Ok(req) => data.push(Value::HttpRequest(Box::new(req))),
+                        Err(_) => data.push(Value::Null),
+                    }
+                } else {
+                    data.push(Value::Null);
+                }
+            }
+            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+        }
     }
 }
 
@@ -266,6 +393,65 @@ mod tests {
                 assert_eq!(s2, b"ccc");
             }
             _ => panic!("expected Utf8"),
+        }
+    }
+
+    #[test]
+    fn test_parse_int_selected_skips_inactive() {
+        let lines: Vec<Vec<u8>> = vec![
+            b"100".to_vec(),
+            b"200".to_vec(),
+            b"300".to_vec(),
+        ];
+        let fields = vec![
+            vec![(0, 3)],
+            vec![(0, 3)],
+            vec![(0, 3)],
+        ];
+        let mut sel_bm = Bitmap::all_unset(3);
+        sel_bm.set(0);
+        sel_bm.set(2);
+        let sel = SelectionVector::Bitmap(sel_bm);
+        let col = parse_field_column_selected(&lines, &fields, 0, &DataType::Integral, &sel);
+        match col {
+            TypedColumn::Int32 { data, null, .. } => {
+                assert_eq!(data[0], 100);
+                assert_eq!(data[1], 0);   // inactive row gets default 0
+                assert_eq!(data[2], 300);
+                assert!(null.is_set(0));   // active, parsed ok
+                assert!(!null.is_set(1));  // inactive, null unset
+                assert!(null.is_set(2));   // active, parsed ok
+            }
+            _ => panic!("expected Int32"),
+        }
+    }
+
+    #[test]
+    fn test_parse_float_selected_skips_inactive() {
+        let lines: Vec<Vec<u8>> = vec![
+            b"1.5".to_vec(),
+            b"2.5".to_vec(),
+            b"3.5".to_vec(),
+        ];
+        let fields = vec![
+            vec![(0, 3)],
+            vec![(0, 3)],
+            vec![(0, 3)],
+        ];
+        let mut sel_bm = Bitmap::all_unset(3);
+        sel_bm.set(0);
+        let sel = SelectionVector::Bitmap(sel_bm);
+        let col = parse_field_column_selected(&lines, &fields, 0, &DataType::Float, &sel);
+        match col {
+            TypedColumn::Float32 { data, null, .. } => {
+                assert_eq!(data[0], 1.5);
+                assert_eq!(data[1], 0.0);  // inactive row gets default 0.0
+                assert_eq!(data[2], 0.0);  // inactive row gets default 0.0
+                assert!(null.is_set(0));    // active, parsed ok
+                assert!(!null.is_set(1));   // inactive, null unset
+                assert!(!null.is_set(2));   // inactive, null unset
+            }
+            _ => panic!("expected Float32"),
         }
     }
 
