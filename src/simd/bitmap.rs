@@ -2,7 +2,7 @@
 /// Bit 1 = present/true, Bit 0 = absent/false.
 #[derive(Clone, Debug)]
 pub struct Bitmap {
-    pub words: Vec<u64>,
+    pub(crate) words: Vec<u64>,
 }
 
 impl Bitmap {
@@ -21,31 +21,39 @@ impl Bitmap {
         Self { words: vec![0u64; num_words] }
     }
 
+    #[inline]
     pub fn is_set(&self, idx: usize) -> bool {
+        debug_assert!(idx < self.words.len() * 64);
         let word = idx / 64;
         let bit = idx % 64;
         (self.words[word] >> bit) & 1 == 1
     }
 
+    #[inline]
     pub fn set(&mut self, idx: usize) {
+        debug_assert!(idx < self.words.len() * 64);
         let word = idx / 64;
         let bit = idx % 64;
         self.words[word] |= 1u64 << bit;
     }
 
+    #[inline]
     pub fn unset(&mut self, idx: usize) {
+        debug_assert!(idx < self.words.len() * 64);
         let word = idx / 64;
         let bit = idx % 64;
         self.words[word] &= !(1u64 << bit);
     }
 
     pub fn and(&self, other: &Bitmap) -> Bitmap {
+        debug_assert_eq!(self.words.len(), other.words.len());
         let words = self.words.iter().zip(other.words.iter())
             .map(|(a, b)| a & b).collect();
         Bitmap { words }
     }
 
     pub fn or(&self, other: &Bitmap) -> Bitmap {
+        debug_assert_eq!(self.words.len(), other.words.len());
         let words = self.words.iter().zip(other.words.iter())
             .map(|(a, b)| a | b).collect();
         Bitmap { words }
@@ -61,10 +69,12 @@ impl Bitmap {
         Bitmap { words }
     }
 
+    #[inline]
     pub fn count_ones(&self) -> usize {
         self.words.iter().map(|w| w.count_ones() as usize).sum()
     }
 
+    #[inline]
     pub fn any(&self) -> bool {
         self.words.iter().any(|&w| w != 0)
     }
@@ -81,7 +91,8 @@ impl Bitmap {
         let num_words = (mask.len() + 63) / 64;
         let mut words = vec![0u64; num_words];
         for (i, &byte) in mask.iter().enumerate() {
-            words[i / 64] |= (byte as u64) << (i % 64);
+            debug_assert!(byte <= 1, "pack_from_bytes expects 0 or 1, got {}", byte);
+            words[i / 64] |= (byte as u64 & 1) << (i % 64);
         }
         Bitmap { words }
     }
