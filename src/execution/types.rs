@@ -637,7 +637,7 @@ impl Node {
                             Ok(file) => {
                                 let reader: Box<dyn std::io::BufRead> =
                                     Box::new(std::io::BufReader::new(file));
-                                let scan = BatchScanOperator::new(reader, schema, fields);
+                                let scan = BatchScanOperator::new(reader, schema, fields, vec![], None);
                                 Some(Ok(Box::new(scan) as Box<dyn BatchStream>))
                             }
                             Err(_) => Some(Err(CreateStreamError::Io)),
