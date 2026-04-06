@@ -1,6 +1,8 @@
 pub mod batch;
 pub mod batch_filter;
+pub mod batch_limit;
 pub mod batch_predicate;
+pub mod batch_project;
 pub mod batch_scan;
 pub mod batch_tokenizer;
 pub mod datasource;
