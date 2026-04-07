@@ -1,12 +1,12 @@
 use super::datasource::RecordRead;
-use super::types::{Aggregate, Expression, Formula, Named, NamedAggregate, Node, StreamResult};
+use super::types::{AggregateDef, ExtractionStrategy, Expression, Formula, GroupState, Named, NamedAggregate, Node, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::functions::FunctionRegistry;
 use crate::syntax::ast::{self, PathSegment};
+use hashbrown::HashMap;
 use linked_hash_map::LinkedHashMap;
 use prettytable::Cell;
-use std::collections::hash_set;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -369,9 +369,10 @@ impl RecordStream for InMemoryStream {
 pub struct GroupByStream {
     keys: Vec<ast::PathExpr>,
     variables: Variables,
-    aggregates: Vec<NamedAggregate>,
+    aggregate_defs: Vec<AggregateDef>,
     source: Box<dyn RecordStream>,
-    group_iterator: Option<hash_set::IntoIter<Option<Tuple>>>,
+    groups: Option<HashMap<Option<Tuple>, GroupState>>,
+    group_iterator: Option<hashbrown::hash_map::IntoIter<Option<Tuple>, GroupState>>,
     registry: Arc<FunctionRegistry>,
 }
 
@@ -383,11 +384,16 @@ impl<'a> GroupByStream {
         source: Box<dyn RecordStream>,
         registry: Arc<FunctionRegistry>,
     ) -> Self {
+        let aggregate_defs: Vec<AggregateDef> = aggregates
+            .iter()
+            .map(AggregateDef::from_named_aggregate)
+            .collect();
         GroupByStream {
             keys,
             variables,
-            aggregates,
+            aggregate_defs,
             source,
+            groups: None,
             group_iterator: None,
             registry,
         }
@@ -397,7 +403,7 @@ impl<'a> GroupByStream {
 impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if self.group_iterator.is_none() {
-            let mut groups: hash_set::HashSet<Option<Tuple>> = hash_set::HashSet::new();
+            let mut groups: HashMap<Option<Tuple>, GroupState> = HashMap::new();
             while let Some(record) = self.source.next()? {
                 let variables_owned;
                 let variables = if self.variables.is_empty() {
@@ -413,125 +419,46 @@ impl RecordStream for GroupByStream {
                     Some(record.get_many(&self.keys))
                 };
 
-                if !groups.contains(&key) {
-                    groups.insert(key.clone());
-                }
-                for named_agg in self.aggregates.iter_mut() {
-                    match &mut named_agg.aggregate {
-                        Aggregate::GroupAs(ref mut inner, named) => {
-                            let val = match named {
-                                Named::Expression(_expr, _) => Value::Object(Box::new(record.to_variables().clone())),
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-
-                            inner.add_record(&key, &val)?;
+                let state = groups
+                    .entry(key.clone())
+                    .or_insert_with(|| GroupState::new(&self.aggregate_defs));
+                for (i, def) in self.aggregate_defs.iter().enumerate() {
+                    match &def.extraction {
+                        ExtractionStrategy::Expression(expr) => {
+                            let val = expr.expression_value(&variables, &self.registry)?;
+                            state.accumulators[i].accumulate(&val)?;
                         }
-                        Aggregate::Avg(ref mut inner, named) => {
-                            let val = match named {
-                                Named::Expression(expr, _) => expr.expression_value(&variables, &self.registry)?,
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-
-                            inner.add_record(&key, &val)?;
+                        ExtractionStrategy::ColumnLookup(col_name) => {
+                            let val = variables
+                                .get(col_name)
+                                .cloned()
+                                .unwrap_or(Value::Missing);
+                            state.accumulators[i].accumulate(&val)?;
                         }
-                        Aggregate::Count(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    inner.add_row(&key)?;
-                                }
-                            };
+                        ExtractionStrategy::RecordCapture => {
+                            let val =
+                                Value::Object(Box::new(record.to_variables().clone()));
+                            state.accumulators[i].accumulate(&val)?;
                         }
-                        Aggregate::First(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-                        }
-                        Aggregate::Last(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-                        }
-                        Aggregate::Max(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-                        }
-                        Aggregate::Min(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-                        }
-                        Aggregate::Sum(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-                        }
-                        Aggregate::ApproxCountDistinct(ref mut inner, named) => {
-                            match named {
-                                Named::Expression(expr, _) => {
-                                    let val = expr.expression_value(&variables, &self.registry)?;
-                                    inner.add_record(&key, &val)?;
-                                }
-                                Named::Star => {
-                                    unreachable!();
-                                }
-                            };
-                        }
-                        Aggregate::PercentileDisc(ref mut inner, column_name) => {
-                            let val = variables.get(column_name).unwrap();
-                            inner.add_record(&key, val)?;
-                        }
-                        Aggregate::ApproxPercentile(ref mut inner, column_name) => {
-                            let val = variables.get(column_name).unwrap();
-                            inner.add_record(&key, val)?;
+                        ExtractionStrategy::None => {
+                            state.accumulators[i].accumulate_row()?;
                         }
                     }
                 }
             }
 
-            self.group_iterator = Some(groups.into_iter());
+            // Empty-input global aggregate: emit one row with defaults
+            if groups.is_empty() && self.keys.is_empty() {
+                let state = GroupState::new(&self.aggregate_defs);
+                groups.insert(None, state);
+            }
+
+            self.groups = Some(groups);
+            self.group_iterator = Some(self.groups.take().unwrap().into_iter());
         }
 
         let iter = self.group_iterator.as_mut().unwrap();
-        if let Some(key) = iter.next() {
+        if let Some((key, mut state)) = iter.next() {
             let mut values: Vec<Value> = Vec::new();
             let mut fields: Vec<VariableName> = Vec::new();
 
@@ -554,14 +481,14 @@ impl RecordStream for GroupByStream {
                 }
             }
 
-            for named_agg in self.aggregates.iter_mut() {
-                if let Some(ref field_name) = named_agg.name_opt {
+            for (i, def) in self.aggregate_defs.iter().enumerate() {
+                if let Some(ref field_name) = def.name {
                     fields.push(field_name.clone());
                 } else {
                     let idx = fields.len() + 1;
                     fields.push(format!("_{}", idx));
                 }
-                let v = named_agg.aggregate.get_aggregated(&key)?;
+                let v = state.accumulators[i].finalize()?;
                 values.push(v);
             }
 
@@ -740,10 +667,11 @@ pub(crate) struct CrossJoinStream {
     current_left: Option<Record>,
     right_stream: Option<Box<dyn RecordStream>>,
     registry: Arc<FunctionRegistry>,
+    threads: usize,
 }
 
 impl CrossJoinStream {
-    pub(crate) fn new(left: Box<dyn RecordStream>, right_node: Node, right_variables: Variables, registry: Arc<FunctionRegistry>) -> Self {
+    pub(crate) fn new(left: Box<dyn RecordStream>, right_node: Node, right_variables: Variables, registry: Arc<FunctionRegistry>, threads: usize) -> Self {
         CrossJoinStream {
             left,
             right_node,
@@ -751,6 +679,7 @@ impl CrossJoinStream {
             current_left: None,
             right_stream: None,
             registry,
+            threads,
         }
     }
 }
@@ -772,7 +701,7 @@ impl RecordStream for CrossJoinStream {
                 Some(left_record) => {
                     self.current_left = Some(left_record);
                     // Re-create right stream from scratch
-                    let right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone())
+                    let right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone(), self.threads)
                         .map_err(|e| super::types::StreamError::Get(e))?;
                     self.right_stream = Some(right_stream);
                 }
@@ -796,6 +725,7 @@ pub(crate) struct LeftJoinStream {
     matched: bool,
     right_field_names: Option<Vec<String>>,
     registry: Arc<FunctionRegistry>,
+    threads: usize,
 }
 
 impl LeftJoinStream {
@@ -805,6 +735,7 @@ impl LeftJoinStream {
         right_variables: Variables,
         condition: Formula,
         registry: Arc<FunctionRegistry>,
+        threads: usize,
     ) -> Self {
         LeftJoinStream {
             left,
@@ -816,6 +747,7 @@ impl LeftJoinStream {
             matched: false,
             right_field_names: None,
             registry,
+            threads,
         }
     }
 
@@ -885,7 +817,7 @@ impl RecordStream for LeftJoinStream {
                     // Re-create right stream from scratch
                     let right_stream = self
                         .right_node
-                        .get(self.right_variables.clone(), self.registry.clone())
+                        .get(self.right_variables.clone(), self.registry.clone(), self.threads)
                         .map_err(|e| super::types::StreamError::Get(e))?;
                     self.right_stream = Some(right_stream);
 
@@ -895,7 +827,7 @@ impl RecordStream for LeftJoinStream {
                         // Create a temporary stream to discover field names
                         let mut peek_stream = self
                             .right_node
-                            .get(self.right_variables.clone(), self.registry.clone())
+                            .get(self.right_variables.clone(), self.registry.clone(), self.threads)
                             .map_err(|e| super::types::StreamError::Get(e))?;
                         if let Some(peek_record) = peek_stream.next()? {
                             self.right_field_names = Some(
