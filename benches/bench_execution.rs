@@ -42,6 +42,7 @@ fn bench_execution_tier_a(c: &mut Criterion) {
                     black_box(query),
                     data_sources.clone(),
                     reg.clone(),
+                    1,
                 );
                 let _ = black_box(result);
             });
@@ -196,6 +197,7 @@ fn bench_execution_tier_c(c: &mut Criterion) {
                     black_box(query),
                     data_sources.clone(),
                     reg.clone(),
+                    1,
                 );
                 let _ = black_box(result);
             });

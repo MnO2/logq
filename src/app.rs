@@ -111,7 +111,8 @@ pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry)
     Ok(())
 }
 
-pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, output_mode: OutputMode) -> AppResult<()> {
+pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, output_mode: OutputMode, threads: usize) -> AppResult<()> {
+    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -196,7 +197,9 @@ pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, out
 pub(crate) fn run_to_vec(
     query_str: &str,
     data_sources: common::types::DataSourceRegistry,
+    threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
+    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -222,7 +225,9 @@ pub(crate) fn run_to_vec(
 pub fn run_to_records(
     query_str: &str,
     data_sources: common::types::DataSourceRegistry,
+    threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
+    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -249,7 +254,9 @@ pub fn run_to_records_with_registry(
     query_str: &str,
     data_sources: common::types::DataSourceRegistry,
     registry: Arc<functions::FunctionRegistry>,
+    threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
+    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -290,7 +297,7 @@ mod tests {
         let data_source =
             common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
         let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
-        let result = run(query, data_sources, OutputMode::Csv);
+        let result = run(query, data_sources, OutputMode::Csv, 1);
         dir.close().unwrap();
         result
     }
@@ -312,7 +319,7 @@ mod tests {
         let data_source =
             common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
         let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
-        let result = run_to_vec(query, data_sources);
+        let result = run_to_vec(query, data_sources, 1);
         dir.close().unwrap();
         result
     }
@@ -331,7 +338,7 @@ mod tests {
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
         let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
-        let result = run(&*query_str, data_sources, OutputMode::Csv);
+        let result = run(&*query_str, data_sources, OutputMode::Csv, 1);
 
         assert_eq!(result, Ok(()));
 
@@ -355,6 +362,7 @@ mod tests {
             r#"select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t order by t asc limit 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -362,6 +370,7 @@ mod tests {
             r#"select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from it limit 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -369,6 +378,7 @@ mod tests {
             r#"select time_bucket("5 seconds", timestamp) as t, percentile_disc(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -376,6 +386,7 @@ mod tests {
             r#"select time_bucket("5 seconds", timestamp) as t, approx_percentile(0.9) within group (order by backend_processing_time asc) as bps from it group by t"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -403,6 +414,7 @@ mod tests {
             r#"select b, e.f.g as x from it limit 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -410,6 +422,7 @@ mod tests {
             r#"select b, count(e.f.g) as x from it group by b"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -417,6 +430,7 @@ mod tests {
             r#"select x, count(*) as x from it group by d[0] as x"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -443,6 +457,7 @@ mod tests {
             r#"select a.x, b.x from it as a cross join it as b"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -469,6 +484,7 @@ mod tests {
             r#"select a.x, b.x from it as a, it as b"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -496,6 +512,7 @@ mod tests {
             r#"select a.x, b.x from it as a cross join it as b where a.x < b.x"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -523,6 +540,7 @@ mod tests {
             r#"select a.x, b.x from it as a left join it as b on a.x = b.x"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -549,6 +567,7 @@ mod tests {
             r#"select a.x, b.x from it as a left join it as b on a.x != a.x"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -575,6 +594,7 @@ mod tests {
             r#"select a.x, b.x from it as a left outer join it as b on a.x = b.x"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -602,6 +622,7 @@ mod tests {
             r#"select x from it where x = (select max(x) from it)"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -628,6 +649,7 @@ mod tests {
             r#"select x, (select count(*) from it) as total from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -655,6 +677,7 @@ mod tests {
             r#"select x from it where x < 3 union select x from it where x > 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -663,6 +686,7 @@ mod tests {
             r#"select x from it where x < 3 union all select x from it where x > 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -689,6 +713,7 @@ mod tests {
             r#"select x from it where x < 3 intersect select x from it where x > 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -715,6 +740,7 @@ mod tests {
             r#"select x from it except select x from it where x > 2"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -744,6 +770,7 @@ mod tests {
             r#"SELECT a, b FROM it WHERE a > 0 AND b > 0 LIMIT 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -752,6 +779,7 @@ mod tests {
             r#"SELECT a FROM it order by a ASC LIMIT 1"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -760,6 +788,7 @@ mod tests {
             r#"Select a From it Where a = 1 Or b = 4"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -787,6 +816,7 @@ mod tests {
             r#"select a from it where b is null"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -795,6 +825,7 @@ mod tests {
             r#"select a, b from it where b is not missing"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -803,6 +834,7 @@ mod tests {
             r#"select coalesce(b, 0) as b_or_zero from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -830,6 +862,7 @@ mod tests {
             r#"select case when x < 3 then "low" when x < 8 then "mid" else "high" end as category from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -857,6 +890,7 @@ mod tests {
             r#"select name from it where name like "%ob%""#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -865,6 +899,7 @@ mod tests {
             r#"select name, age from it where age between 28 and 32"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -873,6 +908,7 @@ mod tests {
             r#"select name from it where age in (25, 35)"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -881,6 +917,7 @@ mod tests {
             r#"select name from it where name not like "%a%" and age not between 30 and 40 and age not in (30)"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -907,6 +944,7 @@ mod tests {
             r#"select cast(x as int) as xi from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -915,6 +953,7 @@ mod tests {
             r#"select y || " " || x as combined from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -940,6 +979,7 @@ mod tests {
             r#"select upper(name) as u, lower(name) as l, char_length(name) as len from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -969,6 +1009,7 @@ mod tests {
             r#"select distinct x from it order by x asc"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -996,6 +1037,7 @@ mod tests {
             r#"select a.id, b.val from it as a cross join it as b limit 3"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1004,6 +1046,7 @@ mod tests {
             r#"select a.id, b.val from it as a left join it as b on a.id = b.id limit 5"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1031,6 +1074,7 @@ mod tests {
             r#"select x from it where x = (select max(x) from it)"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1039,6 +1083,7 @@ mod tests {
             r#"select x from it where x = 1 union select x from it where x = 3"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1047,6 +1092,7 @@ mod tests {
             r#"select x from it where x > 1 intersect select x from it where x < 3"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1055,6 +1101,7 @@ mod tests {
             r#"select x from it except select x from it where x = 2"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1081,6 +1128,7 @@ mod tests {
             r#"select nullif(a, b) as result from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1107,6 +1155,7 @@ mod tests {
             r#"select x, y from it"#,
             data_sources.clone(),
             OutputMode::Json,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1115,6 +1164,7 @@ mod tests {
             r#"select x, y from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1140,6 +1190,7 @@ mod tests {
             r#"select a.b.c as deep from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1148,6 +1199,7 @@ mod tests {
             r#"select d[0] as first, d[2] as third from it"#,
             data_sources.clone(),
             OutputMode::Csv,
+            1,
         );
         assert_eq!(result, Ok(()));
 
@@ -1373,7 +1425,7 @@ mod tests {
         data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
         data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
 
-        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1404,7 +1456,7 @@ mod tests {
         data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
         data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
 
-        let result = run(r#"SELECT a.x, b.y FROM a LEFT JOIN b ON a.id = b.id"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT a.x, b.y FROM a LEFT JOIN b ON a.id = b.id"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1434,7 +1486,7 @@ mod tests {
         data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
         data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
 
-        let result = run(r#"SELECT a.x, b.y FROM a, b"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT a.x, b.y FROM a, b"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1453,7 +1505,7 @@ mod tests {
         let mut data_sources = common::types::DataSourceRegistry::new();
         data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
 
-        let result = run(r#"SELECT * FROM unknown_table"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT * FROM unknown_table"#, data_sources, OutputMode::Csv, 1);
         assert!(result.is_err(), "Expected error for unknown table, got Ok");
 
         dir.close().unwrap();
@@ -1473,7 +1525,7 @@ mod tests {
         let data_source = common::types::DataSource::File(file_path, "jsonl".to_string(), "it".to_string());
         let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
 
-        let result = run(r#"SELECT * FROM it LIMIT 1"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT * FROM it LIMIT 1"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1494,7 +1546,7 @@ mod tests {
         data_sources.insert("b".to_string(), common::types::DataSource::Stdin("jsonl".to_string(), "b".to_string()));
 
         // "b" is stdin and used as the right side of a join — should produce an error
-        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv, 1);
         assert!(result.is_err(), "Expected error when stdin is on the right side of a join");
 
         dir.close().unwrap();
@@ -1526,7 +1578,7 @@ mod tests {
         data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
         data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
 
-        let result = run(r#"SELECT a.x, b.y FROM a, b WHERE a.x = b.y"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT a.x, b.y FROM a, b WHERE a.x = b.y"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1546,7 +1598,7 @@ mod tests {
         data_sources.insert("MyTable".to_string(), common::types::DataSource::File(file_path, "jsonl".to_string(), "MyTable".to_string()));
 
         // Query uses lowercase "mytable" but registry has "MyTable" — should fail
-        let result = run(r#"SELECT * FROM mytable"#, data_sources, OutputMode::Csv);
+        let result = run(r#"SELECT * FROM mytable"#, data_sources, OutputMode::Csv, 1);
         assert!(result.is_err(), "Expected error for case-sensitive table name mismatch");
 
         dir.close().unwrap();

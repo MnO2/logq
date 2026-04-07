@@ -75,9 +75,13 @@ fn main() {
                     OutputMode::Table
                 };
 
+                let threads: usize = sub_m.value_of("threads")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+
                 let result = if let Some(table_specs) = sub_m.values_of("table") {
                     match parse_table_specs(table_specs) {
-                        Ok(data_sources) => app::run(query_str, data_sources, output_mode),
+                        Ok(data_sources) => app::run(query_str, data_sources, output_mode, threads),
                         Err(e) => Err(e),
                     }
                 } else {

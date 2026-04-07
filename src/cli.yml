@@ -15,6 +15,10 @@ subcommands:
               long: table
               takes_value: true
               multiple: true
+          - threads:
+              help: number of threads for parallel scanning (0 = auto, 1 = sequential)
+              long: threads
+              takes_value: true
           - query:
               help: query string
               index: 1
