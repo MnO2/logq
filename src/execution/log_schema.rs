@@ -2,6 +2,7 @@ use crate::execution::datasource::{DataType, LogFormat};
 
 /// Schema information for a structured log format.
 /// Provides field names, types, and lookup methods.
+#[derive(Clone)]
 pub(crate) struct LogSchema {
     field_names: &'static Vec<String>,
     datatypes: &'static Vec<DataType>,
