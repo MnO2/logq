@@ -1,6 +1,8 @@
 use memmap2::MmapOptions;
 use rayon::prelude::*;
 use std::cmp;
+use std::collections::BinaryHeap;
+use std::cmp::Reverse;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
@@ -213,6 +215,96 @@ pub(crate) fn merge_max(a: &MaxAggregate, b: &MaxAggregate) -> MaxAggregate {
     merged
 }
 
+// ---------------------------------------------------------------------------
+// K-way merge for parallel ORDER BY
+// ---------------------------------------------------------------------------
+
+/// An entry in the k-way merge heap. Compared by sort key bytes, then
+/// chunk index and row index as tiebreakers for stable ordering.
+struct MergeEntry {
+    key: Vec<u8>,
+    chunk_idx: usize,
+    row_idx: usize,
+    record: Variables,
+}
+
+impl Eq for MergeEntry {}
+
+impl PartialEq for MergeEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.chunk_idx == other.chunk_idx
+            && self.row_idx == other.row_idx
+    }
+}
+
+impl Ord for MergeEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key
+            .cmp(&other.key)
+            .then_with(|| self.chunk_idx.cmp(&other.chunk_idx))
+            .then_with(|| self.row_idx.cmp(&other.row_idx))
+    }
+}
+
+impl PartialOrd for MergeEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Perform a k-way merge of pre-sorted chunks. Each chunk is a Vec of
+/// `(sort_key_bytes, record)` pairs sorted in ascending key order.
+/// Returns records in globally-sorted order, optionally limited to `limit`.
+pub(crate) fn kway_merge(
+    chunks: Vec<Vec<(Vec<u8>, Variables)>>,
+    limit: Option<usize>,
+) -> Vec<Variables> {
+    let mut heap: BinaryHeap<Reverse<MergeEntry>> = BinaryHeap::new();
+
+    // Iterators to track current position within each chunk.
+    let mut iters: Vec<std::vec::IntoIter<(Vec<u8>, Variables)>> = chunks
+        .into_iter()
+        .map(|c| c.into_iter())
+        .collect();
+
+    // Seed the heap with the first element from each chunk.
+    for (chunk_idx, iter) in iters.iter_mut().enumerate() {
+        if let Some((key, record)) = iter.next() {
+            heap.push(Reverse(MergeEntry {
+                key,
+                chunk_idx,
+                row_idx: 0,
+                record,
+            }));
+        }
+    }
+
+    let cap = limit.unwrap_or(usize::MAX);
+    let mut result: Vec<Variables> = Vec::with_capacity(std::cmp::min(cap, 1024));
+
+    while let Some(Reverse(entry)) = heap.pop() {
+        let chunk_idx = entry.chunk_idx;
+        result.push(entry.record);
+
+        if result.len() >= cap {
+            break;
+        }
+
+        // Push the next element from the same chunk.
+        if let Some((key, record)) = iters[chunk_idx].next() {
+            heap.push(Reverse(MergeEntry {
+                key,
+                chunk_idx,
+                row_idx: entry.row_idx + 1,
+                record,
+            }));
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,4 +512,70 @@ mod tests {
         assert_eq!(merged.maxs.get(&key("z")), Some(&Value::Int(1)));
     }
 
+    // -------------------------------------------------------------------
+    // Step 12: K-way merge tests
+    // -------------------------------------------------------------------
+
+    fn make_record(name: &str) -> Variables {
+        let mut vars = Variables::new();
+        vars.insert("name".to_string(), Value::String(name.to_string()));
+        vars
+    }
+
+    #[test]
+    fn test_kway_merge_sorted_chunks() {
+        // Two chunks with interleaved sorted keys
+        let chunk1 = vec![
+            (b"a".to_vec(), make_record("a1")),
+            (b"c".to_vec(), make_record("c1")),
+            (b"e".to_vec(), make_record("e1")),
+        ];
+        let chunk2 = vec![
+            (b"b".to_vec(), make_record("b2")),
+            (b"d".to_vec(), make_record("d2")),
+            (b"f".to_vec(), make_record("f2")),
+        ];
+
+        let result = kway_merge(vec![chunk1, chunk2], None);
+        let names: Vec<&str> = result
+            .iter()
+            .map(|r| match r.get("name").unwrap() {
+                Value::String(s) => s.as_str(),
+                _ => panic!("expected string"),
+            })
+            .collect();
+        assert_eq!(names, vec!["a1", "b2", "c1", "d2", "e1", "f2"]);
+    }
+
+    #[test]
+    fn test_kway_merge_with_limit() {
+        let chunk1 = vec![
+            (b"a".to_vec(), make_record("a1")),
+            (b"c".to_vec(), make_record("c1")),
+        ];
+        let chunk2 = vec![
+            (b"b".to_vec(), make_record("b2")),
+            (b"d".to_vec(), make_record("d2")),
+        ];
+
+        let result = kway_merge(vec![chunk1, chunk2], Some(2));
+        assert_eq!(result.len(), 2);
+        let names: Vec<&str> = result
+            .iter()
+            .map(|r| match r.get("name").unwrap() {
+                Value::String(s) => s.as_str(),
+                _ => panic!("expected string"),
+            })
+            .collect();
+        assert_eq!(names, vec!["a1", "b2"]);
+    }
+
+    #[test]
+    fn test_kway_merge_empty() {
+        let result = kway_merge(vec![], None);
+        assert!(result.is_empty());
+
+        let result = kway_merge(vec![vec![], vec![]], None);
+        assert!(result.is_empty());
+    }
 }
