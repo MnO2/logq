@@ -5,6 +5,7 @@ pub mod batch_limit;
 pub mod batch_predicate;
 pub mod batch_project;
 pub mod batch_scan;
+pub(crate) mod batch_streaming_groupby;
 pub mod batch_tokenizer;
 pub mod datasource;
 pub mod field_analysis;
