@@ -1735,6 +1735,99 @@ impl AccumulatorState {
             }
         }
     }
+
+    /// Merge another accumulator's state into this one.
+    /// Used to combine partial aggregations from adjacent parallel chunks.
+    /// `self` is from the earlier chunk, `other` is from the later chunk.
+    pub(crate) fn merge(&mut self, other: &AccumulatorState) {
+        match (self, other) {
+            (AccumulatorState::Count(a), AccumulatorState::Count(b)) => *a += b,
+            (AccumulatorState::CountStar(a), AccumulatorState::CountStar(b)) => *a += b,
+            (AccumulatorState::Sum(a), AccumulatorState::Sum(b)) => {
+                match (a.as_mut(), b) {
+                    (Some(a_val), Some(b_val)) => *a_val = OrderedFloat(a_val.0 + b_val.0),
+                    (None, Some(b_val)) => *a = Some(*b_val),
+                    _ => {}
+                }
+            }
+            (AccumulatorState::Avg { sum: a_sum, count: a_count },
+             AccumulatorState::Avg { sum: b_sum, count: b_count }) => {
+                *a_sum = OrderedFloat(a_sum.0 + b_sum.0);
+                *a_count += b_count;
+            }
+            (AccumulatorState::Min(a), AccumulatorState::Min(b)) => {
+                if let Some(b_val) = b {
+                    match a {
+                        Some(a_val) if value_less_than(b_val, a_val) => *a = Some(b_val.clone()),
+                        None => *a = Some(b_val.clone()),
+                        _ => {}
+                    }
+                }
+            }
+            (AccumulatorState::Max(a), AccumulatorState::Max(b)) => {
+                if let Some(b_val) = b {
+                    match a {
+                        Some(a_val) if value_less_than(a_val, b_val) => *a = Some(b_val.clone()),
+                        None => *a = Some(b_val.clone()),
+                        _ => {}
+                    }
+                }
+            }
+            (AccumulatorState::First(_), AccumulatorState::First(_)) => {
+                // Keep self (earlier chunk) — no-op
+            }
+            (AccumulatorState::Last(a), AccumulatorState::Last(b)) => {
+                if b.is_some() {
+                    *a = b.clone();
+                }
+            }
+            (AccumulatorState::GroupAs(a_vals), AccumulatorState::GroupAs(b_vals)) => {
+                a_vals.extend(b_vals.iter().cloned());
+            }
+            (AccumulatorState::ApproxCountDistinct(a), AccumulatorState::ApproxCountDistinct(b)) => {
+                a.merge(b);
+            }
+            (AccumulatorState::PercentileDisc { values: a_vals, .. },
+             AccumulatorState::PercentileDisc { values: b_vals, .. }) => {
+                a_vals.extend(b_vals.iter().cloned());
+            }
+            (AccumulatorState::ApproxPercentile { digest: a_digest, buffer: a_buf, .. },
+             AccumulatorState::ApproxPercentile { digest: b_digest, buffer: b_buf, .. }) => {
+                // Flush a's buffer
+                if !a_buf.is_empty() {
+                    let mut a_values: Vec<f64> = a_buf.drain(..).filter_map(|v| match v {
+                        Value::Float(f) => Some(f.0 as f64),
+                        Value::Int(i) => Some(i as f64),
+                        _ => None,
+                    }).collect();
+                    if !a_values.is_empty() {
+                        a_values.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                        *a_digest = TDigest::merge_digests(vec![a_digest.clone(), TDigest::new_with_size(100).merge_sorted(a_values)]);
+                    }
+                }
+                // Flush b's buffer and merge
+                let b_flushed = if !b_buf.is_empty() {
+                    let mut b_values: Vec<f64> = b_buf.iter().filter_map(|v| match v {
+                        Value::Float(f) => Some(f.0 as f64),
+                        Value::Int(i) => Some(*i as f64),
+                        _ => None,
+                    }).collect();
+                    if !b_values.is_empty() {
+                        b_values.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                        TDigest::merge_digests(vec![b_digest.clone(), TDigest::new_with_size(100).merge_sorted(b_values)])
+                    } else {
+                        b_digest.clone()
+                    }
+                } else {
+                    b_digest.clone()
+                };
+                *a_digest = TDigest::merge_digests(vec![a_digest.clone(), b_flushed]);
+            }
+            _ => {
+                panic!("mismatched accumulator types in merge");
+            }
+        }
+    }
 }
 
 /// All aggregate state for a single group.
@@ -3308,5 +3401,77 @@ mod accumulator_tests {
             state.finalize().unwrap(),
             Value::Float(OrderedFloat(15.0))
         );
+    }
+
+    #[test]
+    fn test_accumulator_merge_count() {
+        let mut a = AccumulatorState::Count(5);
+        let b = AccumulatorState::Count(3);
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Int(8));
+    }
+
+    #[test]
+    fn test_accumulator_merge_count_star() {
+        let mut a = AccumulatorState::CountStar(10);
+        let b = AccumulatorState::CountStar(7);
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Int(17));
+    }
+
+    #[test]
+    fn test_accumulator_merge_sum() {
+        let mut a = AccumulatorState::Sum(Some(OrderedFloat(3.0f32)));
+        let b = AccumulatorState::Sum(Some(OrderedFloat(7.0f32)));
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Float(OrderedFloat(10.0f32)));
+    }
+
+    #[test]
+    fn test_accumulator_merge_sum_none_left() {
+        let mut a = AccumulatorState::Sum(None);
+        let b = AccumulatorState::Sum(Some(OrderedFloat(5.0f32)));
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Float(OrderedFloat(5.0f32)));
+    }
+
+    #[test]
+    fn test_accumulator_merge_avg() {
+        let mut a = AccumulatorState::Avg { sum: OrderedFloat(10.0f64), count: 2 };
+        let b = AccumulatorState::Avg { sum: OrderedFloat(20.0f64), count: 3 };
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Float(OrderedFloat(6.0f32)));
+    }
+
+    #[test]
+    fn test_accumulator_merge_min() {
+        let mut a = AccumulatorState::Min(Some(Value::Int(5)));
+        let b = AccumulatorState::Min(Some(Value::Int(3)));
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Int(3));
+    }
+
+    #[test]
+    fn test_accumulator_merge_max() {
+        let mut a = AccumulatorState::Max(Some(Value::Int(5)));
+        let b = AccumulatorState::Max(Some(Value::Int(8)));
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::Int(8));
+    }
+
+    #[test]
+    fn test_accumulator_merge_first() {
+        let mut a = AccumulatorState::First(Some(Value::String("early".to_string())));
+        let b = AccumulatorState::First(Some(Value::String("late".to_string())));
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::String("early".to_string()));
+    }
+
+    #[test]
+    fn test_accumulator_merge_last() {
+        let mut a = AccumulatorState::Last(Some(Value::String("early".to_string())));
+        let b = AccumulatorState::Last(Some(Value::String("late".to_string())));
+        a.merge(&b);
+        assert_eq!(a.finalize().unwrap(), Value::String("late".to_string()));
     }
 }
