@@ -5,12 +5,16 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
-use crate::common::types::Variables;
+use crate::common::types::{Tuple, Value, Variables};
 use crate::execution::batch::*;
 use crate::execution::batch_scan::BatchScanOperator;
 use crate::execution::log_schema::LogSchema;
-use crate::execution::types::{Formula, StreamResult};
+use crate::execution::types::{
+    CountAggregate, SumAggregate, AvgAggregate, MinAggregate, MaxAggregate,
+    Formula, StreamResult,
+};
 use crate::functions::FunctionRegistry;
+use ordered_float::OrderedFloat;
 
 pub(crate) const PARALLEL_THRESHOLD: u64 = 16 * 1024 * 1024; // 16MB
 
@@ -127,6 +131,88 @@ pub(crate) fn parallel_scan_chunks(
     collect_results(partial_results)
 }
 
+// ---------------------------------------------------------------------------
+// Parallel aggregation merge functions
+// ---------------------------------------------------------------------------
+
+/// Merge two CountAggregates by summing counts per key.
+pub(crate) fn merge_count(a: &CountAggregate, b: &CountAggregate) -> CountAggregate {
+    let mut merged = a.clone();
+    for (key, &count) in b.counts.iter() {
+        *merged.counts.entry(key.clone()).or_insert(0) += count;
+    }
+    merged
+}
+
+/// Merge two SumAggregates by summing values per key.
+pub(crate) fn merge_sum(a: &SumAggregate, b: &SumAggregate) -> SumAggregate {
+    let mut merged = a.clone();
+    for (key, &sum) in b.sums.iter() {
+        let entry = merged.sums.entry(key.clone()).or_insert(OrderedFloat(0.0f32));
+        *entry = OrderedFloat(entry.into_inner() + sum.into_inner());
+    }
+    merged
+}
+
+/// Merge two AvgAggregates by combining (sum, count) pairs per key.
+pub(crate) fn merge_avg(a: &AvgAggregate, b: &AvgAggregate) -> AvgAggregate {
+    let mut merged = a.clone();
+    for (key, &sum) in b.sums.iter() {
+        let entry = merged.sums.entry(key.clone()).or_insert(OrderedFloat(0.0f64));
+        *entry = OrderedFloat(entry.into_inner() + sum.into_inner());
+    }
+    for (key, &count) in b.counts.iter() {
+        *merged.counts.entry(key.clone()).or_insert(0) += count;
+    }
+    merged
+}
+
+/// Merge two MinAggregates by taking the minimum value per key.
+pub(crate) fn merge_min(a: &MinAggregate, b: &MinAggregate) -> MinAggregate {
+    let mut merged = a.clone();
+    for (key, value) in b.mins.iter() {
+        match merged.mins.entry(key.clone()) {
+            hashbrown::hash_map::Entry::Occupied(mut e) => {
+                let should_replace = match (e.get(), value) {
+                    (Value::Int(i1), Value::Int(i2)) => i2 < i1,
+                    (Value::Float(f1), Value::Float(f2)) => f2 < f1,
+                    _ => false,
+                };
+                if should_replace {
+                    e.insert(value.clone());
+                }
+            }
+            hashbrown::hash_map::Entry::Vacant(e) => {
+                e.insert(value.clone());
+            }
+        }
+    }
+    merged
+}
+
+/// Merge two MaxAggregates by taking the maximum value per key.
+pub(crate) fn merge_max(a: &MaxAggregate, b: &MaxAggregate) -> MaxAggregate {
+    let mut merged = a.clone();
+    for (key, value) in b.maxs.iter() {
+        match merged.maxs.entry(key.clone()) {
+            hashbrown::hash_map::Entry::Occupied(mut e) => {
+                let should_replace = match (e.get(), value) {
+                    (Value::Int(i1), Value::Int(i2)) => i2 > i1,
+                    (Value::Float(f1), Value::Float(f2)) => f2 > f1,
+                    _ => false,
+                };
+                if should_replace {
+                    e.insert(value.clone());
+                }
+            }
+            hashbrown::hash_map::Entry::Vacant(e) => {
+                e.insert(value.clone());
+            }
+        }
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,4 +321,103 @@ mod tests {
 
         assert_eq!(total_rows, 20);
     }
+
+    // -------------------------------------------------------------------
+    // Step 11: Merge function tests
+    // -------------------------------------------------------------------
+
+    fn key(s: &str) -> Option<Tuple> {
+        Some(vec![Value::String(s.to_string())])
+    }
+
+    #[test]
+    fn test_merge_count() {
+        let mut a = CountAggregate::new();
+        a.counts.insert(key("x"), 3);
+        a.counts.insert(key("y"), 5);
+
+        let mut b = CountAggregate::new();
+        b.counts.insert(key("y"), 7);
+        b.counts.insert(key("z"), 2);
+
+        let merged = merge_count(&a, &b);
+        assert_eq!(merged.counts.get(&key("x")), Some(&3));
+        assert_eq!(merged.counts.get(&key("y")), Some(&12));
+        assert_eq!(merged.counts.get(&key("z")), Some(&2));
+    }
+
+    #[test]
+    fn test_merge_sum() {
+        let mut a = SumAggregate::new();
+        a.sums.insert(key("x"), OrderedFloat(1.0f32));
+        a.sums.insert(key("y"), OrderedFloat(2.5f32));
+
+        let mut b = SumAggregate::new();
+        b.sums.insert(key("y"), OrderedFloat(3.5f32));
+        b.sums.insert(key("z"), OrderedFloat(4.0f32));
+
+        let merged = merge_sum(&a, &b);
+        assert_eq!(merged.sums.get(&key("x")), Some(&OrderedFloat(1.0f32)));
+        assert_eq!(merged.sums.get(&key("y")), Some(&OrderedFloat(6.0f32)));
+        assert_eq!(merged.sums.get(&key("z")), Some(&OrderedFloat(4.0f32)));
+    }
+
+    #[test]
+    fn test_merge_avg() {
+        let mut a = AvgAggregate::new();
+        a.sums.insert(key("x"), OrderedFloat(10.0f64));
+        a.counts.insert(key("x"), 2);
+        a.sums.insert(key("y"), OrderedFloat(6.0f64));
+        a.counts.insert(key("y"), 3);
+
+        let mut b = AvgAggregate::new();
+        b.sums.insert(key("y"), OrderedFloat(14.0f64));
+        b.counts.insert(key("y"), 7);
+        b.sums.insert(key("z"), OrderedFloat(9.0f64));
+        b.counts.insert(key("z"), 3);
+
+        let merged = merge_avg(&a, &b);
+        // x: only in a
+        assert_eq!(merged.sums.get(&key("x")), Some(&OrderedFloat(10.0f64)));
+        assert_eq!(merged.counts.get(&key("x")), Some(&2));
+        // y: merged
+        assert_eq!(merged.sums.get(&key("y")), Some(&OrderedFloat(20.0f64)));
+        assert_eq!(merged.counts.get(&key("y")), Some(&10));
+        // z: only in b
+        assert_eq!(merged.sums.get(&key("z")), Some(&OrderedFloat(9.0f64)));
+        assert_eq!(merged.counts.get(&key("z")), Some(&3));
+    }
+
+    #[test]
+    fn test_merge_min() {
+        let mut a = MinAggregate::new();
+        a.mins.insert(key("x"), Value::Int(10));
+        a.mins.insert(key("y"), Value::Int(3));
+
+        let mut b = MinAggregate::new();
+        b.mins.insert(key("y"), Value::Int(5));
+        b.mins.insert(key("z"), Value::Int(1));
+
+        let merged = merge_min(&a, &b);
+        assert_eq!(merged.mins.get(&key("x")), Some(&Value::Int(10)));
+        assert_eq!(merged.mins.get(&key("y")), Some(&Value::Int(3)));
+        assert_eq!(merged.mins.get(&key("z")), Some(&Value::Int(1)));
+    }
+
+    #[test]
+    fn test_merge_max() {
+        let mut a = MaxAggregate::new();
+        a.maxs.insert(key("x"), Value::Int(10));
+        a.maxs.insert(key("y"), Value::Int(3));
+
+        let mut b = MaxAggregate::new();
+        b.maxs.insert(key("y"), Value::Int(5));
+        b.maxs.insert(key("z"), Value::Int(1));
+
+        let merged = merge_max(&a, &b);
+        assert_eq!(merged.maxs.get(&key("x")), Some(&Value::Int(10)));
+        assert_eq!(merged.maxs.get(&key("y")), Some(&Value::Int(5)));
+        assert_eq!(merged.maxs.get(&key("z")), Some(&Value::Int(1)));
+    }
+
 }
