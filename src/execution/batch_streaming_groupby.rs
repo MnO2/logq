@@ -109,6 +109,111 @@ impl BatchStreamingGroupByOperator {
         Ok(())
     }
 
+    /// Process one input batch: compute buckets, detect boundaries, accumulate.
+    fn process_batch(&mut self, batch: &ColumnBatch) -> StreamResult<()> {
+        // Find the timestamp column index
+        let ts_idx = batch
+            .names
+            .iter()
+            .position(|n| n == &self.timestamp_column)
+            .ok_or_else(|| {
+                StreamError::Expression(crate::execution::types::ExpressionError::KeyNotFound)
+            })?;
+
+        for row_idx in 0..batch.len {
+            if !batch.selection.is_active(row_idx, batch.len) {
+                continue;
+            }
+
+            // Extract timestamp value and compute bucket
+            let ts_val = BatchToRowAdapter::extract_value(&batch.columns[ts_idx], row_idx);
+            let bucket =
+                Self::compute_bucket(&ts_val, &self.bucket_interval, &self.registry)?;
+
+            // Check if this is the same bucket or a new one
+            match &self.current_key {
+                None => {
+                    // First row ever
+                    self.current_key = Some(bucket);
+                    self.current_state = Some(GroupState::new(&self.aggregate_defs));
+                }
+                Some(current) if *current == bucket => {
+                    // Same bucket -- continue accumulating
+                }
+                Some(_current) => {
+                    // Out-of-order check: new bucket < current bucket
+                    // Extract DateTime values for comparison since Value doesn't impl Ord
+                    if let (Value::DateTime(new_dt), Some(Value::DateTime(cur_dt))) =
+                        (&bucket, &self.current_key)
+                    {
+                        if new_dt < cur_dt {
+                            return Err(StreamError::Expression(
+                                crate::execution::types::ExpressionError::TypeMismatch,
+                            ));
+                        }
+                    }
+                    // New bucket -- finalize current and start new
+                    self.flush_current_group()?;
+                    self.current_key = Some(bucket);
+                    self.current_state = Some(GroupState::new(&self.aggregate_defs));
+                }
+            }
+
+            // Accumulate this row into the current group
+            let state = self.current_state.as_mut().unwrap();
+            for (agg_idx, agg_def) in self.aggregate_defs.iter().enumerate() {
+                match &agg_def.extraction {
+                    crate::execution::types::ExtractionStrategy::None => {
+                        // COUNT(*)
+                        state.accumulators[agg_idx].accumulate_row()?;
+                    }
+                    crate::execution::types::ExtractionStrategy::Expression(expr) => {
+                        let mut row_vars =
+                            linked_hash_map::LinkedHashMap::with_capacity(batch.columns.len());
+                        for (col_idx, col) in batch.columns.iter().enumerate() {
+                            let value = BatchToRowAdapter::extract_value(col, row_idx);
+                            row_vars.insert(batch.names[col_idx].clone(), value);
+                        }
+                        let merged_vars;
+                        let variables = if self.variables.is_empty() {
+                            &row_vars
+                        } else {
+                            merged_vars =
+                                crate::common::types::merge(&self.variables, &row_vars);
+                            &merged_vars
+                        };
+                        let val = expr.expression_value(variables, &self.registry)?;
+                        state.accumulators[agg_idx].accumulate(&val)?;
+                    }
+                    crate::execution::types::ExtractionStrategy::ColumnLookup(col_name) => {
+                        let mut row_vars =
+                            linked_hash_map::LinkedHashMap::with_capacity(batch.columns.len());
+                        for (col_idx, col) in batch.columns.iter().enumerate() {
+                            let value = BatchToRowAdapter::extract_value(col, row_idx);
+                            row_vars.insert(batch.names[col_idx].clone(), value);
+                        }
+                        let val = row_vars
+                            .get(col_name)
+                            .cloned()
+                            .unwrap_or(Value::Missing);
+                        state.accumulators[agg_idx].accumulate(&val)?;
+                    }
+                    crate::execution::types::ExtractionStrategy::RecordCapture => {
+                        let mut row_vars =
+                            linked_hash_map::LinkedHashMap::with_capacity(batch.columns.len());
+                        for (col_idx, col) in batch.columns.iter().enumerate() {
+                            let value = BatchToRowAdapter::extract_value(col, row_idx);
+                            row_vars.insert(batch.names[col_idx].clone(), value);
+                        }
+                        let val = Value::Object(Box::new(row_vars));
+                        state.accumulators[agg_idx].accumulate(&val)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Build a ColumnBatch from completed_keys and completed_values,
     /// draining them in the process.
     fn emit_output_batch(&mut self) -> Result<ColumnBatch, StreamError> {
@@ -152,6 +257,50 @@ impl BatchStreamingGroupByOperator {
             names,
             selection: SelectionVector::All,
         })
+    }
+}
+
+impl BatchStream for BatchStreamingGroupByOperator {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        // If we have enough completed groups, emit them
+        if self.completed_keys.len() >= OUTPUT_BATCH_SIZE {
+            return Ok(Some(self.emit_output_batch()?));
+        }
+
+        // Process input batches until we have enough output or input is exhausted
+        if !self.input_exhausted {
+            loop {
+                match self.input.next_batch()? {
+                    Some(batch) => {
+                        self.process_batch(&batch)?;
+                        if self.completed_keys.len() >= OUTPUT_BATCH_SIZE {
+                            return Ok(Some(self.emit_output_batch()?));
+                        }
+                    }
+                    None => {
+                        self.input_exhausted = true;
+                        // Finalize the last group
+                        self.flush_current_group()?;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Emit any remaining completed groups
+        if !self.completed_keys.is_empty() {
+            return Ok(Some(self.emit_output_batch()?));
+        }
+
+        Ok(None)
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.output_schema
+    }
+
+    fn close(&self) {
+        self.input.close();
     }
 }
 
@@ -275,5 +424,183 @@ mod tests {
         assert_eq!(k0, Value::String("bucket_a".to_string()));
         let v0 = BatchToRowAdapter::extract_value(&batch.columns[1], 0);
         assert_eq!(v0, Value::Int(10));
+    }
+
+    #[test]
+    fn test_streaming_groupby_single_batch_two_buckets() {
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = LinkedHashMap::new();
+
+        let ts_values = vec![
+            Value::DateTime(
+                chrono::DateTime::parse_from_rfc3339("2026-04-07T10:01:00Z").unwrap(),
+            ),
+            Value::DateTime(
+                chrono::DateTime::parse_from_rfc3339("2026-04-07T10:03:00Z").unwrap(),
+            ),
+            Value::DateTime(
+                chrono::DateTime::parse_from_rfc3339("2026-04-07T10:06:00Z").unwrap(),
+            ),
+            Value::DateTime(
+                chrono::DateTime::parse_from_rfc3339("2026-04-07T10:08:00Z").unwrap(),
+            ),
+        ];
+
+        let ts_col = build_mixed_column(ts_values);
+        let batch = ColumnBatch {
+            columns: vec![ts_col],
+            names: vec!["timestamp".to_string()],
+            selection: SelectionVector::All,
+            len: 4,
+        };
+        let schema = BatchSchema {
+            names: vec!["timestamp".into()],
+            types: vec![ColumnType::Mixed],
+        };
+        let child = MultiBatchStream {
+            batches: VecDeque::from(vec![batch]),
+            schema,
+        };
+
+        let mut op = BatchStreamingGroupByOperator::new(
+            Box::new(child),
+            "timestamp".to_string(),
+            "5 minutes".to_string(),
+            "bucket".to_string(),
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("cnt".to_string()),
+            )],
+            variables,
+            registry,
+        );
+
+        let mut all_keys = Vec::new();
+        let mut all_counts = Vec::new();
+        loop {
+            match op.next_batch().unwrap() {
+                Some(b) => {
+                    for i in 0..b.len {
+                        all_keys.push(BatchToRowAdapter::extract_value(&b.columns[0], i));
+                        all_counts.push(BatchToRowAdapter::extract_value(&b.columns[1], i));
+                    }
+                }
+                None => break,
+            }
+        }
+
+        assert_eq!(all_keys.len(), 2);
+        let expected_bucket_1 = Value::DateTime(
+            chrono::DateTime::parse_from_rfc3339("2026-04-07T10:00:00Z").unwrap(),
+        );
+        let expected_bucket_2 = Value::DateTime(
+            chrono::DateTime::parse_from_rfc3339("2026-04-07T10:05:00Z").unwrap(),
+        );
+        assert_eq!(all_keys[0], expected_bucket_1);
+        assert_eq!(all_counts[0], Value::Int(2));
+        assert_eq!(all_keys[1], expected_bucket_2);
+        assert_eq!(all_counts[1], Value::Int(2));
+    }
+
+    #[test]
+    fn test_streaming_groupby_cross_batch_bucket() {
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = LinkedHashMap::new();
+
+        // Batch 1: two rows in 10:00 bucket
+        let batch1 = ColumnBatch {
+            columns: vec![build_mixed_column(vec![
+                Value::DateTime(
+                    chrono::DateTime::parse_from_rfc3339("2026-04-07T10:01:00Z").unwrap(),
+                ),
+                Value::DateTime(
+                    chrono::DateTime::parse_from_rfc3339("2026-04-07T10:03:00Z").unwrap(),
+                ),
+            ])],
+            names: vec!["timestamp".to_string()],
+            selection: SelectionVector::All,
+            len: 2,
+        };
+        // Batch 2: one more row in 10:00 bucket, then one in 10:05
+        let batch2 = ColumnBatch {
+            columns: vec![build_mixed_column(vec![
+                Value::DateTime(
+                    chrono::DateTime::parse_from_rfc3339("2026-04-07T10:04:00Z").unwrap(),
+                ),
+                Value::DateTime(
+                    chrono::DateTime::parse_from_rfc3339("2026-04-07T10:06:00Z").unwrap(),
+                ),
+            ])],
+            names: vec!["timestamp".to_string()],
+            selection: SelectionVector::All,
+            len: 2,
+        };
+
+        let schema = BatchSchema {
+            names: vec!["timestamp".into()],
+            types: vec![ColumnType::Mixed],
+        };
+        let child = MultiBatchStream {
+            batches: VecDeque::from(vec![batch1, batch2]),
+            schema,
+        };
+
+        let mut op = BatchStreamingGroupByOperator::new(
+            Box::new(child),
+            "timestamp".to_string(),
+            "5 minutes".to_string(),
+            "bucket".to_string(),
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("cnt".to_string()),
+            )],
+            variables,
+            registry,
+        );
+
+        let mut all_counts = Vec::new();
+        loop {
+            match op.next_batch().unwrap() {
+                Some(b) => {
+                    for i in 0..b.len {
+                        all_counts.push(BatchToRowAdapter::extract_value(&b.columns[1], i));
+                    }
+                }
+                None => break,
+            }
+        }
+
+        assert_eq!(all_counts.len(), 2);
+        assert_eq!(all_counts[0], Value::Int(3)); // 10:00 bucket: 3 rows spanning both batches
+        assert_eq!(all_counts[1], Value::Int(1)); // 10:05 bucket: 1 row
+    }
+
+    #[test]
+    fn test_streaming_groupby_empty_input() {
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = LinkedHashMap::new();
+        let schema = BatchSchema {
+            names: vec!["timestamp".into()],
+            types: vec![ColumnType::Mixed],
+        };
+        let child = MultiBatchStream {
+            batches: VecDeque::new(),
+            schema,
+        };
+
+        let mut op = BatchStreamingGroupByOperator::new(
+            Box::new(child),
+            "timestamp".to_string(),
+            "5 minutes".to_string(),
+            "bucket".to_string(),
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("cnt".to_string()),
+            )],
+            variables,
+            registry,
+        );
+
+        assert!(op.next_batch().unwrap().is_none());
     }
 }
