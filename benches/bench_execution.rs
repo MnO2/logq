@@ -26,6 +26,7 @@ fn bench_execution_tier_a(c: &mut Criterion) {
         ("E1_scan_limit", EXEC_E1),
         ("E2_groupby_count", EXEC_E2),
         ("E3_filter_orderby", EXEC_E3),
+        ("E4_groupby_multi_agg", EXEC_E4),
     ];
 
     for (name, query) in &queries {
