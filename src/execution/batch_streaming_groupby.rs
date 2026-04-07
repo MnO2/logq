@@ -603,4 +603,183 @@ mod tests {
 
         assert!(op.next_batch().unwrap().is_none());
     }
+
+    #[test]
+    fn test_streaming_groupby_single_bucket() {
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = LinkedHashMap::new();
+
+        let batch = ColumnBatch {
+            columns: vec![build_mixed_column(vec![
+                Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:01:00Z").unwrap()),
+                Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:02:00Z").unwrap()),
+                Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:04:00Z").unwrap()),
+            ])],
+            names: vec!["timestamp".to_string()],
+            selection: SelectionVector::All,
+            len: 3,
+        };
+
+        let schema = BatchSchema { names: vec!["timestamp".into()], types: vec![ColumnType::Mixed] };
+        let child = MultiBatchStream { batches: VecDeque::from(vec![batch]), schema };
+
+        let mut op = BatchStreamingGroupByOperator::new(
+            Box::new(child),
+            "timestamp".to_string(),
+            "5 minutes".to_string(),
+            "bucket".to_string(),
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("cnt".to_string()),
+            )],
+            variables,
+            registry,
+        );
+
+        let result = op.next_batch().unwrap().unwrap();
+        assert_eq!(result.len, 1);
+        assert_eq!(BatchToRowAdapter::extract_value(&result.columns[1], 0), Value::Int(3));
+        assert!(op.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_streaming_groupby_with_sum_aggregate() {
+        use crate::execution::types::{SumAggregate, Expression};
+        use crate::syntax::ast::{PathExpr, PathSegment};
+        use ordered_float::OrderedFloat;
+
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = LinkedHashMap::new();
+
+        let ts_col = build_mixed_column(vec![
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:01:00Z").unwrap()),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:03:00Z").unwrap()),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:06:00Z").unwrap()),
+            Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-04-07T10:08:00Z").unwrap()),
+        ]);
+        let bytes_col = build_mixed_column(vec![
+            Value::Int(100), Value::Int(200), Value::Int(300), Value::Int(400),
+        ]);
+        let batch = ColumnBatch {
+            columns: vec![ts_col, bytes_col],
+            names: vec!["timestamp".to_string(), "bytes".to_string()],
+            selection: SelectionVector::All,
+            len: 4,
+        };
+
+        let schema = BatchSchema {
+            names: vec!["timestamp".into(), "bytes".into()],
+            types: vec![ColumnType::Mixed, ColumnType::Mixed],
+        };
+        let child = MultiBatchStream { batches: VecDeque::from(vec![batch]), schema };
+
+        let bytes_path = PathExpr::new(vec![PathSegment::AttrName("bytes".to_string())]);
+        let sum_agg = NamedAggregate::new(
+            Aggregate::Sum(
+                SumAggregate::new(),
+                Named::Expression(
+                    Expression::Variable(bytes_path),
+                    None,
+                ),
+            ),
+            Some("total".to_string()),
+        );
+
+        let mut op = BatchStreamingGroupByOperator::new(
+            Box::new(child),
+            "timestamp".to_string(),
+            "5 minutes".to_string(),
+            "bucket".to_string(),
+            vec![
+                NamedAggregate::new(
+                    Aggregate::Count(CountAggregate::new(), Named::Star),
+                    Some("cnt".to_string()),
+                ),
+                sum_agg,
+            ],
+            variables,
+            registry,
+        );
+
+        let mut rows: Vec<(Value, Value, Value)> = Vec::new();
+        loop {
+            match op.next_batch().unwrap() {
+                Some(b) => {
+                    for i in 0..b.len {
+                        rows.push((
+                            BatchToRowAdapter::extract_value(&b.columns[0], i),
+                            BatchToRowAdapter::extract_value(&b.columns[1], i),
+                            BatchToRowAdapter::extract_value(&b.columns[2], i),
+                        ));
+                    }
+                }
+                None => break,
+            }
+        }
+
+        assert_eq!(rows.len(), 2);
+        // Bucket 10:00: count=2, sum=300
+        assert_eq!(rows[0].1, Value::Int(2));
+        assert_eq!(rows[0].2, Value::Float(OrderedFloat(300.0f32)));
+        // Bucket 10:05: count=2, sum=700
+        assert_eq!(rows[1].1, Value::Int(2));
+        assert_eq!(rows[1].2, Value::Float(OrderedFloat(700.0f32)));
+    }
+
+    #[test]
+    fn test_streaming_groupby_many_buckets() {
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = LinkedHashMap::new();
+
+        // Create 100 timestamps, each in a different 1-second bucket
+        let base = chrono::DateTime::parse_from_rfc3339("2026-04-07T10:00:00Z").unwrap();
+        let ts_values: Vec<Value> = (0..100)
+            .map(|i| {
+                Value::DateTime(base + chrono::Duration::seconds(i))
+            })
+            .collect();
+
+        let batch = ColumnBatch {
+            columns: vec![build_mixed_column(ts_values)],
+            names: vec!["timestamp".to_string()],
+            selection: SelectionVector::All,
+            len: 100,
+        };
+
+        let schema = BatchSchema { names: vec!["timestamp".into()], types: vec![ColumnType::Mixed] };
+        let child = MultiBatchStream { batches: VecDeque::from(vec![batch]), schema };
+
+        let mut op = BatchStreamingGroupByOperator::new(
+            Box::new(child),
+            "timestamp".to_string(),
+            "1 second".to_string(),
+            "bucket".to_string(),
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("cnt".to_string()),
+            )],
+            variables,
+            registry,
+        );
+
+        let mut total_groups = 0;
+        let mut batch_count = 0;
+        loop {
+            match op.next_batch().unwrap() {
+                Some(b) => {
+                    total_groups += b.len;
+                    batch_count += 1;
+                    // Each group should have count=1 (one timestamp per second)
+                    for i in 0..b.len {
+                        assert_eq!(BatchToRowAdapter::extract_value(&b.columns[1], i), Value::Int(1));
+                    }
+                }
+                None => break,
+            }
+        }
+
+        assert_eq!(total_groups, 100);
+        // With OUTPUT_BATCH_SIZE=64, should be 2 output batches (64 + 36)
+        assert_eq!(batch_count, 2);
+    }
 }
