@@ -1658,6 +1658,76 @@ impl AccumulatorState {
             _ => unreachable!("accumulate_row called on non-CountStar"),
         }
     }
+
+    /// Produce the output value for emission.
+    ///
+    /// Takes `&mut self` because `ApproxPercentile` must flush its internal
+    /// buffer into the TDigest before computing the quantile.
+    pub(crate) fn finalize(&mut self) -> AggregateResult<Value> {
+        match self {
+            AccumulatorState::Count(c) | AccumulatorState::CountStar(c) => {
+                Ok(Value::Int(*c as i32))
+            }
+            AccumulatorState::Sum(opt_sum) => {
+                Ok(opt_sum.map(Value::Float).unwrap_or(Value::Null))
+            }
+            AccumulatorState::Avg { sum, count } => {
+                if *count == 0 {
+                    return Ok(Value::Null);
+                }
+                Ok(Value::Float(OrderedFloat(
+                    (sum.into_inner() / *count as f64) as f32,
+                )))
+            }
+            AccumulatorState::Min(v)
+            | AccumulatorState::Max(v)
+            | AccumulatorState::First(v)
+            | AccumulatorState::Last(v) => Ok(v.clone().unwrap_or(Value::Null)),
+            AccumulatorState::GroupAs(vals) => Ok(Value::Array(vals.clone())),
+            AccumulatorState::ApproxCountDistinct(hll) => {
+                Ok(Value::Int(hll.count() as i32))
+            }
+            AccumulatorState::PercentileDisc {
+                values,
+                percentile,
+                ordering,
+            } => {
+                if values.is_empty() {
+                    return Ok(Value::Null);
+                }
+                values.sort_by(|a, b| value_cmp(a, b, ordering));
+                let f32_pct: f32 = percentile.into_inner();
+                let idx = ((values.len() as f32) * f32_pct) as usize;
+                Ok(values[idx].clone())
+            }
+            AccumulatorState::ApproxPercentile {
+                digest,
+                buffer,
+                percentile,
+                ..
+            } => {
+                if buffer.is_empty() && digest.count() == 0.0 {
+                    return Ok(Value::Null);
+                }
+                // Flush remaining buffer
+                if !buffer.is_empty() {
+                    let mut fvec = Vec::new();
+                    for v in buffer.iter() {
+                        match v {
+                            Value::Float(f) => fvec.push(f64::from(f.into_inner())),
+                            Value::Int(i) => fvec.push(f64::from(*i)),
+                            _ => return Err(AggregateError::InvalidType),
+                        }
+                    }
+                    *digest = digest.merge_unsorted(fvec);
+                    buffer.clear();
+                }
+                let f64_pct = f64::from(percentile.into_inner());
+                let result = digest.estimate_quantile(f64_pct);
+                Ok(Value::Float(OrderedFloat(result as f32)))
+            }
+        }
+    }
 }
 
 /// All aggregate state for a single group.
@@ -2971,5 +3041,114 @@ mod accumulator_tests {
             AccumulatorState::GroupAs(v) => assert_eq!(v.len(), 2),
             _ => panic!("expected GroupAs"),
         }
+    }
+
+    #[test]
+    fn test_finalize_count_zero() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Count);
+        assert_eq!(state.finalize().unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn test_finalize_count_star_zero() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::CountStar);
+        assert_eq!(state.finalize().unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn test_finalize_sum_empty_is_null() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
+        assert_eq!(state.finalize().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_finalize_sum_with_values() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
+        state.accumulate(&Value::Int(10)).unwrap();
+        state.accumulate(&Value::Int(20)).unwrap();
+        assert_eq!(
+            state.finalize().unwrap(),
+            Value::Float(OrderedFloat(30.0))
+        );
+    }
+
+    #[test]
+    fn test_finalize_avg_empty_is_null() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Avg);
+        assert_eq!(state.finalize().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_finalize_avg_with_values() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Avg);
+        state.accumulate(&Value::Int(10)).unwrap();
+        state.accumulate(&Value::Int(20)).unwrap();
+        assert_eq!(
+            state.finalize().unwrap(),
+            Value::Float(OrderedFloat(15.0))
+        );
+    }
+
+    #[test]
+    fn test_finalize_min_max_empty_is_null() {
+        let mut min = AccumulatorState::new(&AccumulatorKind::Min);
+        let mut max = AccumulatorState::new(&AccumulatorKind::Max);
+        assert_eq!(min.finalize().unwrap(), Value::Null);
+        assert_eq!(max.finalize().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_finalize_first_last_empty_is_null() {
+        let mut first = AccumulatorState::new(&AccumulatorKind::First);
+        let mut last = AccumulatorState::new(&AccumulatorKind::Last);
+        assert_eq!(first.finalize().unwrap(), Value::Null);
+        assert_eq!(last.finalize().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_finalize_group_as_empty() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::GroupAs);
+        assert_eq!(state.finalize().unwrap(), Value::Array(vec![]));
+    }
+
+    #[test]
+    fn test_finalize_approx_count_distinct_empty() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::ApproxCountDistinct);
+        assert_eq!(state.finalize().unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn test_finalize_percentile_disc_empty_is_null() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::PercentileDisc {
+            percentile: OrderedFloat(0.5),
+            ordering: Ordering::Asc,
+        });
+        assert_eq!(state.finalize().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_finalize_percentile_disc_with_values() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::PercentileDisc {
+            percentile: OrderedFloat(0.5),
+            ordering: Ordering::Asc,
+        });
+        for i in [3, 1, 4, 1, 5] {
+            state.accumulate(&Value::Int(i)).unwrap();
+        }
+        let result = state.finalize().unwrap();
+        // After sorting [1,1,3,4,5], idx = (5 * 0.5) as usize = 2, so values[2] = 3
+        assert_eq!(result, Value::Int(3));
+    }
+
+    #[test]
+    fn test_finalize_min_max_with_values() {
+        let mut min = AccumulatorState::new(&AccumulatorKind::Min);
+        let mut max = AccumulatorState::new(&AccumulatorKind::Max);
+        for i in [5, 2, 8] {
+            min.accumulate(&Value::Int(i)).unwrap();
+            max.accumulate(&Value::Int(i)).unwrap();
+        }
+        assert_eq!(min.finalize().unwrap(), Value::Int(2));
+        assert_eq!(max.finalize().unwrap(), Value::Int(8));
     }
 }
