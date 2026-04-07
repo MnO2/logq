@@ -6,8 +6,8 @@ use crate::simd::selection::SelectionVector;
 use crate::common::types::Value;
 
 /// Parse a single field column from all rows in the batch.
-pub(crate) fn parse_field_column(
-    lines: &[Vec<u8>],
+pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
+    lines: &[L],
     fields: &[Vec<(usize, usize)>],
     field_idx: usize,
     datatype: &DataType,
@@ -23,7 +23,7 @@ pub(crate) fn parse_field_column(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let raw = &lines[row][start..end];
+                    let raw = &lines[row].as_ref()[start..end];
                     let bytes = strip_quotes(raw);
                     data_builder.extend_from_slice(bytes);
                 }
@@ -43,7 +43,7 @@ pub(crate) fn parse_field_column(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("0");
+                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
                     match s.parse::<i32>() {
                         Ok(v) => data.push(v),
                         Err(_) => { data.push(0); null_bm.unset(row); }
@@ -66,7 +66,7 @@ pub(crate) fn parse_field_column(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("0");
+                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
                     match s.parse::<f32>() {
                         Ok(v) => data.push(v),
                         Err(_) => { data.push(0.0); null_bm.unset(row); }
@@ -90,7 +90,7 @@ pub(crate) fn parse_field_column(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let raw = &lines[row][start..end];
+                    let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::execution::datasource::parse_utc_timestamp(s) {
                         Ok(dt) => data.push(Value::DateTime(dt)),
@@ -109,7 +109,7 @@ pub(crate) fn parse_field_column(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("-");
+                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("-");
                     if s == "-" {
                         data.push(Value::Null);
                     } else {
@@ -131,7 +131,7 @@ pub(crate) fn parse_field_column(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let raw = &lines[row][start..end];
+                    let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::common::types::parse_http_request(s) {
                         Ok(req) => data.push(Value::HttpRequest(Box::new(req))),
@@ -148,8 +148,8 @@ pub(crate) fn parse_field_column(
 
 /// Parse a field column only for active rows in the selection vector.
 /// Inactive rows get zero-length entries (strings) or zero values (numbers).
-pub(crate) fn parse_field_column_selected(
-    lines: &[Vec<u8>],
+pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
+    lines: &[L],
     fields: &[Vec<(usize, usize)>],
     field_idx: usize,
     datatype: &DataType,
@@ -166,7 +166,7 @@ pub(crate) fn parse_field_column_selected(
             for row in 0..len {
                 if selection.is_active(row, len) && field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let bytes = strip_quotes(&lines[row][start..end]);
+                    let bytes = strip_quotes(&lines[row].as_ref()[start..end]);
                     data_builder.extend_from_slice(bytes);
                 }
                 offsets_builder.push(data_builder.len() as u32);
@@ -190,7 +190,7 @@ pub(crate) fn parse_field_column_selected(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("0");
+                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
                     match s.parse::<i32>() {
                         Ok(v) => data.push(v),
                         Err(_) => { data.push(0); null_bm.unset(row); }
@@ -218,7 +218,7 @@ pub(crate) fn parse_field_column_selected(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("0");
+                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
                     match s.parse::<f32>() {
                         Ok(v) => data.push(v),
                         Err(_) => { data.push(0.0); null_bm.unset(row); }
@@ -245,7 +245,7 @@ pub(crate) fn parse_field_column_selected(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let raw = &lines[row][start..end];
+                    let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::execution::datasource::parse_utc_timestamp(s) {
                         Ok(dt) => data.push(Value::DateTime(dt)),
@@ -268,7 +268,7 @@ pub(crate) fn parse_field_column_selected(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row][start..end]).unwrap_or("-");
+                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("-");
                     if s == "-" {
                         data.push(Value::Null);
                     } else {
@@ -294,7 +294,7 @@ pub(crate) fn parse_field_column_selected(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let raw = &lines[row][start..end];
+                    let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::common::types::parse_http_request(s) {
                         Ok(req) => data.push(Value::HttpRequest(Box::new(req))),
@@ -463,5 +463,23 @@ mod tests {
         assert_eq!(strip_quotes(b"hello"), b"hello");
         assert_eq!(strip_quotes(b"x"), b"x");
         assert_eq!(strip_quotes(b""), b"");
+    }
+
+    #[test]
+    fn test_parse_string_field_with_slices() {
+        let lines: Vec<&[u8]> = vec![b"hello world foo" as &[u8], b"bar baz qux" as &[u8]];
+        let fields = vec![
+            vec![(0, 5), (6, 11), (12, 15)],
+            vec![(0, 3), (4, 7), (8, 11)],
+        ];
+        let col = parse_field_column(&lines, &fields, 0, &DataType::String);
+        match col {
+            TypedColumn::Utf8 { offsets, .. } => {
+                assert_eq!(offsets[0], 0);
+                assert_eq!(offsets[1], 5);  // "hello"
+                assert_eq!(offsets[2], 8);  // "hello" + "bar"
+            }
+            _ => panic!("expected Utf8"),
+        }
     }
 }
