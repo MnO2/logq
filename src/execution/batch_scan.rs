@@ -229,7 +229,7 @@ impl BatchStream for BatchScanOperator {
     fn close(&self) {}
 }
 
-fn datatype_to_column_type(dt: &DataType) -> ColumnType {
+pub(crate) fn datatype_to_column_type(dt: &DataType) -> ColumnType {
     match dt {
         DataType::String => ColumnType::Utf8,
         DataType::Integral => ColumnType::Int32,

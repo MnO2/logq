@@ -112,7 +112,6 @@ pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry)
 }
 
 pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, output_mode: OutputMode, threads: usize) -> AppResult<()> {
-    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -124,7 +123,7 @@ pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, out
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables, registry)?;
+    let mut stream = physical_plan.get(variables, registry, threads)?;
 
     match output_mode {
         OutputMode::Table => {
@@ -199,7 +198,6 @@ pub(crate) fn run_to_vec(
     data_sources: common::types::DataSourceRegistry,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -211,7 +209,7 @@ pub(crate) fn run_to_vec(
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables, registry)?;
+    let mut stream = physical_plan.get(variables, registry, threads)?;
     let mut results = Vec::new();
 
     while let Some(record) = stream.next()? {
@@ -227,7 +225,6 @@ pub fn run_to_records(
     data_sources: common::types::DataSourceRegistry,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -239,7 +236,7 @@ pub fn run_to_records(
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables, registry)?;
+    let mut stream = physical_plan.get(variables, registry, threads)?;
     let mut results = Vec::new();
 
     while let Some(record) = stream.next()? {
@@ -256,7 +253,6 @@ pub fn run_to_records_with_registry(
     registry: Arc<functions::FunctionRegistry>,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let _threads = threads;
     let (rest_of_str, q) = syntax::parser::query(&query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
@@ -267,7 +263,7 @@ pub fn run_to_records_with_registry(
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables, registry)?;
+    let mut stream = physical_plan.get(variables, registry, threads)?;
     let mut results = Vec::new();
 
     while let Some(record) = stream.next()? {

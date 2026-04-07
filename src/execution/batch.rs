@@ -1,5 +1,6 @@
 // src/execution/batch.rs
 
+use std::collections::VecDeque;
 use crate::common::types::Value;
 use crate::execution::stream::{Record, RecordStream};
 use crate::execution::types::StreamResult;
@@ -82,6 +83,34 @@ pub trait BatchStream {
     fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>>;
     fn schema(&self) -> &BatchSchema;
     fn close(&self);
+}
+
+/// A [`BatchStream`] backed by pre-computed batches (e.g. from parallel scanning).
+/// Yields batches one at a time from an internal queue.
+pub struct PrecomputedBatchStream {
+    batches: VecDeque<ColumnBatch>,
+    batch_schema: BatchSchema,
+}
+
+impl PrecomputedBatchStream {
+    pub fn new(batches: Vec<ColumnBatch>, batch_schema: BatchSchema) -> Self {
+        Self {
+            batches: batches.into(),
+            batch_schema,
+        }
+    }
+}
+
+impl BatchStream for PrecomputedBatchStream {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        Ok(self.batches.pop_front())
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.batch_schema
+    }
+
+    fn close(&self) {}
 }
 
 /// Converts a [`BatchStream`] into a [`RecordStream`] by materializing each
