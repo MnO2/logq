@@ -1706,7 +1706,7 @@ impl AccumulatorState {
                 percentile,
                 ..
             } => {
-                if buffer.is_empty() && digest.count() == 0.0 {
+                if buffer.is_empty() && digest.count() <= f64::EPSILON {
                     return Ok(Value::Null);
                 }
                 // Flush remaining buffer
@@ -3276,5 +3276,17 @@ mod accumulator_tests {
         let def = AggregateDef::from_named_aggregate(&na);
         assert!(matches!(def.kind, AccumulatorKind::GroupAs));
         assert!(matches!(def.extraction, ExtractionStrategy::RecordCapture));
+    }
+
+    #[test]
+    fn test_sum_null_returns_error() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
+        assert!(state.accumulate(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn test_avg_null_returns_error() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Avg);
+        assert!(state.accumulate(&Value::Null).is_err());
     }
 }
