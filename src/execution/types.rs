@@ -2,7 +2,9 @@ use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{CrossJoinStream, DistinctStream, ExceptStream, FilterStream, GroupByStream, InMemoryStream, IntersectStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream, UnionStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
-use crate::execution::batch::{BatchToRowAdapter, BatchStream};
+use crate::execution::batch::{BatchSchema, BatchToRowAdapter, BatchStream, PrecomputedBatchStream};
+use crate::execution::batch_scan::datatype_to_column_type;
+use crate::execution::parallel;
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
 use crate::execution::batch_project::BatchProjectOperator;
@@ -221,7 +223,7 @@ impl Expression {
                 }
             }
             Expression::Subquery(node) => {
-                let mut stream = node.get(variables.clone(), registry.clone())
+                let mut stream = node.get(variables.clone(), registry.clone(), 0)
                     .map_err(|_| ExpressionError::InvalidArguments)?;
                 if let Some(record) = stream.next()
                     .map_err(|_| ExpressionError::InvalidArguments)? {
@@ -588,6 +590,7 @@ impl Node {
         variables: &Variables,
         registry: &Arc<FunctionRegistry>,
         required_fields: &[usize],
+        threads: usize,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
         match self {
             Node::DataSource(data_source, bindings) => {
@@ -605,6 +608,25 @@ impl Node {
                         } else {
                             required_fields.to_vec()
                         };
+                        // Try parallel mmap path
+                        if threads > 1 {
+                            if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
+                                match parallel::parallel_scan_chunks(
+                                    &mmap, threads, &schema, &fields, &[], &None,
+                                ) {
+                                    Ok(chunk_batches) => {
+                                        let batch_schema = BatchSchema {
+                                            names: fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
+                                            types: fields.iter().map(|&i| datatype_to_column_type(&schema.field_type(i))).collect(),
+                                        };
+                                        let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
+                                        return Some(Ok(Box::new(PrecomputedBatchStream::new(all_batches, batch_schema))));
+                                    }
+                                    Err(_) => {} // fall through to sequential
+                                }
+                            }
+                        }
+                        // Sequential fallback
                         match std::fs::File::open(path) {
                             Ok(file) => {
                                 let reader: Box<dyn std::io::BufRead> =
@@ -639,6 +661,27 @@ impl Node {
                                     all_fields = (0..schema.field_count()).collect();
                                 }
 
+                                // Try parallel mmap path with pushed predicate
+                                if threads > 1 {
+                                    if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
+                                        let pushed = Some((*formula.clone(), variables.clone(), registry.clone()));
+                                        match parallel::parallel_scan_chunks(
+                                            &mmap, threads, &schema, &all_fields, &filter_fields, &pushed,
+                                        ) {
+                                            Ok(chunk_batches) => {
+                                                let batch_schema = BatchSchema {
+                                                    names: all_fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
+                                                    types: all_fields.iter().map(|&i| datatype_to_column_type(&schema.field_type(i))).collect(),
+                                                };
+                                                let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
+                                                return Some(Ok(Box::new(PrecomputedBatchStream::new(all_batches, batch_schema))));
+                                            }
+                                            Err(_) => {} // fall through to sequential
+                                        }
+                                    }
+                                }
+
+                                // Sequential fallback
                                 match std::fs::File::open(path) {
                                     Ok(file) => {
                                         let reader: Box<dyn std::io::BufRead> =
@@ -657,7 +700,7 @@ impl Node {
                     }
                 }
                 // Fallback: wrap with BatchFilterOperator for non-DataSource children
-                match source.try_get_batch(variables, registry, required_fields) {
+                match source.try_get_batch(variables, registry, required_fields, threads) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
                             batch_stream, *formula.clone(), variables.clone(), registry.clone(),
@@ -669,7 +712,7 @@ impl Node {
                 }
             }
             Node::Limit(count, source) => {
-                match source.try_get_batch(variables, registry, required_fields) {
+                match source.try_get_batch(variables, registry, required_fields, threads) {
                     Some(Ok(batch_stream)) => {
                         let limit = BatchLimitOperator::new(batch_stream, *count);
                         Some(Ok(Box::new(limit) as Box<dyn BatchStream>))
@@ -695,7 +738,7 @@ impl Node {
                 {
                     return None;
                 }
-                match source.try_get_batch(variables, registry, required_fields) {
+                match source.try_get_batch(variables, registry, required_fields, threads) {
                     Some(Ok(batch_stream)) => {
                         // Extract output column names from named_list
                         let output_names: Vec<String> = named_list.iter().filter_map(|named| {
@@ -724,7 +767,7 @@ impl Node {
                 }
             }
             Node::GroupBy(keys, aggregates, source) => {
-                match source.try_get_batch(variables, registry, required_fields) {
+                match source.try_get_batch(variables, registry, required_fields, threads) {
                     Some(Ok(batch_stream)) => {
                         let groupby = crate::execution::batch_groupby::BatchGroupByOperator::new(
                             batch_stream,
@@ -743,14 +786,14 @@ impl Node {
         }
     }
 
-    pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>) -> CreateStreamResult<Box<dyn RecordStream>> {
+    pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>, threads: usize) -> CreateStreamResult<Box<dyn RecordStream>> {
         // Try batch pipeline first for supported node patterns.
         // Skip for bare DataSource — the columnar round-trip (parse to columns →
         // BatchToRowAdapter back to rows) is slower than direct row-based parsing
         // when there's no downstream operator (Filter, GroupBy) that benefits.
         if !matches!(self, Node::DataSource(..)) {
             let required = self.compute_required_fields_for_batch();
-            if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required) {
+            if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required, threads) {
                 let batch_stream = batch_result?;
                 return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
             }
@@ -758,12 +801,12 @@ impl Node {
 
         match self {
             Node::Filter(source, formula) => {
-                let record_stream = source.get(variables.clone(), registry.clone())?;
+                let record_stream = source.get(variables.clone(), registry.clone(), threads)?;
                 let stream = FilterStream::new(*formula.clone(), variables, record_stream, registry);
                 Ok(Box::new(stream))
             }
             Node::Map(named_list, source) => {
-                let record_stream = source.get(variables.clone(), registry.clone())?;
+                let record_stream = source.get(variables.clone(), registry.clone(), threads)?;
 
                 let stream = MapStream::new(named_list.clone(), variables, record_stream, registry);
 
@@ -790,17 +833,17 @@ impl Node {
                 }
             },
             Node::GroupBy(fields, named_aggregates, source) => {
-                let record_stream = source.get(variables.clone(), registry.clone())?;
+                let record_stream = source.get(variables.clone(), registry.clone(), threads)?;
                 let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream, registry);
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
-                let record_stream = source.get(variables.clone(), registry)?;
+                let record_stream = source.get(variables.clone(), registry, threads)?;
                 let stream = LimitStream::new(*row_count, record_stream);
                 Ok(Box::new(stream))
             }
             Node::OrderBy(column_names, orderings, source) => {
-                let mut record_stream = source.get(variables.clone(), registry)?;
+                let mut record_stream = source.get(variables.clone(), registry, threads)?;
                 let mut records = Vec::new();
 
                 while let Some(record) = record_stream.next()? {
@@ -814,34 +857,34 @@ impl Node {
                 Ok(Box::new(stream))
             }
             Node::Distinct(source) => {
-                let record_stream = source.get(variables, registry)?;
+                let record_stream = source.get(variables, registry, threads)?;
                 Ok(Box::new(DistinctStream::new(record_stream)))
             }
             Node::CrossJoin(left, right) => {
-                let left_stream = left.get(variables.clone(), registry.clone())?;
+                let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(CrossJoinStream::new(left_stream, right_node, right_variables, registry)))
+                Ok(Box::new(CrossJoinStream::new(left_stream, right_node, right_variables, registry, threads)))
             }
             Node::LeftJoin(left, right, condition) => {
-                let left_stream = left.get(variables.clone(), registry.clone())?;
+                let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone(), registry)))
+                Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone(), registry, threads)))
             }
             Node::Union(left, right) => {
-                let left_stream = left.get(variables.clone(), registry.clone())?;
-                let right_stream = right.get(variables, registry)?;
+                let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
+                let right_stream = right.get(variables, registry, threads)?;
                 Ok(Box::new(UnionStream::new(left_stream, right_stream)))
             }
             Node::Intersect(left, right, all) => {
-                let left_stream = left.get(variables.clone(), registry.clone())?;
-                let right_stream = right.get(variables, registry)?;
+                let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
+                let right_stream = right.get(variables, registry, threads)?;
                 Ok(Box::new(IntersectStream::new(left_stream, right_stream, *all)?))
             }
             Node::Except(left, right, all) => {
-                let left_stream = left.get(variables.clone(), registry.clone())?;
-                let right_stream = right.get(variables, registry)?;
+                let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
+                let right_stream = right.get(variables, registry, threads)?;
                 Ok(Box::new(ExceptStream::new(left_stream, right_stream, *all)?))
             }
         }
@@ -1410,6 +1453,39 @@ impl ApproxCountDistinctAggregate {
         } else {
             Err(AggregateError::KeyNotFound)
         }
+    }
+}
+
+/// Returns true if `a < b` for comparable Value types.
+/// Used by Min/Max accumulators.
+pub(crate) fn value_less_than(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(i1), Value::Int(i2)) => i1 < i2,
+        (Value::Float(f1), Value::Float(f2)) => f1 < f2,
+        (Value::String(s1), Value::String(s2)) => s1 < s2,
+        (Value::DateTime(d1), Value::DateTime(d2)) => d1 < d2,
+        (Value::Boolean(b1), Value::Boolean(b2)) => !b1 & b2,
+        _ => false,
+    }
+}
+
+/// Compare two Values with a given ordering direction.
+/// Used by PercentileDisc finalize for sorting.
+pub(crate) fn value_cmp(a: &Value, b: &Value, ordering: &Ordering) -> std::cmp::Ordering {
+    let base = match (a, b) {
+        (Value::Int(i1), Value::Int(i2)) => i1.cmp(i2),
+        (Value::Float(f1), Value::Float(f2)) => f1.cmp(f2),
+        (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
+        (Value::DateTime(d1), Value::DateTime(d2)) => d1.cmp(d2),
+        (Value::Boolean(b1), Value::Boolean(b2)) => b1.cmp(b2),
+        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
+        (Value::Host(h1), Value::Host(h2)) => h1.to_string().cmp(&h2.to_string()),
+        (Value::HttpRequest(h1), Value::HttpRequest(h2)) => h1.to_string().cmp(&h2.to_string()),
+        _ => std::cmp::Ordering::Equal,
+    };
+    match ordering {
+        Ordering::Asc => base,
+        Ordering::Desc => base.reverse(),
     }
 }
 
@@ -2402,7 +2478,7 @@ mod tests {
 
         let vars = Variables::default();
         let registry = test_registry();
-        let mut stream = select.get(vars, registry).expect("should create stream");
+        let mut stream = select.get(vars, registry, 0).expect("should create stream");
         let mut count = 0;
         while let Some(record) = stream.next().unwrap() {
             let tuples = record.to_tuples();
@@ -2451,7 +2527,7 @@ mod tests {
             ),
         ], Box::new(groupby));
 
-        let mut stream = map.get(Variables::new(), registry).unwrap();
+        let mut stream = map.get(Variables::new(), registry, 0).unwrap();
         let mut total_rows = 0;
         while let Some(record) = stream.next().unwrap() {
             let vars = record.to_variables();
@@ -2460,5 +2536,43 @@ mod tests {
             total_rows += 1;
         }
         assert!(total_rows > 0);
+    }
+}
+
+#[cfg(test)]
+mod accumulator_tests {
+    use super::*;
+    use crate::common::types::Value;
+    use ordered_float::OrderedFloat;
+
+    #[test]
+    fn test_value_less_than_ints() {
+        assert!(value_less_than(&Value::Int(1), &Value::Int(2)));
+        assert!(!value_less_than(&Value::Int(2), &Value::Int(1)));
+        assert!(!value_less_than(&Value::Int(1), &Value::Int(1)));
+    }
+
+    #[test]
+    fn test_value_less_than_floats() {
+        assert!(value_less_than(
+            &Value::Float(OrderedFloat(1.0)),
+            &Value::Float(OrderedFloat(2.0))
+        ));
+    }
+
+    #[test]
+    fn test_value_less_than_strings() {
+        assert!(value_less_than(
+            &Value::String("a".to_string()),
+            &Value::String("b".to_string())
+        ));
+    }
+
+    #[test]
+    fn test_value_cmp_asc_desc() {
+        let a = Value::Int(1);
+        let b = Value::Int(2);
+        assert_eq!(value_cmp(&a, &b, &Ordering::Asc), std::cmp::Ordering::Less);
+        assert_eq!(value_cmp(&a, &b, &Ordering::Desc), std::cmp::Ordering::Greater);
     }
 }
