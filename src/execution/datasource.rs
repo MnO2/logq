@@ -15,6 +15,17 @@ use std::path::Path;
 use std::result;
 use std::str::FromStr;
 
+/// Returns the timestamp column name if this log format guarantees
+/// chronological ordering within a single file.
+/// Only ELB and ALB individual log files are guaranteed time-ordered by AWS.
+pub(crate) fn is_time_ordered(format: &str) -> Option<&'static str> {
+    match format {
+        "elb" => Some("timestamp"),
+        "alb" => Some("timestamp"),
+        _ => None,
+    }
+}
+
 /// Fast UTC ISO 8601 timestamp parser for the common AWS log format.
 /// Handles timestamps like "2019-06-07T18:45:33.559871Z".
 /// Falls back to chrono::DateTime::parse_from_rfc3339 for other formats.
@@ -1142,5 +1153,33 @@ mod tests {
             let format_field_name = format!("{}", field_enum);
             assert_eq!(&format_field_name, field_name)
         }
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    #[test]
+    fn test_elb_is_time_ordered() {
+        assert_eq!(super::is_time_ordered("elb"), Some("timestamp"));
+    }
+
+    #[test]
+    fn test_alb_is_time_ordered() {
+        assert_eq!(super::is_time_ordered("alb"), Some("timestamp"));
+    }
+
+    #[test]
+    fn test_s3_is_not_time_ordered() {
+        assert_eq!(super::is_time_ordered("s3"), None);
+    }
+
+    #[test]
+    fn test_squid_is_not_time_ordered() {
+        assert_eq!(super::is_time_ordered("squid"), None);
+    }
+
+    #[test]
+    fn test_jsonl_is_not_time_ordered() {
+        assert_eq!(super::is_time_ordered("jsonl"), None);
     }
 }
