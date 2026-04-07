@@ -43,6 +43,9 @@ pub mod bench_internals {
     // Common types
     pub use crate::common::types::{Value, Variables, VariableName, DataSource, DataSourceRegistry};
 
+    // PrefixSort
+    pub use crate::execution::prefix_sort::PrefixSortEncoder;
+
     // SIMD foundation types
     pub use crate::simd::bitmap::Bitmap;
     pub use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};

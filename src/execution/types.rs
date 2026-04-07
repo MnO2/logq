@@ -14,7 +14,6 @@ use crate::syntax::ast::{CastType, PathExpr, PathSegment};
 use hashbrown::HashMap;
 use ordered_float::OrderedFloat;
 use pdatastructs::hyperloglog::HyperLogLog;
-use std::collections::VecDeque;
 use std::io;
 use std::result;
 use std::sync::Arc;
@@ -536,34 +535,6 @@ impl Formula {
     }
 }
 
-/// Compare two Values by reference for sorting. Returns Ordering assuming ascending.
-/// Null/Missing sort after all non-null values in ascending order.
-fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Int(i1), Value::Int(i2)) => i1.cmp(i2),
-        (Value::Float(f1), Value::Float(f2)) => f1.cmp(f2),
-        (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
-        (Value::Boolean(b1), Value::Boolean(b2)) => b1.cmp(b2),
-        (Value::DateTime(dt1), Value::DateTime(dt2)) => dt1.cmp(dt2),
-        (Value::Host(h1), Value::Host(h2)) => {
-            let s1 = h1.to_string();
-            let s2 = h2.to_string();
-            s1.cmp(&s2)
-        }
-        (Value::HttpRequest(h1), Value::HttpRequest(h2)) => {
-            let s1 = h1.to_string();
-            let s2 = h2.to_string();
-            s1.cmp(&s2)
-        }
-        (Value::Null, Value::Null)
-        | (Value::Missing, Value::Missing)
-        | (Value::Null, Value::Missing)
-        | (Value::Missing, Value::Null) => std::cmp::Ordering::Equal,
-        (Value::Null, _) | (Value::Missing, _) => std::cmp::Ordering::Greater,
-        (_, Value::Null) | (_, Value::Missing) => std::cmp::Ordering::Less,
-        _ => std::cmp::Ordering::Equal,
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
@@ -836,38 +807,10 @@ impl Node {
                     records.push(record);
                 }
 
-                records.sort_by(|a, b| {
-                    for idx in 0..column_names.len() {
-                        let column_name = &column_names[idx];
-                        let curr_ordering = &orderings[idx];
+                let encoder = super::prefix_sort::PrefixSortEncoder::default();
+                let sorted = encoder.sort(records, column_names, orderings);
 
-                        // Fast path: get references to avoid cloning values during sort.
-                        // Falls back to owned get() for complex paths (multi-segment, wildcards).
-                        let a_owned;
-                        let b_owned;
-                        let a_ref = match a.get_ref(column_name) {
-                            Some(v) => v,
-                            None => { a_owned = a.get(column_name); &a_owned }
-                        };
-                        let b_ref = match b.get_ref(column_name) {
-                            Some(v) => v,
-                            None => { b_owned = b.get(column_name); &b_owned }
-                        };
-
-                        let cmp_result = compare_values(a_ref, b_ref);
-                        let ordered = match curr_ordering {
-                            Ordering::Asc => cmp_result,
-                            Ordering::Desc => cmp_result.reverse(),
-                        };
-                        if ordered != std::cmp::Ordering::Equal {
-                            return ordered;
-                        }
-                    }
-
-                    std::cmp::Ordering::Equal
-                });
-
-                let stream = InMemoryStream::new(VecDeque::from(records));
+                let stream = InMemoryStream::new(sorted);
                 Ok(Box::new(stream))
             }
             Node::Distinct(source) => {

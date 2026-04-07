@@ -268,9 +268,13 @@ impl PrefixSortEncoder {
             let entry_offset = i * entry_w;
             for k in 0..num_keys {
                 let slot_offset = entry_offset + k * slot_w;
-                let val = records[i].get(&sort_keys[k]);
+                let val_owned;
+                let val = match records[i].get_ref(&sort_keys[k]) {
+                    Some(v) => v,
+                    None => { val_owned = records[i].get(&sort_keys[k]); &val_owned }
+                };
                 let descending = orderings[k] == Ordering::Desc;
-                self.encode_value(&val, &mut buffer[slot_offset..slot_offset + slot_w], descending);
+                self.encode_value(val, &mut buffer[slot_offset..slot_offset + slot_w], descending);
             }
             // Write row index as u32 big-endian
             let idx_offset = entry_offset + key_w;
@@ -311,9 +315,17 @@ impl PrefixSortEncoder {
                 }
 
                 if STRING_TYPE_TAGS.contains(&tag_a) || STRING_TYPE_TAGS.contains(&tag_b) {
-                    let va = records[row_a].get(&sort_keys[k]);
-                    let vb = records[row_b].get(&sort_keys[k]);
-                    let cmp = compare_values(&va, &vb);
+                    let va_owned;
+                    let va = match records[row_a].get_ref(&sort_keys[k]) {
+                        Some(v) => v,
+                        None => { va_owned = records[row_a].get(&sort_keys[k]); &va_owned }
+                    };
+                    let vb_owned;
+                    let vb = match records[row_b].get_ref(&sort_keys[k]) {
+                        Some(v) => v,
+                        None => { vb_owned = records[row_b].get(&sort_keys[k]); &vb_owned }
+                    };
+                    let cmp = compare_values(va, vb);
                     let ordered = match orderings[k] {
                         Ordering::Asc => cmp,
                         Ordering::Desc => cmp.reverse(),

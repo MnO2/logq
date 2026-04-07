@@ -11,4 +11,5 @@ pub mod field_analysis;
 pub mod field_parser;
 pub mod log_schema;
 pub mod stream;
+pub mod prefix_sort;
 pub mod types;
