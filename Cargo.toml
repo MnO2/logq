@@ -61,3 +61,8 @@ required-features = ["bench-internals"]
 [[bench]]
 name = "bench_udf"
 harness = false
+
+[[bench]]
+name = "bench_sort"
+harness = false
+required-features = ["bench-internals"]
