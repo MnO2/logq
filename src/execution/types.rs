@@ -1842,6 +1842,15 @@ impl GroupState {
             accumulators: defs.iter().map(|d| AccumulatorState::new(&d.kind)).collect(),
         }
     }
+
+    /// Merge another GroupState into this one, element-wise.
+    /// `self` is from the earlier chunk, `other` is from the later chunk.
+    pub(crate) fn merge(&mut self, other: &GroupState) {
+        assert_eq!(self.accumulators.len(), other.accumulators.len());
+        for (a, b) in self.accumulators.iter_mut().zip(other.accumulators.iter()) {
+            a.merge(b);
+        }
+    }
 }
 
 /// Definition of one aggregate (built once in GroupByStream::new).
@@ -3473,5 +3482,24 @@ mod accumulator_tests {
         let b = AccumulatorState::Last(Some(Value::String("late".to_string())));
         a.merge(&b);
         assert_eq!(a.finalize().unwrap(), Value::String("late".to_string()));
+    }
+
+    #[test]
+    fn test_group_state_merge() {
+        let defs = vec![
+            AggregateDef { kind: AccumulatorKind::CountStar, extraction: ExtractionStrategy::None, name: Some("cnt".to_string()) },
+            AggregateDef { kind: AccumulatorKind::Sum, extraction: ExtractionStrategy::None, name: Some("total".to_string()) },
+        ];
+        let mut gs_a = GroupState::new(&defs);
+        gs_a.accumulators[0] = AccumulatorState::CountStar(3);
+        gs_a.accumulators[1] = AccumulatorState::Sum(Some(OrderedFloat(10.0f32)));
+
+        let mut gs_b = GroupState::new(&defs);
+        gs_b.accumulators[0] = AccumulatorState::CountStar(2);
+        gs_b.accumulators[1] = AccumulatorState::Sum(Some(OrderedFloat(5.0f32)));
+
+        gs_a.merge(&gs_b);
+        assert_eq!(gs_a.accumulators[0].finalize().unwrap(), Value::Int(5));
+        assert_eq!(gs_a.accumulators[1].finalize().unwrap(), Value::Float(OrderedFloat(15.0f32)));
     }
 }
