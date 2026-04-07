@@ -1299,4 +1299,91 @@ mod tests {
         let path_b = ast::PathExpr::new(vec![ast::PathSegment::AttrName("b".to_string())]);
         assert_eq!(Value::Int(99), merged.get(&path_b));
     }
+
+    #[test]
+    fn test_groupby_count_skips_null() {
+        // count(a) should not count null values
+        let path_expr_a = ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())]);
+        let mut records = VecDeque::new();
+        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(1)]));
+        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Null]));
+        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(3)]));
+        let stream = Box::new(InMemoryStream::new(records));
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+
+        let aggregates = vec![
+            types::NamedAggregate::new(
+                types::Aggregate::Count(
+                    types::CountAggregate::new(),
+                    types::Named::Expression(
+                        types::Expression::Variable(path_expr_a),
+                        Some("a".to_string()),
+                    ),
+                ),
+                Some("cnt".to_string()),
+            ),
+        ];
+
+        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
+
+        let record = stream.next().unwrap().unwrap();
+        assert_eq!(record.to_variables()["cnt"], Value::Int(2));
+        assert!(stream.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_groupby_count_star_counts_all() {
+        let mut records = VecDeque::new();
+        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(1)]));
+        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Null]));
+        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(3)]));
+        let stream = Box::new(InMemoryStream::new(records));
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+
+        let aggregates = vec![
+            types::NamedAggregate::new(
+                types::Aggregate::Count(types::CountAggregate::new(), types::Named::Star),
+                Some("cnt".to_string()),
+            ),
+        ];
+
+        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
+
+        let record = stream.next().unwrap().unwrap();
+        assert_eq!(record.to_variables()["cnt"], Value::Int(3));
+        assert!(stream.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_groupby_empty_global_aggregate() {
+        // SELECT count(*), sum(a) FROM empty_table should return one row: (0, NULL)
+        let path_expr_a = ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())]);
+        let records = VecDeque::new();
+        let stream = Box::new(InMemoryStream::new(records));
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+
+        let aggregates = vec![
+            types::NamedAggregate::new(
+                types::Aggregate::Count(types::CountAggregate::new(), types::Named::Star),
+                Some("cnt".to_string()),
+            ),
+            types::NamedAggregate::new(
+                types::Aggregate::Sum(
+                    types::SumAggregate::new(),
+                    types::Named::Expression(
+                        types::Expression::Variable(path_expr_a),
+                        Some("a".to_string()),
+                    ),
+                ),
+                Some("total".to_string()),
+            ),
+        ];
+
+        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
+
+        let record = stream.next().unwrap().unwrap();
+        assert_eq!(record.to_variables()["cnt"], Value::Int(0));
+        assert_eq!(record.to_variables()["total"], Value::Null);
+        assert!(stream.next().unwrap().is_none());
+    }
 }
