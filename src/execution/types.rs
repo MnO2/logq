@@ -538,6 +538,14 @@ impl Formula {
 }
 
 
+/// Parameters extracted when a streaming GroupBy pattern is detected.
+struct StreamingGroupByParams<'a> {
+    timestamp_column: String,
+    bucket_interval: String,
+    bucket_alias: String,
+    map_source: &'a Node,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
@@ -581,6 +589,82 @@ impl Node {
             }
         }
         vec![]
+    }
+
+    /// Detect if a GroupBy node qualifies for streaming aggregation.
+    ///
+    /// Requirements:
+    /// 1. Exactly one GROUP BY key
+    /// 2. Child is a Map node containing a time_bucket() function call
+    ///    that aliases to the group key name
+    /// 3. Underlying data source is time-ordered (ELB or ALB)
+    fn detect_streaming_groupby<'a>(
+        keys: &[PathExpr],
+        source: &'a Node,
+    ) -> Option<StreamingGroupByParams<'a>> {
+        // Must have exactly one GROUP BY key
+        if keys.len() != 1 {
+            return None;
+        }
+        let key_name = match keys[0].path_segments.first()? {
+            PathSegment::AttrName(name) => name.clone(),
+            _ => return None,
+        };
+
+        // Child must be a Map node
+        let (named_list, map_source) = match source {
+            Node::Map(named_list, map_source) => (named_list, map_source.as_ref()),
+            _ => return None,
+        };
+
+        // Find the time_bucket() call in the Map's named list that aliases to key_name
+        for named in named_list {
+            if let Named::Expression(
+                Expression::Function(func_name, args),
+                Some(alias),
+            ) = named
+            {
+                if func_name == "time_bucket" && alias == &key_name && args.len() == 2 {
+                    // Extract interval string from first argument
+                    let interval = match &args[0] {
+                        Named::Expression(Expression::Constant(Value::String(s)), _) => s.clone(),
+                        _ => return None,
+                    };
+                    // Extract timestamp column name from second argument
+                    let ts_col = match &args[1] {
+                        Named::Expression(Expression::Variable(path), _) => {
+                            match path.path_segments.last()? {
+                                PathSegment::AttrName(name) => name.clone(),
+                                _ => return None,
+                            }
+                        }
+                        _ => return None,
+                    };
+                    // Verify the underlying source is time-ordered
+                    if !Self::source_is_time_ordered(map_source) {
+                        return None;
+                    }
+                    return Some(StreamingGroupByParams {
+                        timestamp_column: ts_col,
+                        bucket_interval: interval,
+                        bucket_alias: key_name,
+                        map_source,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if the given node subtree has a time-ordered data source.
+    fn source_is_time_ordered(node: &Node) -> bool {
+        match node {
+            Node::DataSource(DataSource::File(_, format, _), _) => {
+                crate::execution::datasource::is_time_ordered(format).is_some()
+            }
+            Node::Filter(child, _) => Self::source_is_time_ordered(child),
+            _ => false,
+        }
     }
 
     /// Try to build a batch pipeline for this node subtree.
@@ -767,6 +851,28 @@ impl Node {
                 }
             }
             Node::GroupBy(keys, aggregates, source) => {
+                // Try streaming aggregation for time-bucketed queries on ordered sources
+                if let Some(params) = Self::detect_streaming_groupby(keys, source) {
+                    // Bypass the Map node: get batch stream from the Map's child
+                    let required = params.map_source.compute_required_fields_for_batch();
+                    match params.map_source.try_get_batch(variables, registry, &required, threads) {
+                        Some(Ok(batch_stream)) => {
+                            let op = crate::execution::batch_streaming_groupby::BatchStreamingGroupByOperator::new(
+                                batch_stream,
+                                params.timestamp_column,
+                                params.bucket_interval,
+                                params.bucket_alias,
+                                aggregates.clone(),
+                                variables.clone(),
+                                registry.clone(),
+                            );
+                            return Some(Ok(Box::new(op) as Box<dyn BatchStream>));
+                        }
+                        Some(Err(e)) => return Some(Err(e)),
+                        None => {} // Fall through to hash-based path
+                    }
+                }
+                // Hash-based fallback
                 match source.try_get_batch(variables, registry, required_fields, threads) {
                     Some(Ok(batch_stream)) => {
                         let groupby = crate::execution::batch_groupby::BatchGroupByOperator::new(
@@ -3008,6 +3114,71 @@ mod tests {
             total_rows += 1;
         }
         assert!(total_rows > 0);
+    }
+
+    #[test]
+    fn test_detect_streaming_groupby_pattern() {
+        let ts_path = PathExpr::new(vec![PathSegment::AttrName("timestamp".to_string())]);
+        let time_bucket_expr = Expression::Function(
+            "time_bucket".to_string(),
+            vec![
+                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string())), None),
+                Named::Expression(Expression::Variable(ts_path), None),
+            ],
+        );
+        let map_named = vec![
+            Named::Expression(time_bucket_expr, Some("bucket".to_string())),
+        ];
+        let ds = Node::DataSource(
+            DataSource::File(std::path::PathBuf::from("test.log"), "elb".to_string(), String::new()),
+            vec![],
+        );
+        let map_node = Node::Map(map_named, Box::new(ds));
+        let group_key = PathExpr::new(vec![PathSegment::AttrName("bucket".to_string())]);
+
+        let result = Node::detect_streaming_groupby(&[group_key], &map_node);
+        assert!(result.is_some());
+        let params = result.unwrap();
+        assert_eq!(params.timestamp_column, "timestamp");
+        assert_eq!(params.bucket_interval, "5 minutes");
+        assert_eq!(params.bucket_alias, "bucket");
+    }
+
+    #[test]
+    fn test_detect_streaming_groupby_rejects_multiple_keys() {
+        let key1 = PathExpr::new(vec![PathSegment::AttrName("bucket".to_string())]);
+        let key2 = PathExpr::new(vec![PathSegment::AttrName("status".to_string())]);
+        let ds = Node::DataSource(
+            DataSource::File(std::path::PathBuf::from("test.log"), "elb".to_string(), String::new()),
+            vec![],
+        );
+        let map_node = Node::Map(vec![], Box::new(ds));
+        let result = Node::detect_streaming_groupby(&[key1, key2], &map_node);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_streaming_groupby_rejects_jsonl() {
+        let ts_path = PathExpr::new(vec![PathSegment::AttrName("timestamp".to_string())]);
+        let time_bucket_expr = Expression::Function(
+            "time_bucket".to_string(),
+            vec![
+                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string())), None),
+                Named::Expression(Expression::Variable(ts_path), None),
+            ],
+        );
+        let map_named = vec![
+            Named::Expression(time_bucket_expr, Some("bucket".to_string())),
+        ];
+        let ds = Node::DataSource(
+            DataSource::File(std::path::PathBuf::from("test.json"), "jsonl".to_string(), String::new()),
+            vec![],
+        );
+        let map_node = Node::Map(map_named, Box::new(ds));
+        let group_key = PathExpr::new(vec![PathSegment::AttrName("bucket".to_string())]);
+
+        let result = Node::detect_streaming_groupby(&[group_key], &map_node);
+        assert!(result.is_none());
     }
 }
 
