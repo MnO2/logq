@@ -1752,6 +1752,73 @@ pub(crate) struct AggregateDef {
     pub(crate) name: Option<String>,
 }
 
+impl AggregateDef {
+    pub(crate) fn from_named_aggregate(na: &NamedAggregate) -> Self {
+        let (kind, extraction) = match &na.aggregate {
+            Aggregate::Count(_, Named::Star) => (
+                AccumulatorKind::CountStar,
+                ExtractionStrategy::None,
+            ),
+            Aggregate::Count(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::Count,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::Sum(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::Sum,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::Avg(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::Avg,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::Min(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::Min,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::Max(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::Max,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::First(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::First,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::Last(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::Last,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::ApproxCountDistinct(_, Named::Expression(expr, _)) => (
+                AccumulatorKind::ApproxCountDistinct,
+                ExtractionStrategy::Expression(expr.clone()),
+            ),
+            Aggregate::GroupAs(_, _) => (
+                AccumulatorKind::GroupAs,
+                ExtractionStrategy::RecordCapture,
+            ),
+            Aggregate::PercentileDisc(agg, col_name) => (
+                AccumulatorKind::PercentileDisc {
+                    percentile: agg.percentile,
+                    ordering: agg.ordering.clone(),
+                },
+                ExtractionStrategy::ColumnLookup(col_name.clone()),
+            ),
+            Aggregate::ApproxPercentile(agg, col_name) => (
+                AccumulatorKind::ApproxPercentile {
+                    percentile: agg.percentile,
+                    ordering: agg.ordering.clone(),
+                },
+                ExtractionStrategy::ColumnLookup(col_name.clone()),
+            ),
+            _ => unreachable!("Star variant not valid for non-Count aggregates"),
+        };
+        AggregateDef {
+            kind,
+            extraction,
+            name: na.name_opt.clone(),
+        }
+    }
+}
+
 /// Returns true if `a < b` for comparable Value types.
 /// Used by Min/Max accumulators.
 pub(crate) fn value_less_than(a: &Value, b: &Value) -> bool {
@@ -3150,5 +3217,64 @@ mod accumulator_tests {
         }
         assert_eq!(min.finalize().unwrap(), Value::Int(2));
         assert_eq!(max.finalize().unwrap(), Value::Int(8));
+    }
+
+    #[test]
+    fn test_aggregate_def_from_count_star() {
+        let na = NamedAggregate::new(
+            Aggregate::Count(CountAggregate::new(), Named::Star),
+            Some("cnt".to_string()),
+        );
+        let def = AggregateDef::from_named_aggregate(&na);
+        assert!(matches!(def.kind, AccumulatorKind::CountStar));
+        assert!(matches!(def.extraction, ExtractionStrategy::None));
+        assert_eq!(def.name, Some("cnt".to_string()));
+    }
+
+    #[test]
+    fn test_aggregate_def_from_sum_expr() {
+        let path = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
+        let na = NamedAggregate::new(
+            Aggregate::Sum(
+                SumAggregate::new(),
+                Named::Expression(Expression::Variable(path), Some("x".to_string())),
+            ),
+            Some("total".to_string()),
+        );
+        let def = AggregateDef::from_named_aggregate(&na);
+        assert!(matches!(def.kind, AccumulatorKind::Sum));
+        assert!(matches!(def.extraction, ExtractionStrategy::Expression(_)));
+        assert_eq!(def.name, Some("total".to_string()));
+    }
+
+    #[test]
+    fn test_aggregate_def_from_percentile_disc() {
+        let na = NamedAggregate::new(
+            Aggregate::PercentileDisc(
+                PercentileDiscAggregate::new(OrderedFloat(0.5), Ordering::Asc),
+                "x".to_string(),
+            ),
+            None,
+        );
+        let def = AggregateDef::from_named_aggregate(&na);
+        assert!(matches!(def.kind, AccumulatorKind::PercentileDisc { .. }));
+        assert!(matches!(def.extraction, ExtractionStrategy::ColumnLookup(_)));
+    }
+
+    #[test]
+    fn test_aggregate_def_from_group_as() {
+        let na = NamedAggregate::new(
+            Aggregate::GroupAs(
+                GroupAsAggregate::new(),
+                Named::Expression(
+                    Expression::Constant(Value::Null),
+                    None,
+                ),
+            ),
+            Some("grp".to_string()),
+        );
+        let def = AggregateDef::from_named_aggregate(&na);
+        assert!(matches!(def.kind, AccumulatorKind::GroupAs));
+        assert!(matches!(def.extraction, ExtractionStrategy::RecordCapture));
     }
 }
