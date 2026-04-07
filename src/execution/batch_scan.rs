@@ -13,6 +13,50 @@ use crate::execution::types::{Formula, StreamResult};
 use crate::functions::FunctionRegistry;
 use crate::simd::selection::SelectionVector;
 
+/// Arena-style storage for batch lines. Stores all line bytes in a single
+/// contiguous buffer with a spans index, avoiding per-line heap allocation.
+pub(crate) struct BatchLineArena {
+    data: Vec<u8>,
+    spans: Vec<(usize, usize)>,
+}
+
+impl BatchLineArena {
+    fn new() -> Self {
+        Self {
+            data: Vec::with_capacity(BATCH_SIZE * 256),
+            spans: Vec::with_capacity(BATCH_SIZE),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.data.clear();
+        self.spans.clear();
+    }
+
+    fn push_line(&mut self, line: &[u8]) {
+        let start = self.data.len();
+        self.data.extend_from_slice(line);
+        self.spans.push((start, self.data.len()));
+    }
+
+    fn get_line(&self, idx: usize) -> &[u8] {
+        let (start, end) = self.spans[idx];
+        &self.data[start..end]
+    }
+
+    fn len(&self) -> usize {
+        self.spans.len()
+    }
+
+    /// Convert to Vec<Vec<u8>> for temporary compatibility with
+    /// parse_field_column which takes &[Vec<u8>].
+    fn to_vecs(&self) -> Vec<Vec<u8>> {
+        self.spans.iter()
+            .map(|&(start, end)| self.data[start..end].to_vec())
+            .collect()
+    }
+}
+
 /// Batch scan operator that reads lines from a BufRead source,
 /// tokenizes them, and parses into columnar ColumnBatches.
 pub(crate) struct BatchScanOperator {
@@ -25,6 +69,7 @@ pub(crate) struct BatchScanOperator {
     done: bool,
     buf: String,
     offsets_scratch: Vec<(usize, usize)>,
+    arena: BatchLineArena,
 }
 
 impl BatchScanOperator {
@@ -53,25 +98,26 @@ impl BatchScanOperator {
             done: false,
             buf: String::with_capacity(512),
             offsets_scratch: Vec::with_capacity(30),
+            arena: BatchLineArena::new(),
         }
     }
 
     fn read_lines(&mut self) -> Vec<Vec<u8>> {
-        let mut lines = Vec::with_capacity(BATCH_SIZE);
-        while lines.len() < BATCH_SIZE {
+        self.arena.clear();
+        while self.arena.len() < BATCH_SIZE {
             self.buf.clear();
             match self.reader.read_line(&mut self.buf) {
                 Ok(0) => { self.done = true; break; }
                 Ok(_) => {
-                    let trimmed = self.buf.trim_end().as_bytes().to_vec();
+                    let trimmed = self.buf.trim_end().as_bytes();
                     if !trimmed.is_empty() {
-                        lines.push(trimmed);
+                        self.arena.push_line(trimmed);
                     }
                 }
                 Err(_) => { self.done = true; break; }
             }
         }
-        lines
+        self.arena.to_vecs()
     }
 }
 
@@ -356,5 +402,31 @@ mod tests {
 
         // All rows filtered => should return None (no more data)
         assert!(scan.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_batch_line_arena() {
+        let mut arena = BatchLineArena::new();
+
+        // Push lines and verify
+        arena.push_line(b"hello world");
+        arena.push_line(b"foo bar baz");
+        assert_eq!(arena.len(), 2);
+        assert_eq!(arena.get_line(0), b"hello world");
+        assert_eq!(arena.get_line(1), b"foo bar baz");
+
+        // to_vecs compatibility
+        let vecs = arena.to_vecs();
+        assert_eq!(vecs.len(), 2);
+        assert_eq!(vecs[0], b"hello world");
+        assert_eq!(vecs[1], b"foo bar baz");
+
+        // Clear and reuse
+        arena.clear();
+        assert_eq!(arena.len(), 0);
+
+        arena.push_line(b"reused line");
+        assert_eq!(arena.len(), 1);
+        assert_eq!(arena.get_line(0), b"reused line");
     }
 }
