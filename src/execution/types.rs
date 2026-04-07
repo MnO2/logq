@@ -1456,6 +1456,118 @@ impl ApproxCountDistinctAggregate {
     }
 }
 
+/// How a given aggregate extracts its input value from each row.
+#[derive(Debug, Clone)]
+pub(crate) enum ExtractionStrategy {
+    /// Evaluate an expression against the row's variables (most aggregates).
+    Expression(Expression),
+    /// Look up a column by name in the row's variables (PercentileDisc, ApproxPercentile).
+    ColumnLookup(String),
+    /// Capture the entire record as a Value::Object (GroupAs).
+    RecordCapture,
+    /// No value needed; just count rows (count(*)).
+    None,
+}
+
+/// What kind of accumulator to create (no data, just the type tag).
+#[derive(Debug, Clone)]
+pub(crate) enum AccumulatorKind {
+    Count,
+    CountStar,
+    Sum,
+    Avg,
+    Min,
+    Max,
+    First,
+    Last,
+    GroupAs,
+    ApproxCountDistinct,
+    PercentileDisc { percentile: OrderedFloat<f32>, ordering: Ordering },
+    ApproxPercentile { percentile: OrderedFloat<f32>, ordering: Ordering },
+}
+
+/// Per-group accumulator state (one per aggregate in the SELECT).
+///
+/// Derives `Debug` and `Clone` only.
+/// Does NOT derive `PartialEq` or `Eq` because:
+///   - `HyperLogLog` (pdatastructs) does not implement `PartialEq`
+///   - `TDigest` does not soundly implement `Eq` (NaN in f64 centroids)
+#[derive(Debug, Clone)]
+pub(crate) enum AccumulatorState {
+    Count(i64),
+    CountStar(i64),
+    Sum(Option<OrderedFloat<f32>>),
+    Avg { sum: OrderedFloat<f64>, count: i64 },
+    Min(Option<Value>),
+    Max(Option<Value>),
+    First(Option<Value>),
+    Last(Option<Value>),
+    GroupAs(Vec<Value>),
+    ApproxCountDistinct(HyperLogLog<Value>),
+    PercentileDisc { values: Vec<Value>, percentile: OrderedFloat<f32>, ordering: Ordering },
+    ApproxPercentile { digest: TDigest, buffer: Vec<Value>, percentile: OrderedFloat<f32>, ordering: Ordering },
+}
+
+impl AccumulatorState {
+    /// Create a fresh accumulator from its kind tag.
+    pub(crate) fn new(kind: &AccumulatorKind) -> Self {
+        match kind {
+            AccumulatorKind::Count => AccumulatorState::Count(0),
+            AccumulatorKind::CountStar => AccumulatorState::CountStar(0),
+            AccumulatorKind::Sum => AccumulatorState::Sum(None),
+            AccumulatorKind::Avg => AccumulatorState::Avg {
+                sum: OrderedFloat(0.0),
+                count: 0,
+            },
+            AccumulatorKind::Min => AccumulatorState::Min(None),
+            AccumulatorKind::Max => AccumulatorState::Max(None),
+            AccumulatorKind::First => AccumulatorState::First(None),
+            AccumulatorKind::Last => AccumulatorState::Last(None),
+            AccumulatorKind::GroupAs => AccumulatorState::GroupAs(Vec::new()),
+            AccumulatorKind::ApproxCountDistinct => {
+                AccumulatorState::ApproxCountDistinct(HyperLogLog::new(8))
+            }
+            AccumulatorKind::PercentileDisc { percentile, ordering } => {
+                AccumulatorState::PercentileDisc {
+                    values: Vec::new(),
+                    percentile: *percentile,
+                    ordering: ordering.clone(),
+                }
+            }
+            AccumulatorKind::ApproxPercentile { percentile, ordering } => {
+                AccumulatorState::ApproxPercentile {
+                    digest: TDigest::new_with_size(100),
+                    buffer: Vec::new(),
+                    percentile: *percentile,
+                    ordering: ordering.clone(),
+                }
+            }
+        }
+    }
+}
+
+/// All aggregate state for a single group.
+#[derive(Debug, Clone)]
+pub(crate) struct GroupState {
+    pub(crate) accumulators: Vec<AccumulatorState>,
+}
+
+impl GroupState {
+    pub(crate) fn new(defs: &[AggregateDef]) -> Self {
+        GroupState {
+            accumulators: defs.iter().map(|d| AccumulatorState::new(&d.kind)).collect(),
+        }
+    }
+}
+
+/// Definition of one aggregate (built once in GroupByStream::new).
+#[derive(Debug, Clone)]
+pub(crate) struct AggregateDef {
+    pub(crate) kind: AccumulatorKind,
+    pub(crate) extraction: ExtractionStrategy,
+    pub(crate) name: Option<String>,
+}
+
 /// Returns true if `a < b` for comparable Value types.
 /// Used by Min/Max accumulators.
 pub(crate) fn value_less_than(a: &Value, b: &Value) -> bool {
@@ -2574,5 +2686,57 @@ mod accumulator_tests {
         let b = Value::Int(2);
         assert_eq!(value_cmp(&a, &b, &Ordering::Asc), std::cmp::Ordering::Less);
         assert_eq!(value_cmp(&a, &b, &Ordering::Desc), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_accumulator_state_new_count() {
+        let state = AccumulatorState::new(&AccumulatorKind::Count);
+        assert!(matches!(state, AccumulatorState::Count(0)));
+    }
+
+    #[test]
+    fn test_accumulator_state_new_count_star() {
+        let state = AccumulatorState::new(&AccumulatorKind::CountStar);
+        assert!(matches!(state, AccumulatorState::CountStar(0)));
+    }
+
+    #[test]
+    fn test_accumulator_state_new_sum() {
+        let state = AccumulatorState::new(&AccumulatorKind::Sum);
+        assert!(matches!(state, AccumulatorState::Sum(None)));
+    }
+
+    #[test]
+    fn test_accumulator_state_new_avg() {
+        let state = AccumulatorState::new(&AccumulatorKind::Avg);
+        match state {
+            AccumulatorState::Avg { count, .. } => assert_eq!(count, 0),
+            _ => panic!("expected Avg"),
+        }
+    }
+
+    #[test]
+    fn test_accumulator_state_new_min_max() {
+        let min = AccumulatorState::new(&AccumulatorKind::Min);
+        let max = AccumulatorState::new(&AccumulatorKind::Max);
+        assert!(matches!(min, AccumulatorState::Min(None)));
+        assert!(matches!(max, AccumulatorState::Max(None)));
+    }
+
+    #[test]
+    fn test_accumulator_state_new_first_last() {
+        let first = AccumulatorState::new(&AccumulatorKind::First);
+        let last = AccumulatorState::new(&AccumulatorKind::Last);
+        assert!(matches!(first, AccumulatorState::First(None)));
+        assert!(matches!(last, AccumulatorState::Last(None)));
+    }
+
+    #[test]
+    fn test_accumulator_state_new_group_as() {
+        let state = AccumulatorState::new(&AccumulatorKind::GroupAs);
+        match state {
+            AccumulatorState::GroupAs(v) => assert!(v.is_empty()),
+            _ => panic!("expected GroupAs"),
+        }
     }
 }
