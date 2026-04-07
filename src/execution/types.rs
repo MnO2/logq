@@ -1544,6 +1544,120 @@ impl AccumulatorState {
             }
         }
     }
+
+    /// Per-row update with a value.
+    ///
+    /// Null/Missing policy:
+    /// - Value::Missing: always skipped (no-op) for all variants
+    /// - Value::Null: skipped for Count and ApproxCountDistinct;
+    ///   accumulated normally for Min/Max/First/Last/GroupAs;
+    ///   returns InvalidType error for Sum/Avg
+    pub(crate) fn accumulate(&mut self, val: &Value) -> AggregateResult<()> {
+        // Universal Missing skip
+        if matches!(val, Value::Missing) {
+            return Ok(());
+        }
+        match self {
+            AccumulatorState::Count(count) => {
+                if !matches!(val, Value::Null) {
+                    *count += 1;
+                }
+            }
+            AccumulatorState::Sum(opt_sum) => {
+                let fval = match val {
+                    Value::Int(i) => OrderedFloat::from(*i as f32),
+                    Value::Float(f) => *f,
+                    _ => return Err(AggregateError::InvalidType),
+                };
+                *opt_sum = Some(match opt_sum {
+                    Some(s) => OrderedFloat(s.into_inner() + fval.into_inner()),
+                    None => fval,
+                });
+            }
+            AccumulatorState::Avg { sum, count } => {
+                let fval: f64 = match val {
+                    Value::Int(i) => *i as f64,
+                    Value::Float(f) => f.into_inner() as f64,
+                    _ => return Err(AggregateError::InvalidType),
+                };
+                *sum += fval;
+                *count += 1;
+            }
+            AccumulatorState::Min(current) => {
+                match current {
+                    None => {
+                        *current = Some(val.clone());
+                    }
+                    Some(cur) => {
+                        if value_less_than(val, cur) {
+                            *current = Some(val.clone());
+                        }
+                    }
+                }
+            }
+            AccumulatorState::Max(current) => {
+                match current {
+                    None => {
+                        *current = Some(val.clone());
+                    }
+                    Some(cur) => {
+                        if value_less_than(cur, val) {
+                            *current = Some(val.clone());
+                        }
+                    }
+                }
+            }
+            AccumulatorState::First(slot) => {
+                if slot.is_none() {
+                    *slot = Some(val.clone());
+                }
+            }
+            AccumulatorState::Last(slot) => {
+                *slot = Some(val.clone());
+            }
+            AccumulatorState::GroupAs(vals) => {
+                vals.push(val.clone());
+            }
+            AccumulatorState::ApproxCountDistinct(hll) => {
+                if !matches!(val, Value::Null) {
+                    hll.add(val);
+                }
+            }
+            AccumulatorState::PercentileDisc { values, .. } => {
+                values.push(val.clone());
+            }
+            AccumulatorState::ApproxPercentile { digest, buffer, .. } => {
+                buffer.push(val.clone());
+                if buffer.len() >= 10000 {
+                    let mut fvec = Vec::new();
+                    for v in buffer.iter() {
+                        match v {
+                            Value::Float(f) => fvec.push(f64::from(f.into_inner())),
+                            Value::Int(i) => fvec.push(f64::from(*i)),
+                            _ => return Err(AggregateError::InvalidType),
+                        }
+                    }
+                    *digest = digest.merge_unsorted(fvec);
+                    buffer.clear();
+                }
+            }
+            AccumulatorState::CountStar(_) => {
+                unreachable!("CountStar should use accumulate_row()");
+            }
+        }
+        Ok(())
+    }
+
+    /// Per-row update with no value (for count(*) only).
+    pub(crate) fn accumulate_row(&mut self) -> AggregateResult<()> {
+        match self {
+            AccumulatorState::CountStar(count) => {
+                *count += 1;
+                Ok(())
+            }
+            _ => unreachable!("accumulate_row called on non-CountStar"),
+        }
+    }
 }
 
 /// All aggregate state for a single group.
@@ -2736,6 +2850,125 @@ mod accumulator_tests {
         let state = AccumulatorState::new(&AccumulatorKind::GroupAs);
         match state {
             AccumulatorState::GroupAs(v) => assert!(v.is_empty()),
+            _ => panic!("expected GroupAs"),
+        }
+    }
+
+    #[test]
+    fn test_count_accumulate_skips_null() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Count);
+        state.accumulate(&Value::Int(1)).unwrap();
+        state.accumulate(&Value::Null).unwrap();
+        state.accumulate(&Value::Int(2)).unwrap();
+        assert!(matches!(state, AccumulatorState::Count(2)));
+    }
+
+    #[test]
+    fn test_count_accumulate_skips_missing() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Count);
+        state.accumulate(&Value::Int(1)).unwrap();
+        state.accumulate(&Value::Missing).unwrap();
+        assert!(matches!(state, AccumulatorState::Count(1)));
+    }
+
+    #[test]
+    fn test_count_star_accumulate_row() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::CountStar);
+        state.accumulate_row().unwrap();
+        state.accumulate_row().unwrap();
+        state.accumulate_row().unwrap();
+        assert!(matches!(state, AccumulatorState::CountStar(3)));
+    }
+
+    #[test]
+    fn test_sum_accumulate() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
+        state.accumulate(&Value::Int(10)).unwrap();
+        state.accumulate(&Value::Int(20)).unwrap();
+        match &state {
+            AccumulatorState::Sum(Some(s)) => assert_eq!(s.into_inner(), 30.0),
+            _ => panic!("expected Sum(Some(...))"),
+        }
+    }
+
+    #[test]
+    fn test_sum_skips_missing() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
+        state.accumulate(&Value::Missing).unwrap();
+        assert!(matches!(state, AccumulatorState::Sum(None)));
+    }
+
+    #[test]
+    fn test_avg_accumulate() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Avg);
+        state.accumulate(&Value::Int(10)).unwrap();
+        state.accumulate(&Value::Int(20)).unwrap();
+        match &state {
+            AccumulatorState::Avg { sum, count } => {
+                assert_eq!(sum.into_inner(), 30.0);
+                assert_eq!(*count, 2);
+            }
+            _ => panic!("expected Avg"),
+        }
+    }
+
+    #[test]
+    fn test_min_accumulate() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Min);
+        state.accumulate(&Value::Int(5)).unwrap();
+        state.accumulate(&Value::Int(2)).unwrap();
+        state.accumulate(&Value::Int(8)).unwrap();
+        match &state {
+            AccumulatorState::Min(Some(Value::Int(2))) => {}
+            _ => panic!("expected Min(Some(Int(2)))"),
+        }
+    }
+
+    #[test]
+    fn test_max_accumulate() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Max);
+        state.accumulate(&Value::Int(5)).unwrap();
+        state.accumulate(&Value::Int(8)).unwrap();
+        state.accumulate(&Value::Int(2)).unwrap();
+        match &state {
+            AccumulatorState::Max(Some(Value::Int(8))) => {}
+            _ => panic!("expected Max(Some(Int(8)))"),
+        }
+    }
+
+    #[test]
+    fn test_first_last_accumulate() {
+        let mut first = AccumulatorState::new(&AccumulatorKind::First);
+        let mut last = AccumulatorState::new(&AccumulatorKind::Last);
+        for i in [1, 2, 3] {
+            first.accumulate(&Value::Int(i)).unwrap();
+            last.accumulate(&Value::Int(i)).unwrap();
+        }
+        assert!(matches!(first, AccumulatorState::First(Some(Value::Int(1)))));
+        assert!(matches!(last, AccumulatorState::Last(Some(Value::Int(3)))));
+    }
+
+    #[test]
+    fn test_approx_count_distinct_skips_null() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::ApproxCountDistinct);
+        state.accumulate(&Value::Int(1)).unwrap();
+        state.accumulate(&Value::Null).unwrap();
+        state.accumulate(&Value::Int(2)).unwrap();
+        match &state {
+            AccumulatorState::ApproxCountDistinct(hll) => {
+                assert!(hll.count() >= 1);
+            }
+            _ => panic!("expected ApproxCountDistinct"),
+        }
+    }
+
+    #[test]
+    fn test_group_as_accumulate() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::GroupAs);
+        state.accumulate(&Value::Int(1)).unwrap();
+        state.accumulate(&Value::Int(2)).unwrap();
+        match &state {
+            AccumulatorState::GroupAs(v) => assert_eq!(v.len(), 2),
             _ => panic!("expected GroupAs"),
         }
     }
