@@ -745,4 +745,66 @@ mod tests {
         assert_eq!(compare_values(&Value::Int(1), &Value::Null), std::cmp::Ordering::Less);
         assert_eq!(compare_values(&Value::Null, &Value::Missing), std::cmp::Ordering::Equal);
     }
+
+    #[test]
+    fn test_prefix_sort_matches_direct_sort_int() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(12345);
+
+        let fields = vec!["x".to_string(), "y".to_string()];
+        let records: Vec<Record> = (0..500).map(|_| {
+            make_record(&fields, vec![
+                Value::Int(rng.gen_range(-1000..1000)),
+                Value::String(format!("str_{}", rng.gen_range(0..50))),
+            ])
+        }).collect();
+
+        let keys = vec![path("x"), path("y")];
+        let orderings = vec![Ordering::Asc, Ordering::Desc];
+
+        // Direct sort (control)
+        let mut direct = records.clone();
+        direct_sort(&mut direct, &keys, &orderings);
+        let direct_vals: Vec<(Value, Value)> = direct.iter()
+            .map(|r| (r.get(&path("x")), r.get(&path("y"))))
+            .collect();
+
+        // Prefix sort (treatment)
+        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let prefix_result = encoder.sort(records, &keys, &orderings);
+        let prefix_vals: Vec<(Value, Value)> = prefix_result.iter()
+            .map(|r| (r.get(&path("x")), r.get(&path("y"))))
+            .collect();
+
+        assert_eq!(direct_vals, prefix_vals);
+    }
+
+    #[test]
+    fn test_prefix_sort_matches_direct_sort_with_nulls() {
+        use rand::prelude::*;
+        let mut rng = StdRng::seed_from_u64(99999);
+
+        let fields = vec!["x".to_string()];
+        let records: Vec<Record> = (0..200).map(|_| {
+            let val = if rng.gen_bool(0.2) {
+                Value::Null
+            } else {
+                Value::Int(rng.gen_range(0..100))
+            };
+            make_record(&fields, vec![val])
+        }).collect();
+
+        let keys = vec![path("x")];
+        let orderings = vec![Ordering::Asc];
+
+        let mut direct = records.clone();
+        direct_sort(&mut direct, &keys, &orderings);
+        let direct_vals: Vec<Value> = direct.iter().map(|r| r.get(&path("x"))).collect();
+
+        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let prefix_result = encoder.sort(records, &keys, &orderings);
+        let prefix_vals: Vec<Value> = prefix_result.iter().map(|r| r.get(&path("x"))).collect();
+
+        assert_eq!(direct_vals, prefix_vals);
+    }
 }
