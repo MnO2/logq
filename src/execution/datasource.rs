@@ -762,7 +762,7 @@ pub trait RecordRead {
 impl ReaderBuilder {
     pub fn new(file_format: String) -> Self {
         ReaderBuilder {
-            capacity: 8 * (1 << 10),
+            capacity: 64 * (1 << 10),
             file_format: file_format,
         }
     }
