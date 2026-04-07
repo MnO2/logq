@@ -1505,6 +1505,8 @@ pub(crate) enum AccumulatorState {
     GroupAs(Vec<Value>),
     ApproxCountDistinct(HyperLogLog<Value>),
     PercentileDisc { values: Vec<Value>, percentile: OrderedFloat<f32>, ordering: Ordering },
+    // ordering is stored for future use (TDigest quantile estimation is always ascending)
+    #[allow(dead_code)]
     ApproxPercentile { digest: TDigest, buffer: Vec<Value>, percentile: OrderedFloat<f32>, ordering: Ordering },
 }
 
@@ -1549,9 +1551,8 @@ impl AccumulatorState {
     ///
     /// Null/Missing policy:
     /// - Value::Missing: always skipped (no-op) for all variants
-    /// - Value::Null: skipped for Count and ApproxCountDistinct;
-    ///   accumulated normally for Min/Max/First/Last/GroupAs;
-    ///   returns InvalidType error for Sum/Avg
+    /// - Value::Null: skipped for Count, Sum, Avg, and ApproxCountDistinct;
+    ///   accumulated normally for Min/Max/First/Last/GroupAs
     pub(crate) fn accumulate(&mut self, val: &Value) -> AggregateResult<()> {
         // Universal Missing skip
         if matches!(val, Value::Missing) {
@@ -1564,6 +1565,9 @@ impl AccumulatorState {
                 }
             }
             AccumulatorState::Sum(opt_sum) => {
+                if matches!(val, Value::Null) {
+                    return Ok(());
+                }
                 let fval = match val {
                     Value::Int(i) => OrderedFloat::from(*i as f32),
                     Value::Float(f) => *f,
@@ -1575,6 +1579,9 @@ impl AccumulatorState {
                 });
             }
             AccumulatorState::Avg { sum, count } => {
+                if matches!(val, Value::Null) {
+                    return Ok(());
+                }
                 let fval: f64 = match val {
                     Value::Int(i) => *i as f64,
                     Value::Float(f) => f.into_inner() as f64,
@@ -3279,14 +3286,27 @@ mod accumulator_tests {
     }
 
     #[test]
-    fn test_sum_null_returns_error() {
+    fn test_sum_skips_null() {
         let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
-        assert!(state.accumulate(&Value::Null).is_err());
+        state.accumulate(&Value::Int(10)).unwrap();
+        state.accumulate(&Value::Null).unwrap();
+        state.accumulate(&Value::Int(20)).unwrap();
+        assert_eq!(
+            state.finalize().unwrap(),
+            Value::Float(OrderedFloat(30.0))
+        );
     }
 
     #[test]
-    fn test_avg_null_returns_error() {
+    fn test_avg_skips_null() {
         let mut state = AccumulatorState::new(&AccumulatorKind::Avg);
-        assert!(state.accumulate(&Value::Null).is_err());
+        state.accumulate(&Value::Int(10)).unwrap();
+        state.accumulate(&Value::Null).unwrap();
+        state.accumulate(&Value::Int(20)).unwrap();
+        // Average of 10 and 20 = 15 (null skipped)
+        assert_eq!(
+            state.finalize().unwrap(),
+            Value::Float(OrderedFloat(15.0))
+        );
     }
 }

@@ -371,12 +371,11 @@ pub struct GroupByStream {
     variables: Variables,
     aggregate_defs: Vec<AggregateDef>,
     source: Box<dyn RecordStream>,
-    groups: Option<HashMap<Option<Tuple>, GroupState>>,
     group_iterator: Option<hashbrown::hash_map::IntoIter<Option<Tuple>, GroupState>>,
     registry: Arc<FunctionRegistry>,
 }
 
-impl<'a> GroupByStream {
+impl GroupByStream {
     pub fn new(
         keys: Vec<ast::PathExpr>,
         variables: Variables,
@@ -393,7 +392,6 @@ impl<'a> GroupByStream {
             variables,
             aggregate_defs,
             source,
-            groups: None,
             group_iterator: None,
             registry,
         }
@@ -419,8 +417,9 @@ impl RecordStream for GroupByStream {
                     Some(record.get_many(&self.keys))
                 };
 
+                let missing = Value::Missing;
                 let state = groups
-                    .entry(key.clone())
+                    .entry(key)
                     .or_insert_with(|| GroupState::new(&self.aggregate_defs));
                 for (i, def) in self.aggregate_defs.iter().enumerate() {
                     match &def.extraction {
@@ -429,11 +428,8 @@ impl RecordStream for GroupByStream {
                             state.accumulators[i].accumulate(&val)?;
                         }
                         ExtractionStrategy::ColumnLookup(col_name) => {
-                            let val = variables
-                                .get(col_name)
-                                .cloned()
-                                .unwrap_or(Value::Missing);
-                            state.accumulators[i].accumulate(&val)?;
+                            let val = variables.get(col_name).unwrap_or(&missing);
+                            state.accumulators[i].accumulate(val)?;
                         }
                         ExtractionStrategy::RecordCapture => {
                             let val =
@@ -453,8 +449,7 @@ impl RecordStream for GroupByStream {
                 groups.insert(None, state);
             }
 
-            self.groups = Some(groups);
-            self.group_iterator = Some(self.groups.take().unwrap().into_iter());
+            self.group_iterator = Some(groups.into_iter());
         }
 
         let iter = self.group_iterator.as_mut().unwrap();
