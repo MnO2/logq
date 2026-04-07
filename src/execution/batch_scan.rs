@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::common::types::Variables;
 use crate::execution::batch::*;
 use crate::execution::batch_predicate::evaluate_batch_predicate;
-use crate::execution::batch_tokenizer::tokenize_line;
+use crate::execution::batch_tokenizer::{tokenize_line, tokenize_line_into};
 use crate::execution::field_parser::{parse_field_column, parse_field_column_selected};
 use crate::execution::log_schema::LogSchema;
 use crate::execution::datasource::DataType;
@@ -24,6 +24,7 @@ pub(crate) struct BatchScanOperator {
     batch_schema: BatchSchema,
     done: bool,
     buf: String,
+    offsets_scratch: Vec<(usize, usize)>,
 }
 
 impl BatchScanOperator {
@@ -51,6 +52,7 @@ impl BatchScanOperator {
             batch_schema,
             done: false,
             buf: String::with_capacity(512),
+            offsets_scratch: Vec::with_capacity(30),
         }
     }
 
@@ -87,10 +89,12 @@ impl BatchStream for BatchScanOperator {
 
             let len = lines.len();
 
-            // Tokenize all lines
-            let line_fields: Vec<Vec<(usize, usize)>> = lines.iter()
-                .map(|line| tokenize_line(line))
-                .collect();
+            // Tokenize all lines using reusable scratch buffer
+            let mut line_fields: Vec<Vec<(usize, usize)>> = Vec::with_capacity(len);
+            for line in &lines {
+                tokenize_line_into(line, &mut self.offsets_scratch);
+                line_fields.push(self.offsets_scratch.clone());
+            }
 
             if let Some((ref formula, ref variables, ref registry)) = self.pushed_predicate {
                 // === Two-phase scan ===
