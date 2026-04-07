@@ -1088,43 +1088,35 @@ impl ApproxPercentileAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AvgAggregate {
-    pub(crate) averages: HashMap<Option<Tuple>, OrderedFloat<f32>>,
+    pub(crate) sums: HashMap<Option<Tuple>, OrderedFloat<f64>>,
     pub(crate) counts: HashMap<Option<Tuple>, i64>,
 }
 
 impl AvgAggregate {
     pub(crate) fn new() -> Self {
         AvgAggregate {
-            averages: HashMap::new(),
+            sums: HashMap::new(),
             counts: HashMap::new(),
         }
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        let new_value: OrderedFloat<f32> = match value {
-            &Value::Int(i) => OrderedFloat::from(i as f32),
-            &Value::Float(f) => f,
+        let new_value: f64 = match value {
+            &Value::Int(i) => i as f64,
+            &Value::Float(f) => f.into_inner() as f64,
             _ => {
                 return Err(AggregateError::InvalidType);
             }
         };
 
-        if let (Some(count), Some(avg)) = (self.counts.get_mut(key), self.averages.get_mut(key)) {
-            let new_count = *count + 1;
-            let f32_avg: f32 = (*avg).into();
-            let f32_new_value: f32 = new_value.into();
-            *avg = OrderedFloat::from((f32_avg * (*count as f32) + f32_new_value) / (new_count as f32));
-            *count = new_count;
-        } else {
-            self.averages.insert(key.clone(), new_value);
-            self.counts.insert(key.clone(), 1);
-        }
+        *self.sums.entry(key.clone()).or_insert(OrderedFloat(0.0)) += new_value;
+        *self.counts.entry(key.clone()).or_insert(0) += 1;
         Ok(())
     }
 
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
-        if let Some(&average) = self.averages.get(key) {
-            Ok(Value::Float(average))
+        if let (Some(&sum), Some(&count)) = (self.sums.get(key), self.counts.get(key)) {
+            Ok(Value::Float(OrderedFloat::from((sum.into_inner() / count as f64) as f32)))
         } else {
             Err(AggregateError::KeyNotFound)
         }
