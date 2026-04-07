@@ -1,5 +1,7 @@
 use chrono;
 
+use crate::common::types::Value;
+
 /// Encode i32 into 4 bytes, big-endian, with sign bit flipped for unsigned sort order.
 /// i32::MIN -> 0x00000000, 0 -> 0x80000000, i32::MAX -> 0xFFFFFFFF.
 #[inline]
@@ -50,6 +52,123 @@ fn encode_string_prefix(s: &str, dest: &mut [u8], prefix_len: usize) {
     dest[..copy_len].copy_from_slice(&bytes[..copy_len]);
     if copy_len < prefix_len {
         dest[copy_len..prefix_len].fill(0);
+    }
+}
+
+const TYPE_TAG_NULL: u8 = 0x00;
+const TYPE_TAG_BOOL: u8 = 0x01;
+const TYPE_TAG_INT: u8 = 0x02;
+const TYPE_TAG_FLOAT: u8 = 0x03;
+const TYPE_TAG_STRING: u8 = 0x04;
+const TYPE_TAG_DATETIME: u8 = 0x05;
+const TYPE_TAG_HOST: u8 = 0x06;
+const TYPE_TAG_HTTP_REQUEST: u8 = 0x07;
+const TYPE_TAG_OBJECT: u8 = 0x08;
+const TYPE_TAG_ARRAY: u8 = 0x09;
+
+const NULL_BYTE_NON_NULL: u8 = 0x00;
+const NULL_BYTE_NULL: u8 = 0xFF;
+
+/// String-type tags that need fallback tie-breaking.
+const STRING_TYPE_TAGS: [u8; 3] = [TYPE_TAG_STRING, TYPE_TAG_HOST, TYPE_TAG_HTTP_REQUEST];
+
+pub struct PrefixSortEncoder {
+    pub threshold: usize,
+    pub string_prefix_len: usize,
+}
+
+impl Default for PrefixSortEncoder {
+    fn default() -> Self {
+        PrefixSortEncoder {
+            threshold: 64,
+            string_prefix_len: 16,
+        }
+    }
+}
+
+impl PrefixSortEncoder {
+    /// Width of the encoded value portion (max across all types).
+    fn max_value_width(&self) -> usize {
+        self.string_prefix_len.max(8)
+    }
+
+    /// Total width of one key slot: null_byte + type_tag + value.
+    pub fn slot_width(&self) -> usize {
+        2 + self.max_value_width()
+    }
+
+    /// Total entry width for K sort keys: K * slot_width + 4 (row index).
+    pub fn entry_width(&self, num_keys: usize) -> usize {
+        num_keys * self.slot_width() + 4
+    }
+
+    /// Key portion width (everything except the trailing row index).
+    pub fn key_width(&self, num_keys: usize) -> usize {
+        num_keys * self.slot_width()
+    }
+
+    /// Encode a single Value into a key slot. Applies DESC flip if descending.
+    pub fn encode_value(&self, value: &Value, slot: &mut [u8], descending: bool) {
+        let max_w = self.max_value_width();
+        slot[..2 + max_w].fill(0);
+
+        match value {
+            Value::Null | Value::Missing => {
+                slot[0] = NULL_BYTE_NULL;
+                slot[1] = TYPE_TAG_NULL;
+            }
+            Value::Boolean(b) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_BOOL;
+                encode_bool(*b, &mut slot[2..]);
+            }
+            Value::Int(i) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_INT;
+                encode_i32(*i, &mut slot[2..]);
+            }
+            Value::Float(f) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_FLOAT;
+                encode_f32_to(f.into_inner(), &mut slot[2..]);
+            }
+            Value::String(s) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_STRING;
+                encode_string_prefix(s, &mut slot[2..], self.string_prefix_len);
+            }
+            Value::DateTime(dt) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_DATETIME;
+                encode_datetime(dt, &mut slot[2..]);
+            }
+            Value::Host(h) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_HOST;
+                let s = h.to_string();
+                encode_string_prefix(&s, &mut slot[2..], self.string_prefix_len);
+            }
+            Value::HttpRequest(r) => {
+                slot[0] = NULL_BYTE_NON_NULL;
+                slot[1] = TYPE_TAG_HTTP_REQUEST;
+                let s = r.to_string();
+                encode_string_prefix(&s, &mut slot[2..], self.string_prefix_len);
+            }
+            Value::Object(_) => {
+                slot[0] = NULL_BYTE_NULL;
+                slot[1] = TYPE_TAG_OBJECT;
+            }
+            Value::Array(_) => {
+                slot[0] = NULL_BYTE_NULL;
+                slot[1] = TYPE_TAG_ARRAY;
+            }
+        }
+
+        if descending {
+            for byte in slot[..2 + max_w].iter_mut() {
+                *byte = !*byte;
+            }
+        }
     }
 }
 
@@ -221,5 +340,99 @@ mod tests {
         let mut buf = [0xFFu8; 16];
         encode_string_prefix("", &mut buf, 16);
         assert_eq!(&buf, &[0u8; 16]);
+    }
+
+    // ---- PrefixSortEncoder / encode_value tests ----
+
+    use crate::common::types::Value;
+    use ordered_float::OrderedFloat;
+
+    #[test]
+    fn test_encode_value_null_sorts_last() {
+        let encoder = PrefixSortEncoder::default();
+        let slot_width = encoder.slot_width();
+
+        let mut null_slot = vec![0u8; slot_width];
+        let mut int_slot = vec![0u8; slot_width];
+
+        encoder.encode_value(&Value::Null, &mut null_slot, false);
+        encoder.encode_value(&Value::Int(42), &mut int_slot, false);
+
+        assert!(int_slot < null_slot, "Int should sort before Null in ASC");
+    }
+
+    #[test]
+    fn test_encode_value_desc_reverses() {
+        let encoder = PrefixSortEncoder::default();
+        let slot_width = encoder.slot_width();
+
+        let mut asc_slot = vec![0u8; slot_width];
+        let mut desc_slot = vec![0u8; slot_width];
+
+        encoder.encode_value(&Value::Int(42), &mut asc_slot, false);
+        encoder.encode_value(&Value::Int(42), &mut desc_slot, true);
+
+        for i in 0..slot_width {
+            assert_eq!(asc_slot[i], !desc_slot[i]);
+        }
+    }
+
+    #[test]
+    fn test_encode_value_missing_equals_null() {
+        let encoder = PrefixSortEncoder::default();
+        let slot_width = encoder.slot_width();
+
+        let mut null_slot = vec![0u8; slot_width];
+        let mut missing_slot = vec![0u8; slot_width];
+
+        encoder.encode_value(&Value::Null, &mut null_slot, false);
+        encoder.encode_value(&Value::Missing, &mut missing_slot, false);
+
+        assert_eq!(null_slot, missing_slot);
+    }
+
+    #[test]
+    fn test_encode_value_type_ordering() {
+        let encoder = PrefixSortEncoder::default();
+        let slot_width = encoder.slot_width();
+
+        let values = vec![
+            Value::Boolean(true),
+            Value::Int(1),
+            Value::Float(OrderedFloat::from(1.0f32)),
+            Value::String("a".to_string()),
+            Value::Null,
+        ];
+
+        let mut prev = vec![0u8; slot_width];
+        encoder.encode_value(&values[0], &mut prev, false);
+        for val in &values[1..] {
+            let mut curr = vec![0u8; slot_width];
+            encoder.encode_value(val, &mut curr, false);
+            assert!(prev < curr, "type ordering failed for {:?}", val);
+            prev = curr;
+        }
+    }
+
+    #[test]
+    fn test_encode_value_object_array_ordering() {
+        let encoder = PrefixSortEncoder::default();
+        let slot_width = encoder.slot_width();
+
+        let mut string_slot = vec![0u8; slot_width];
+        encoder.encode_value(&Value::String("zzz".to_string()), &mut string_slot, false);
+
+        let mut null_slot = vec![0u8; slot_width];
+        encoder.encode_value(&Value::Null, &mut null_slot, false);
+
+        let mut obj_slot = vec![0u8; slot_width];
+        encoder.encode_value(&Value::Object(Default::default()), &mut obj_slot, false);
+
+        let mut arr_slot = vec![0u8; slot_width];
+        encoder.encode_value(&Value::Array(vec![]), &mut arr_slot, false);
+
+        assert!(string_slot < null_slot, "typed values should sort before Null");
+        assert!(null_slot < obj_slot, "Null should sort before Object");
+        assert!(obj_slot < arr_slot, "Object should sort before Array");
     }
 }
