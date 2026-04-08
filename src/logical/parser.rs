@@ -36,6 +36,8 @@ pub enum ParseError {
     StdinInJoinRightSide,
     #[error("SELECT * with GROUP BY is not supported for jsonl or multi-table queries (no fixed schema to expand)")]
     StarGroupByUnsupported,
+    #[error("{0}")]
+    UnsupportedJoinType(String),
 }
 
 impl From<RegistryError> for ParseError {
@@ -799,11 +801,38 @@ fn build_from_node(
                     if equi_keys.is_empty() {
                         // No equi-predicates found; fall back to nested-loop
                         let formula = parse_logic(ctx, on_expr)?;
-                        Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
+                        match logical_join_type {
+                            types::LogicalJoinType::Left => {
+                                return Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula));
+                            }
+                            types::LogicalJoinType::Inner => {
+                                // INNER JOIN without equi-predicates: use CrossJoin + Filter
+                                let cross = types::Node::CrossJoin(Box::new(left_node), Box::new(right_node));
+                                return Ok(types::Node::Filter(formula, Box::new(cross)));
+                            }
+                            types::LogicalJoinType::Right => {
+                                return Err(ParseError::UnsupportedJoinType("RIGHT JOIN requires an equality condition (e.g., ON a.id = b.id)".to_string()));
+                            }
+                        }
                     } else {
                         let residual_formula = residual
                             .map(|r| parse_logic(ctx, &r))
                             .transpose()?;
+
+                        // RIGHT JOIN: swap left/right and run as LEFT JOIN
+                        if logical_join_type == types::LogicalJoinType::Right {
+                            let swapped_keys: Vec<(PathExpr, PathExpr)> = equi_keys.into_iter()
+                                .map(|(l, r)| (r, l))
+                                .collect();
+                            return Ok(types::Node::HashJoin {
+                                left: Box::new(right_node),
+                                right: Box::new(left_node),
+                                equi_keys: swapped_keys,
+                                residual: residual_formula,
+                                join_type: types::LogicalJoinType::Left,
+                            });
+                        }
+
                         Ok(types::Node::HashJoin {
                             left: Box::new(left_node),
                             right: Box::new(right_node),

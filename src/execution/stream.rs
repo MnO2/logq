@@ -1001,8 +1001,7 @@ impl HashJoinStream {
             if approx_bytes > self.memory_limit {
                 return Err(super::types::StreamError::General(format!(
                     "Hash join build side exceeded memory limit of {} MB. \
-                     Consider using a smaller table on the build side, \
-                     or increase the limit with --join-memory-limit.",
+                     Consider using a smaller table on the build side of the join.",
                     self.memory_limit / (1024 * 1024)
                 )));
             }

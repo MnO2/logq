@@ -1749,4 +1749,28 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0][0].1, common::types::Value::String("a".into()));
     }
+
+    #[test]
+    fn test_e2e_right_join() {
+        // RIGHT JOIN: unmatched right-side rows get NULL-padded left columns
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "x": "hello"}"#,
+            ],
+            &[
+                r#"{"id": 1, "y": "alpha"}"#,
+                r#"{"id": 2, "y": "beta"}"#,
+            ],
+            r#"SELECT x, y FROM a RIGHT JOIN b ON a.id = b.id"#,
+        ).unwrap();
+
+        assert_eq!(result.len(), 2, "results: {:?}", result);
+        // After swap: column order is y (probe/b), x (build/a)
+        // id=1 matched row
+        assert_eq!(result[0][0].1, common::types::Value::String("alpha".into()));
+        assert_eq!(result[0][1].1, common::types::Value::String("hello".into()));
+        // id=2 unmatched: x=NULL (left side NULL-padded)
+        assert_eq!(result[1][0].1, common::types::Value::String("beta".into()));
+        assert_eq!(result[1][1].1, common::types::Value::Null);
+    }
 }
