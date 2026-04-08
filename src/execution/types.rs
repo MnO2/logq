@@ -992,8 +992,40 @@ impl Node {
                 let right_variables = variables;
                 Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone(), registry, threads)))
             }
-            Node::HashJoin { .. } => {
-                todo!("HashJoinStream implementation in Step 8")
+            Node::HashJoin { left, right, equi_keys, residual, join_type } => {
+                // Temporary fallback: reconstruct equi-condition and delegate to
+                // LeftJoinStream (Left/Right) or CrossJoin+Filter (Inner).
+                // Will be replaced by a proper hash-join implementation in Step 8.
+                let equi_condition = {
+                    let mut parts: Vec<Box<Formula>> = equi_keys.iter().map(|(lk, rk)| {
+                        Box::new(Formula::Predicate(
+                            Relation::Equal,
+                            Box::new(Expression::Variable(lk.clone())),
+                            Box::new(Expression::Variable(rk.clone())),
+                        ))
+                    }).collect();
+                    if let Some(res) = residual {
+                        parts.push(res.clone());
+                    }
+                    let mut iter = parts.into_iter();
+                    let first = iter.next().unwrap();
+                    iter.fold(first, |acc, next| Box::new(Formula::And(acc, next)))
+                };
+                match join_type {
+                    LogicalJoinType::Left | LogicalJoinType::Right => {
+                        let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
+                        let right_node = *right.clone();
+                        let right_variables = variables;
+                        Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *equi_condition, registry, threads)))
+                    }
+                    LogicalJoinType::Inner => {
+                        let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
+                        let right_node = *right.clone();
+                        let right_variables = variables.clone();
+                        let cross_stream = CrossJoinStream::new(left_stream, right_node, right_variables, registry.clone(), threads);
+                        Ok(Box::new(FilterStream::new(*equi_condition, variables, Box::new(cross_stream), registry)))
+                    }
+                }
             }
             Node::Union(left, right) => {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;

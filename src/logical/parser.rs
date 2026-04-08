@@ -635,6 +635,109 @@ fn extract_base_name(table_ref: &TableReference) -> ParseResult<String> {
     }
 }
 
+/// Collect table aliases (or base names) from a FromClause subtree.
+fn collect_aliases_from_clause(from_clause: &ast::FromClause) -> HashSet<String> {
+    let refs = from_clause.collect_table_references();
+    refs.into_iter()
+        .map(|r| get_alias_for_ref(r))
+        .collect()
+}
+
+fn get_alias_for_ref(table_ref: &ast::TableReference) -> String {
+    table_ref.as_clause.clone().unwrap_or_else(|| {
+        match &table_ref.path_expr.path_segments[0] {
+            ast::PathSegment::AttrName(s) => s.clone(),
+            _ => String::new(),
+        }
+    })
+}
+
+/// Extract equi-join predicates from an AST expression.
+/// Returns (equi_key_pairs, residual_expression).
+///
+/// An equi-predicate is `left_alias.field = right_alias.field` where
+/// the first path segment matches a known left or right alias.
+///
+/// When aliases are absent (bare field names), returns empty equi_keys
+/// and the original expression as residual (falls back to nested-loop).
+fn extract_equi_predicates_from_ast(
+    expr: &ast::Expression,
+    left_aliases: &HashSet<String>,
+    right_alias: &str,
+) -> (Vec<(ast::PathExpr, ast::PathExpr)>, Option<ast::Expression>) {
+    // 1. Flatten top-level AND conjuncts
+    let conjuncts = flatten_and_conjuncts(expr);
+
+    let mut equi_keys = Vec::new();
+    let mut residual_conjuncts = Vec::new();
+
+    for conjunct in conjuncts {
+        if let Some((left_path, right_path)) = try_extract_equi_pair(conjunct, left_aliases, right_alias) {
+            equi_keys.push((left_path, right_path));
+        } else {
+            residual_conjuncts.push(conjunct.clone());
+        }
+    }
+
+    let residual = rebuild_and_tree(residual_conjuncts);
+    (equi_keys, residual)
+}
+
+fn flatten_and_conjuncts(expr: &ast::Expression) -> Vec<&ast::Expression> {
+    match expr {
+        ast::Expression::BinaryOperator(ast::BinaryOperator::And, left, right) => {
+            let mut result = flatten_and_conjuncts(left);
+            result.extend(flatten_and_conjuncts(right));
+            result
+        }
+        other => vec![other],
+    }
+}
+
+fn try_extract_equi_pair(
+    expr: &ast::Expression,
+    left_aliases: &HashSet<String>,
+    right_alias: &str,
+) -> Option<(ast::PathExpr, ast::PathExpr)> {
+    if let ast::Expression::BinaryOperator(ast::BinaryOperator::Equal, left, right) = expr {
+        if let (ast::Expression::Column(left_path), ast::Expression::Column(right_path)) = (left.as_ref(), right.as_ref()) {
+            // Check first segment of each path against aliases
+            if left_path.path_segments.len() >= 2 && right_path.path_segments.len() >= 2 {
+                let left_first = match &left_path.path_segments[0] {
+                    ast::PathSegment::AttrName(s) => s.as_str(),
+                    _ => return None,
+                };
+                let right_first = match &right_path.path_segments[0] {
+                    ast::PathSegment::AttrName(s) => s.as_str(),
+                    _ => return None,
+                };
+
+                // Case 1: left.field = right.field
+                if left_aliases.contains(left_first) && right_first == right_alias {
+                    return Some((left_path.clone(), right_path.clone()));
+                }
+                // Case 2: right.field = left.field (swapped)
+                if left_aliases.contains(right_first) && left_first == right_alias {
+                    return Some((right_path.clone(), left_path.clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn rebuild_and_tree(conjuncts: Vec<ast::Expression>) -> Option<ast::Expression> {
+    if conjuncts.is_empty() {
+        None
+    } else {
+        let mut iter = conjuncts.into_iter();
+        let first = iter.next().unwrap();
+        Some(iter.fold(first, |acc, next| {
+            ast::Expression::BinaryOperator(ast::BinaryOperator::And, Box::new(acc), Box::new(next))
+        }))
+    }
+}
+
 fn build_from_node(
     ctx: &common::ParsingContext,
     from_clause: &FromClause,
@@ -675,22 +778,40 @@ fn build_from_node(
                 JoinType::Cross => {
                     Ok(types::Node::CrossJoin(Box::new(left_node), Box::new(right_node)))
                 }
-                JoinType::Left => {
-                    let on_expr = condition.as_ref().expect("LEFT JOIN requires ON condition");
-                    let formula = parse_logic(ctx, on_expr)?;
-                    Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
-                }
-                JoinType::Inner => {
-                    // Temporary: reuse LeftJoin node until proper InnerJoin is added
-                    let on_expr = condition.as_ref().expect("INNER JOIN requires ON condition");
-                    let formula = parse_logic(ctx, on_expr)?;
-                    Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
-                }
-                JoinType::Right => {
-                    // Temporary: reuse LeftJoin node until proper RightJoin is added
-                    let on_expr = condition.as_ref().expect("RIGHT JOIN requires ON condition");
-                    let formula = parse_logic(ctx, on_expr)?;
-                    Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
+                JoinType::Left | JoinType::Inner | JoinType::Right => {
+                    let on_expr = condition.as_ref().expect("JOIN requires ON condition");
+
+                    // Collect aliases for left and right sides
+                    let left_aliases = collect_aliases_from_clause(left);
+                    let right_alias = get_alias_for_ref(right);
+
+                    let (equi_keys, residual) = extract_equi_predicates_from_ast(
+                        on_expr, &left_aliases, &right_alias
+                    );
+
+                    let logical_join_type = match join_type {
+                        JoinType::Inner => types::LogicalJoinType::Inner,
+                        JoinType::Left => types::LogicalJoinType::Left,
+                        JoinType::Right => types::LogicalJoinType::Right,
+                        _ => unreachable!(),
+                    };
+
+                    if equi_keys.is_empty() {
+                        // No equi-predicates found; fall back to nested-loop
+                        let formula = parse_logic(ctx, on_expr)?;
+                        Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
+                    } else {
+                        let residual_formula = residual
+                            .map(|r| parse_logic(ctx, &r))
+                            .transpose()?;
+                        Ok(types::Node::HashJoin {
+                            left: Box::new(left_node),
+                            right: Box::new(right_node),
+                            equi_keys,
+                            residual: residual_formula,
+                            join_type: logical_join_type,
+                        })
+                    }
                 }
             }
         }
@@ -798,9 +919,48 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
     // Apply WHERE filter before SELECT projection (SQL evaluation order:
     // FROM → WHERE → SELECT). The filter needs access to all raw columns,
     // not just the projected ones.
-    if let Some(where_expr) = query.where_expr_opt {
-        let filter_formula = parse_logic(&parsing_context, &where_expr.expr)?;
-        root = types::Node::Filter(filter_formula, Box::new(root));
+    //
+    // Optimization: if the root is a CrossJoin and the WHERE contains
+    // equi-predicates, rewrite to a HashJoin instead of a Filter over CrossJoin.
+    let mut where_consumed = false;
+    if let Some(ref where_expr) = query.where_expr_opt {
+        if let types::Node::CrossJoin(_, _) = &root {
+            let table_refs = from_clause.collect_table_references();
+            if table_refs.len() == 2 {
+                let mut left_alias: HashSet<String> = HashSet::new();
+                left_alias.insert(get_alias_for_ref(table_refs[0]));
+                let right_alias = get_alias_for_ref(table_refs[1]);
+
+                let (equi_keys, residual) = extract_equi_predicates_from_ast(
+                    &where_expr.expr, &left_alias, &right_alias
+                );
+
+                if !equi_keys.is_empty() {
+                    let residual_formula = residual
+                        .map(|r| parse_logic(&parsing_context, &r))
+                        .transpose()?;
+
+                    // Destructure CrossJoin to get owned left/right
+                    if let types::Node::CrossJoin(cross_left, cross_right) = root {
+                        root = types::Node::HashJoin {
+                            left: cross_left,
+                            right: cross_right,
+                            equi_keys,
+                            residual: residual_formula,
+                            join_type: types::LogicalJoinType::Inner,
+                        };
+                        where_consumed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if !where_consumed {
+        if let Some(where_expr) = query.where_expr_opt {
+            let filter_formula = parse_logic(&parsing_context, &where_expr.expr)?;
+            root = types::Node::Filter(filter_formula, Box::new(root));
+        }
     }
 
     match query.select_clause {
@@ -1862,7 +2022,7 @@ mod test {
     }
 
     #[test]
-    fn test_parse_query_left_join_produces_left_join_node() {
+    fn test_parse_query_left_join_with_equi_predicate_produces_hash_join() {
         let path_expr_ax = PathExpr::new(vec![
             PathSegment::AttrName("a".to_string()),
             PathSegment::AttrName("x".to_string()),
@@ -1912,10 +2072,15 @@ mod test {
         assert!(result.is_ok(), "Left join query should parse: {:?}", result);
 
         let node = result.unwrap();
-        // The root should be Map -> LeftJoin(DataSource, DataSource, condition)
+        // The root should be Map -> HashJoin(DataSource, DataSource, equi_keys, Left)
         match node {
             types::Node::Map(_, source) => match *source {
-                types::Node::LeftJoin(left, right, _condition) => {
+                types::Node::HashJoin { left, right, equi_keys, residual, join_type } => {
+                    assert_eq!(join_type, types::LogicalJoinType::Left);
+                    assert_eq!(equi_keys.len(), 1);
+                    assert_eq!(equi_keys[0].0, path_expr_ax);
+                    assert_eq!(equi_keys[0].1, path_expr_bx);
+                    assert!(residual.is_none());
                     match *left {
                         types::Node::DataSource(ds, bindings) => {
                             assert_eq!(ds, data_source);
@@ -1933,9 +2098,161 @@ mod test {
                         other => panic!("Expected DataSource for right, got: {:?}", other),
                     }
                 }
-                other => panic!("Expected LeftJoin node, got: {:?}", other),
+                other => panic!("Expected HashJoin node, got: {:?}", other),
             },
             other => panic!("Expected Map node at root, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_query_left_join_non_equi_falls_back_to_left_join() {
+        // A LEFT JOIN with a non-equi condition (e.g., a.x > b.x) should fall back to LeftJoin
+        let path_expr_ax = PathExpr::new(vec![
+            PathSegment::AttrName("a".to_string()),
+            PathSegment::AttrName("x".to_string()),
+        ]);
+        let path_expr_bx = PathExpr::new(vec![
+            PathSegment::AttrName("b".to_string()),
+            PathSegment::AttrName("x".to_string()),
+        ]);
+
+        let select_exprs = vec![
+            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_ax.clone())), None),
+        ];
+
+        let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
+        let table_ref_a = ast::TableReference::new(path_expr_it.clone(), Some("a".to_string()), None);
+        let table_ref_b = ast::TableReference::new(path_expr_it.clone(), Some("b".to_string()), None);
+
+        let on_condition = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::MoreThan,
+            Box::new(ast::Expression::Column(path_expr_ax.clone())),
+            Box::new(ast::Expression::Column(path_expr_bx.clone())),
+        );
+
+        let from_clause = FromClause::Join {
+            left: Box::new(FromClause::Tables(vec![table_ref_a])),
+            right: table_ref_b,
+            join_type: ast::JoinType::Left,
+            condition: Some(on_condition),
+        };
+
+        let stmt = ast::SelectStatement::new(
+            false,
+            SelectClause::SelectExpressions(select_exprs),
+            from_clause,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let data_source = common::DataSource::File(std::path::PathBuf::from("/tmp/test.jsonl"), "jsonl".to_string(), "it".to_string());
+        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), data_source.clone())].into_iter().collect();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+
+        let result = parse_query(stmt, data_sources, registry);
+        assert!(result.is_ok());
+
+        let node = result.unwrap();
+        match node {
+            types::Node::Map(_, source) => match *source {
+                types::Node::LeftJoin(_, _, _) => {
+                    // Good - non-equi predicate falls back to LeftJoin
+                }
+                other => panic!("Expected LeftJoin node for non-equi predicate, got: {:?}", other),
+            },
+            other => panic!("Expected Map node at root, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_equi_predicate_extraction_simple() {
+        let expr = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("a".to_string()),
+                ast::PathSegment::AttrName("id".to_string()),
+            ]))),
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("b".to_string()),
+                ast::PathSegment::AttrName("id".to_string()),
+            ]))),
+        );
+        let left_aliases: HashSet<String> = vec!["a".to_string()].into_iter().collect();
+        let (equi_keys, residual) = extract_equi_predicates_from_ast(&expr, &left_aliases, "b");
+        assert_eq!(equi_keys.len(), 1);
+        assert!(residual.is_none());
+    }
+
+    #[test]
+    fn test_equi_predicate_extraction_with_residual() {
+        let equi = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("a".to_string()),
+                ast::PathSegment::AttrName("id".to_string()),
+            ]))),
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("b".to_string()),
+                ast::PathSegment::AttrName("id".to_string()),
+            ]))),
+        );
+        let non_equi = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::MoreThan,
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("a".to_string()),
+                ast::PathSegment::AttrName("x".to_string()),
+            ]))),
+            Box::new(ast::Expression::Value(ast::Value::Integral(10))),
+        );
+        let expr = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::And,
+            Box::new(equi),
+            Box::new(non_equi),
+        );
+        let left_aliases: HashSet<String> = vec!["a".to_string()].into_iter().collect();
+        let (equi_keys, residual) = extract_equi_predicates_from_ast(&expr, &left_aliases, "b");
+        assert_eq!(equi_keys.len(), 1);
+        assert!(residual.is_some());
+    }
+
+    #[test]
+    fn test_equi_predicate_no_alias_fallback() {
+        // Bare field names without aliases -> empty equi-keys
+        let expr = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("x".to_string()),
+            ]))),
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("y".to_string()),
+            ]))),
+        );
+        let left_aliases: HashSet<String> = vec!["a".to_string()].into_iter().collect();
+        let (equi_keys, _) = extract_equi_predicates_from_ast(&expr, &left_aliases, "b");
+        assert_eq!(equi_keys.len(), 0);
+    }
+
+    #[test]
+    fn test_equi_predicate_swapped_sides() {
+        // b.id = a.id (right side written first) -> still extracted correctly
+        let expr = ast::Expression::BinaryOperator(
+            ast::BinaryOperator::Equal,
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("b".to_string()),
+                ast::PathSegment::AttrName("id".to_string()),
+            ]))),
+            Box::new(ast::Expression::Column(ast::PathExpr::new(vec![
+                ast::PathSegment::AttrName("a".to_string()),
+                ast::PathSegment::AttrName("id".to_string()),
+            ]))),
+        );
+        let left_aliases: HashSet<String> = vec!["a".to_string()].into_iter().collect();
+        let (equi_keys, residual) = extract_equi_predicates_from_ast(&expr, &left_aliases, "b");
+        assert_eq!(equi_keys.len(), 1);
+        assert!(residual.is_none());
+        // Verify that the left path is the one with alias "a"
+        assert_eq!(equi_keys[0].0.path_segments[0], ast::PathSegment::AttrName("a".to_string()));
     }
 }
