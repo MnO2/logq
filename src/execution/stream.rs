@@ -1,5 +1,5 @@
 use super::datasource::RecordRead;
-use super::types::{AggregateDef, ExtractionStrategy, Expression, Formula, GroupState, Named, NamedAggregate, Node, StreamResult};
+use super::types::{AggregateDef, ExtractionStrategy, Expression, Formula, GroupState, LogicalJoinType, Named, NamedAggregate, Node, StreamResult};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::functions::FunctionRegistry;
@@ -7,6 +7,7 @@ use crate::syntax::ast::{self, PathSegment};
 use hashbrown::HashMap;
 use linked_hash_map::LinkedHashMap;
 use prettytable::Cell;
+use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -920,6 +921,193 @@ impl RecordStream for LeftJoinStream {
     }
 }
 
+pub(crate) struct HashJoinStream {
+    left: Box<dyn RecordStream>,
+    hash_table: HashMap<JoinKey, SmallVec<[Record; 1]>>,
+    join_type: LogicalJoinType,
+    left_key_fields: Vec<String>,
+    right_key_fields: Vec<String>,
+    residual: Option<Formula>,
+    registry: Arc<FunctionRegistry>,
+    // Iteration state
+    current_left: Option<Record>,
+    current_matches: SmallVec<[Record; 1]>,
+    match_index: usize,
+    matched: bool,
+    right_field_names: Vec<String>,
+    built: bool,
+    memory_limit: usize,
+    build_input: Option<Box<dyn RecordStream>>,
+}
+
+impl HashJoinStream {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        right: Box<dyn RecordStream>,
+        left_key_fields: Vec<String>,
+        right_key_fields: Vec<String>,
+        residual: Option<Formula>,
+        join_type: LogicalJoinType,
+        memory_limit: usize,
+        registry: Arc<FunctionRegistry>,
+    ) -> Self {
+        HashJoinStream {
+            left,
+            hash_table: HashMap::new(),
+            join_type,
+            left_key_fields,
+            right_key_fields,
+            residual,
+            registry,
+            current_left: None,
+            current_matches: SmallVec::new(),
+            match_index: 0,
+            matched: false,
+            right_field_names: Vec::new(),
+            built: false,
+            memory_limit,
+            build_input: Some(right),
+        }
+    }
+
+    fn build(&mut self) -> StreamResult<()> {
+        let mut build_stream = self.build_input.take().unwrap();
+        let mut approx_bytes: usize = 0;
+        let mut first_record = true;
+
+        while let Some(record) = build_stream.next()? {
+            if first_record {
+                self.right_field_names = record.to_variables().keys().cloned().collect();
+                first_record = false;
+            }
+
+            // Check for NULL/Missing keys — skip them (NULL != NULL in SQL)
+            let has_null_key = self.right_key_fields.iter().any(|f| {
+                match record.get_field_value(f) {
+                    Some(Value::Null) | Some(Value::Missing) | None => true,
+                    _ => false,
+                }
+            });
+            if has_null_key {
+                continue;
+            }
+
+            // Approximate memory tracking: count field values
+            let record_size: usize = record.to_variables().iter().map(|(k, v)| {
+                k.len() + 24 + match v {
+                    Value::String(s) => s.len() + 24,
+                    Value::Int(_) => 4,
+                    Value::Float(_) => 4,
+                    Value::Boolean(_) => 1,
+                    _ => 24,
+                }
+            }).sum();
+            approx_bytes += record_size + 80; // 80 for LinkedHashMap per-entry overhead
+
+            if approx_bytes > self.memory_limit {
+                return Err(super::types::StreamError::General(format!(
+                    "Hash join build side exceeded memory limit of {} MB. \
+                     Consider using a smaller table on the build side, \
+                     or increase the limit with --join-memory-limit.",
+                    self.memory_limit / (1024 * 1024)
+                )));
+            }
+
+            let key = extract_key(&record, &self.right_key_fields);
+            self.hash_table.entry(key).or_insert_with(SmallVec::new).push(record);
+        }
+
+        self.built = true;
+        Ok(())
+    }
+
+    fn null_padded_right_record(&self) -> Record {
+        let mut variables = Variables::default();
+        for name in &self.right_field_names {
+            variables.insert(name.clone(), Value::Null);
+        }
+        Record::new_with_variables(variables)
+    }
+}
+
+impl RecordStream for HashJoinStream {
+    fn next(&mut self) -> StreamResult<Option<Record>> {
+        if !self.built {
+            self.build()?;
+        }
+
+        loop {
+            // If we have pending matches from a previous probe, yield them
+            if self.current_left.is_some() && self.match_index < self.current_matches.len() {
+                let left = self.current_left.as_ref().unwrap();
+                let right = &self.current_matches[self.match_index];
+                self.match_index += 1;
+                let merged = left.merge(right);
+
+                // Apply residual filter if present
+                if let Some(ref residual) = self.residual {
+                    let vars = merged.to_variables().clone();
+                    let predicate = residual.evaluate(&vars, &self.registry)?;
+                    if predicate != Some(true) {
+                        continue;
+                    }
+                }
+
+                self.matched = true;
+                return Ok(Some(merged));
+            }
+
+            // Finished scanning matches for current left row
+            if self.current_left.is_some() && !self.matched {
+                // LEFT JOIN: emit NULL-padded right side for unmatched left row
+                if self.join_type == LogicalJoinType::Left {
+                    let left = self.current_left.take().unwrap();
+                    let null_right = self.null_padded_right_record();
+                    return Ok(Some(left.merge(&null_right)));
+                }
+                // INNER JOIN: just move on to next left row
+            }
+
+            // Get next left row
+            match self.left.next()? {
+                Some(left_record) => {
+                    // Check for NULL/Missing keys on probe side
+                    let has_null_key = self.left_key_fields.iter().any(|f| {
+                        match left_record.get_field_value(f) {
+                            Some(Value::Null) | Some(Value::Missing) | None => true,
+                            _ => false,
+                        }
+                    });
+
+                    if has_null_key {
+                        // NULL keys never match
+                        if self.join_type == LogicalJoinType::Left {
+                            let null_right = self.null_padded_right_record();
+                            return Ok(Some(left_record.merge(&null_right)));
+                        }
+                        // INNER: skip this row entirely
+                        continue;
+                    }
+
+                    let key = extract_key(&left_record, &self.left_key_fields);
+                    self.current_matches = self.hash_table
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(SmallVec::new);
+                    self.current_left = Some(left_record);
+                    self.match_index = 0;
+                    self.matched = false;
+                }
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn close(&self) {
+        self.left.close();
+    }
+}
+
 pub(crate) struct UnionStream {
     left: Box<dyn RecordStream>,
     right: Box<dyn RecordStream>,
@@ -1549,5 +1737,169 @@ mod tests {
         let record = Record::new_with_variables(vars);
         let key = extract_key(&record, &["nonexistent".to_string()]);
         assert_eq!(key, JoinKey::Composite(vec![Value::Missing]));
+    }
+
+    fn record_from_pairs(pairs: Vec<(&str, Value)>) -> Record {
+        let mut vars = Variables::default();
+        for (k, v) in pairs {
+            vars.insert(k.to_string(), v);
+        }
+        Record::new_with_variables(vars)
+    }
+
+    fn in_memory_stream(records: Vec<Record>) -> Box<InMemoryStream> {
+        Box::new(InMemoryStream::new(records.into_iter().collect()))
+    }
+
+    #[test]
+    fn test_hash_join_inner_basic() {
+        let left_records = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("a".into()))]),
+            record_from_pairs(vec![("id", Value::Int(2)), ("x", Value::String("b".into()))]),
+        ];
+        let right_records = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("y", Value::String("c".into()))]),
+            record_from_pairs(vec![("id", Value::Int(3)), ("y", Value::String("d".into()))]),
+        ];
+        let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left_records),
+            in_memory_stream(right_records),
+            vec!["id".to_string()],
+            vec!["id".to_string()],
+            None,
+            types::LogicalJoinType::Inner,
+            512 * 1024 * 1024,
+            registry,
+        );
+        let mut results = Vec::new();
+        while let Some(r) = join.next().unwrap() {
+            results.push(r);
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].get_field_value("x"), Some(&Value::String("a".into())));
+        assert_eq!(results[0].get_field_value("y"), Some(&Value::String("c".into())));
+    }
+
+    #[test]
+    fn test_hash_join_left_with_null_padding() {
+        let left_records = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("a".into()))]),
+            record_from_pairs(vec![("id", Value::Int(2)), ("x", Value::String("b".into()))]),
+        ];
+        let right_records = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("y", Value::String("c".into()))]),
+        ];
+        let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left_records),
+            in_memory_stream(right_records),
+            vec!["id".to_string()], vec!["id".to_string()],
+            None, types::LogicalJoinType::Left, 512 * 1024 * 1024,
+            registry,
+        );
+        let mut results = Vec::new();
+        while let Some(r) = join.next().unwrap() {
+            results.push(r);
+        }
+        assert_eq!(results.len(), 2);
+        // First row matched
+        assert_eq!(results[0].get_field_value("y"), Some(&Value::String("c".into())));
+        // Second row: NULL-padded right side
+        assert_eq!(results[1].get_field_value("y"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn test_hash_join_null_keys_no_match() {
+        let left = vec![record_from_pairs(vec![("id", Value::Null)])];
+        let right = vec![record_from_pairs(vec![("id", Value::Null), ("y", Value::Int(1))])];
+        let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left), in_memory_stream(right),
+            vec!["id".to_string()], vec!["id".to_string()],
+            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            registry,
+        );
+        let result = join.next().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_hash_join_many_to_many() {
+        let left = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("a".into()))]),
+            record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("b".into()))]),
+        ];
+        let right = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("y", Value::String("c".into()))]),
+            record_from_pairs(vec![("id", Value::Int(1)), ("y", Value::String("d".into()))]),
+        ];
+        let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left), in_memory_stream(right),
+            vec!["id".to_string()], vec!["id".to_string()],
+            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            registry,
+        );
+        let mut results = Vec::new();
+        while let Some(r) = join.next().unwrap() {
+            results.push(r);
+        }
+        // 2 left x 2 right = 4 matches
+        assert_eq!(results.len(), 4);
+    }
+
+    #[test]
+    fn test_hash_join_empty_right() {
+        let left = vec![
+            record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("a".into()))]),
+        ];
+        let right: Vec<Record> = vec![];
+        let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
+        // INNER JOIN with empty right → 0 results
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left.clone()), in_memory_stream(right.clone()),
+            vec!["id".to_string()], vec!["id".to_string()],
+            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            registry.clone(),
+        );
+        assert!(join.next().unwrap().is_none());
+
+        // LEFT JOIN with empty right → left row with no right field names (no padding possible)
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left), in_memory_stream(right),
+            vec!["id".to_string()], vec!["id".to_string()],
+            None, types::LogicalJoinType::Left, 512 * 1024 * 1024,
+            registry,
+        );
+        let result = join.next().unwrap();
+        assert!(result.is_some());
+        let r = result.unwrap();
+        assert_eq!(r.get_field_value("x"), Some(&Value::String("a".into())));
+    }
+
+    #[test]
+    fn test_hash_join_string_keys() {
+        let left = vec![
+            record_from_pairs(vec![("name", Value::String("alice".into())), ("v", Value::Int(1))]),
+            record_from_pairs(vec![("name", Value::String("bob".into())), ("v", Value::Int(2))]),
+        ];
+        let right = vec![
+            record_from_pairs(vec![("name", Value::String("alice".into())), ("w", Value::Int(10))]),
+        ];
+        let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
+        let mut join = HashJoinStream::new(
+            in_memory_stream(left), in_memory_stream(right),
+            vec!["name".to_string()], vec!["name".to_string()],
+            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            registry,
+        );
+        let mut results = Vec::new();
+        while let Some(r) = join.next().unwrap() {
+            results.push(r);
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].get_field_value("v"), Some(&Value::Int(1)));
+        assert_eq!(results[0].get_field_value("w"), Some(&Value::Int(10)));
     }
 }
