@@ -142,10 +142,19 @@ pub enum Expression {
 
 impl Expression {
     pub(crate) fn expression_value(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
+        self.expression_value_impl(variables, None, registry)
+    }
+
+    /// Evaluate expression with a fallback scope, avoiding merge() allocations.
+    pub(crate) fn expression_value_in_scope(&self, variables: &Variables, scope: &Variables, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
+        self.expression_value_impl(variables, Some(scope), registry)
+    }
+
+    pub(crate) fn expression_value_impl(&self, variables: &Variables, scope: Option<&Variables>, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
         match self {
             Expression::Constant(value) => Ok(value.clone()),
             Expression::Logic(formula) => {
-                let out = formula.evaluate(variables, registry)?;
+                let out = formula.evaluate_impl(variables, scope, registry)?;
                 match out {
                     Some(b) => Ok(Value::Boolean(b)),
                     None => Ok(Value::Null),
@@ -155,17 +164,17 @@ impl Expression {
                 // Fast path: single-segment AttrName is the overwhelmingly common case
                 if path_expr.path_segments.len() == 1 {
                     if let PathSegment::AttrName(ref name) = path_expr.path_segments[0] {
-                        return Ok(variables.get(name).cloned().unwrap_or(Value::Missing));
+                        return Ok(common::types::scoped_get(variables, scope, name).cloned().unwrap_or(Value::Missing));
                     }
                 }
-                Ok(common::types::get_value_by_path_expr(path_expr, 0, variables))
+                Ok(common::types::get_value_by_path_expr_scoped(path_expr, 0, variables, scope))
             }
             Expression::Function(name, arguments) => {
                 let mut values: Vec<Value> = Vec::with_capacity(arguments.len());
                 for arg in arguments.iter() {
                     match arg {
                         Named::Expression(expr, _) => {
-                            let value = expr.expression_value(&variables, registry)?;
+                            let value = expr.expression_value_impl(variables, scope, registry)?;
                             values.push(value);
                         }
                         Named::Star => {
@@ -179,18 +188,18 @@ impl Expression {
             }
             Expression::Branch(branches, else_expr) => {
                 for (formula, then_expr) in branches {
-                    let result = formula.evaluate(variables, registry)?;
+                    let result = formula.evaluate_impl(variables, scope, registry)?;
                     if result == Some(true) {
-                        return then_expr.expression_value(variables, registry);
+                        return then_expr.expression_value_impl(variables, scope, registry);
                     }
                 }
                 match else_expr {
-                    Some(expr) => expr.expression_value(variables, registry),
+                    Some(expr) => expr.expression_value_impl(variables, scope, registry),
                     None => Ok(Value::Null),
                 }
             }
             Expression::Cast(inner, cast_type) => {
-                let val = inner.expression_value(variables, registry)?;
+                let val = inner.expression_value_impl(variables, scope, registry)?;
                 match (&val, cast_type) {
                     (Value::Null, _) => Ok(Value::Null),
                     (Value::Missing, _) => Ok(Value::Missing),
@@ -307,6 +316,12 @@ impl Relation {
         let right_result = right.expression_value(variables, registry)?;
         self.compare_ref(&left_result, &right_result)
     }
+
+    fn apply_in_scope(&self, variables: &Variables, scope: Option<&Variables>, left: &Expression, right: &Expression, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Option<bool>> {
+        let left_result = left.expression_value_impl(variables, scope, registry)?;
+        let right_result = right.expression_value_impl(variables, scope, registry)?;
+        self.compare_ref(&left_result, &right_result)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,14 +391,23 @@ fn get_or_compile_like_regex(pattern: &str) -> Result<regex::Regex, EvaluateErro
 
 impl Formula {
     pub(crate) fn evaluate(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
+        self.evaluate_impl(variables, None, registry)
+    }
+
+    /// Evaluate formula with a fallback scope, avoiding merge() allocations.
+    pub(crate) fn evaluate_in_scope(&self, variables: &Variables, scope: &Variables, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
+        self.evaluate_impl(variables, Some(scope), registry)
+    }
+
+    pub(crate) fn evaluate_impl(&self, variables: &Variables, scope: Option<&Variables>, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
         match self {
             Formula::And(left_formula, right_formula) => {
-                let left = left_formula.evaluate(variables, registry)?;
+                let left = left_formula.evaluate_impl(variables, scope, registry)?;
                 // Three-valued AND: false dominates — short-circuit
                 if left == Some(false) {
                     return Ok(Some(false));
                 }
-                let right = right_formula.evaluate(variables, registry)?;
+                let right = right_formula.evaluate_impl(variables, scope, registry)?;
                 match (left, right) {
                     (_, Some(false)) => Ok(Some(false)),
                     (Some(true), Some(true)) => Ok(Some(true)),
@@ -391,12 +415,12 @@ impl Formula {
                 }
             }
             Formula::Or(left_formula, right_formula) => {
-                let left = left_formula.evaluate(variables, registry)?;
+                let left = left_formula.evaluate_impl(variables, scope, registry)?;
                 // Three-valued OR: true dominates — short-circuit
                 if left == Some(true) {
                     return Ok(Some(true));
                 }
-                let right = right_formula.evaluate(variables, registry)?;
+                let right = right_formula.evaluate_impl(variables, scope, registry)?;
                 match (left, right) {
                     (_, Some(true)) => Ok(Some(true)),
                     (Some(false), Some(false)) => Ok(Some(false)),
@@ -404,7 +428,7 @@ impl Formula {
                 }
             }
             Formula::Not(child_formula) => {
-                let child = child_formula.evaluate(variables, registry)?;
+                let child = child_formula.evaluate_impl(variables, scope, registry)?;
                 Ok(child.map(|b| !b))
             }
             Formula::Predicate(relation, left_formula, right_formula) => {
@@ -415,7 +439,7 @@ impl Formula {
                         if pe.path_segments.len() == 1 =>
                     {
                         if let PathSegment::AttrName(ref name) = pe.path_segments[0] {
-                            match variables.get(name) {
+                            match common::types::scoped_get(variables, scope, name) {
                                 Some(val) => return Ok(relation.compare_ref(val, constant)?),
                                 None => return Ok(None), // Missing
                             }
@@ -425,7 +449,7 @@ impl Formula {
                         if pe.path_segments.len() == 1 =>
                     {
                         if let PathSegment::AttrName(ref name) = pe.path_segments[0] {
-                            match variables.get(name) {
+                            match common::types::scoped_get(variables, scope, name) {
                                 Some(val) => return Ok(relation.compare_ref(constant, val)?),
                                 None => return Ok(None),
                             }
@@ -433,28 +457,28 @@ impl Formula {
                     }
                     _ => {}
                 }
-                let result = relation.apply(variables, left_formula, right_formula, registry)?;
+                let result = relation.apply_in_scope(variables, scope, left_formula, right_formula, registry)?;
                 Ok(result)
             }
             Formula::Constant(value) => Ok(Some(*value)),
             Formula::IsNull(expr) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 Ok(Some(val == Value::Null))
             }
             Formula::IsNotNull(expr) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 Ok(Some(val != Value::Null))
             }
             Formula::IsMissing(expr) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 Ok(Some(val == Value::Missing))
             }
             Formula::IsNotMissing(expr) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 Ok(Some(val != Value::Missing))
             }
             Formula::ExpressionPredicate(expr) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 match val {
                     Value::Boolean(b) => Ok(Some(b)),
                     Value::Null | Value::Missing => Ok(None),
@@ -462,8 +486,8 @@ impl Formula {
                 }
             }
             Formula::Like(expr, pattern_expr) => {
-                let val = expr.expression_value(variables, registry)?;
-                let pattern = pattern_expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
+                let pattern = pattern_expr.expression_value_impl(variables, scope, registry)?;
                 match (&val, &pattern) {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
@@ -475,8 +499,8 @@ impl Formula {
                 }
             }
             Formula::NotLike(expr, pattern_expr) => {
-                let val = expr.expression_value(variables, registry)?;
-                let pattern = pattern_expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
+                let pattern = pattern_expr.expression_value_impl(variables, scope, registry)?;
                 match (&val, &pattern) {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
@@ -488,13 +512,13 @@ impl Formula {
                 }
             }
             Formula::In(expr, list) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 match &val {
                     Value::Null | Value::Missing => Ok(None),
                     _ => {
                         let mut has_null = false;
                         for item_expr in list {
-                            let item = item_expr.expression_value(variables, registry)?;
+                            let item = item_expr.expression_value_impl(variables, scope, registry)?;
                             if item == Value::Null || item == Value::Missing {
                                 has_null = true;
                                 continue;
@@ -512,13 +536,13 @@ impl Formula {
                 }
             }
             Formula::NotIn(expr, list) => {
-                let val = expr.expression_value(variables, registry)?;
+                let val = expr.expression_value_impl(variables, scope, registry)?;
                 match &val {
                     Value::Null | Value::Missing => Ok(None),
                     _ => {
                         let mut has_null = false;
                         for item_expr in list {
-                            let item = item_expr.expression_value(variables, registry)?;
+                            let item = item_expr.expression_value_impl(variables, scope, registry)?;
                             if item == Value::Null || item == Value::Missing {
                                 has_null = true;
                                 continue;
@@ -535,6 +559,23 @@ impl Formula {
                     }
                 }
             }
+        }
+    }
+
+    /// Flatten an AND tree into a list of conjuncts for adaptive reordering.
+    pub(crate) fn flatten_and(self) -> Vec<Formula> {
+        let mut conjuncts = Vec::new();
+        Self::flatten_and_recursive(self, &mut conjuncts);
+        conjuncts
+    }
+
+    fn flatten_and_recursive(formula: Formula, out: &mut Vec<Formula>) {
+        match formula {
+            Formula::And(left, right) => {
+                Self::flatten_and_recursive(*left, out);
+                Self::flatten_and_recursive(*right, out);
+            }
+            other => out.push(other),
         }
     }
 }

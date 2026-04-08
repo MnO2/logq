@@ -320,13 +320,24 @@ fn apply_path_to_value(path_expr: &ast::PathExpr, from: usize, value: &Value) ->
 }
 
 pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variables: &Variables) -> Value {
+    get_value_by_path_expr_scoped(path_expr, i, variables, None)
+}
+
+/// Like `get_value_by_path_expr`, but also checks a fallback scope for lookups.
+/// This avoids the need to merge two variable maps into a single allocation.
+pub(crate) fn get_value_by_path_expr_scoped(
+    path_expr: &ast::PathExpr,
+    i: usize,
+    variables: &Variables,
+    scope: Option<&Variables>,
+) -> Value {
     if i >= path_expr.path_segments.len() {
         return Value::Missing;
     }
 
     match &path_expr.path_segments[i] {
         ast::PathSegment::AttrName(attr_name) => {
-            if let Some(val) = variables.get(attr_name) {
+            if let Some(val) = scoped_get(variables, scope, attr_name) {
                 if i + 1 == path_expr.path_segments.len() {
                     return val.clone();
                 } else {
@@ -338,7 +349,7 @@ pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variab
             }
         }
         ast::PathSegment::ArrayIndex(attr_name, idx) => {
-            if let Some(val) = variables.get(attr_name) {
+            if let Some(val) = scoped_get(variables, scope, attr_name) {
                 match val {
                     Value::Array(a) => {
                         if *idx < a.len() {
@@ -366,11 +377,18 @@ pub(crate) fn get_value_by_path_expr(path_expr: &ast::PathExpr, i: usize, variab
             // .* at the top level — iterate all values in variables
             let results: Vec<Value> = variables
                 .values()
+                .chain(scope.into_iter().flat_map(|s| s.values()))
                 .map(|v| apply_path_to_value(path_expr, i + 1, v))
                 .collect();
             Value::Array(results)
         }
     }
+}
+
+/// Look up a key in the primary variables, falling back to the scope if present.
+#[inline(always)]
+pub(crate) fn scoped_get<'a>(variables: &'a Variables, scope: Option<&'a Variables>, key: &str) -> Option<&'a Value> {
+    variables.get(key).or_else(|| scope.and_then(|s| s.get(key)))
 }
 
 pub(crate) fn empty_variables() -> Variables {

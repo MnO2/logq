@@ -303,20 +303,15 @@ impl RecordStream for MapStream {
                 return Ok(Some(Record::new_with_variables(out)));
             }
 
-            let variables_owned;
-            let variables = if self.variables.is_empty() {
-                record.to_variables()
-            } else {
-                variables_owned = common::types::merge(&self.variables, record.to_variables());
-                &variables_owned
-            };
+            let record_vars = record.to_variables();
+            let scope: Option<&Variables> = if self.variables.is_empty() { None } else { Some(&self.variables) };
 
             let mut out = Variables::with_capacity(self.named_list.len());
             for (idx, named) in self.named_list.iter().enumerate() {
                 match named {
                     Named::Expression(expr, _) => {
                         let name = self.column_names[idx].as_ref().unwrap().clone();
-                        let v = expr.expression_value(variables, &self.registry)?;
+                        let v = expr.expression_value_impl(record_vars, scope, &self.registry)?;
                         out.insert(name, v);
                     }
                     Named::Star => {
@@ -372,34 +367,129 @@ impl RecordStream for LimitStream {
 }
 
 pub struct FilterStream {
-    formula: Formula,
+    /// When the formula is an AND tree, we flatten it into conjuncts for
+    /// adaptive reordering. Otherwise this is empty and `formula` is used.
+    conjuncts: Vec<Formula>,
+    /// Tracks (rows_in, rows_dropped, elapsed_ns) per conjunct for reordering.
+    conjunct_stats: Vec<(u64, u64, u64)>,
+    /// Row counter for periodic reordering.
+    rows_seen: u64,
+    /// Original formula, used when conjuncts is empty (non-AND formula).
+    formula: Option<Formula>,
     variables: Variables,
+    has_scope: bool,
     source: Box<dyn RecordStream>,
     registry: Arc<FunctionRegistry>,
 }
 
+/// Interval (in rows) between adaptive reorder checks.
+const REORDER_INTERVAL: u64 = 1024;
+
 impl FilterStream {
     pub fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
-        FilterStream {
-            formula,
-            variables,
-            source,
-            registry,
+        let has_scope = !variables.is_empty();
+        // Try to flatten AND trees for adaptive reordering
+        if matches!(&formula, Formula::And(_, _)) {
+            let conjuncts = formula.flatten_and();
+            let n = conjuncts.len();
+            FilterStream {
+                conjuncts,
+                conjunct_stats: vec![(0, 0, 0); n],
+                rows_seen: 0,
+                formula: None,
+                variables,
+                has_scope,
+                source,
+                registry,
+            }
+        } else {
+            FilterStream {
+                conjuncts: Vec::new(),
+                conjunct_stats: Vec::new(),
+                rows_seen: 0,
+                formula: Some(formula),
+                variables,
+                has_scope,
+                source,
+                registry,
+            }
         }
+    }
+
+    /// Reorder conjuncts so the cheapest, most selective predicate runs first.
+    fn maybe_reorder(&mut self) {
+        if self.conjuncts.len() < 2 {
+            return;
+        }
+        // Build (cost_per_drop, original_index) for sorting.
+        // cost_per_drop = elapsed_ns / max(rows_dropped, 1)
+        // Lower is better — cheap predicates that eliminate many rows go first.
+        let mut order: Vec<(u64, usize)> = self.conjunct_stats.iter().enumerate().map(|(i, &(_, dropped, elapsed))| {
+            let cost = elapsed / dropped.max(1);
+            (cost, i)
+        }).collect();
+        order.sort_unstable();
+
+        // Apply the permutation
+        let mut new_conjuncts = Vec::with_capacity(self.conjuncts.len());
+        let mut new_stats = Vec::with_capacity(self.conjuncts.len());
+        // Use a temporary placeholder to avoid borrow issues
+        let mut conjuncts = std::mem::take(&mut self.conjuncts);
+        let stats = std::mem::take(&mut self.conjunct_stats);
+
+        // Build index mapping: we need to extract in sorted order
+        // Since we can't index-move from a Vec without invalidating, use Option wrappers
+        let mut slots: Vec<Option<Formula>> = conjuncts.drain(..).map(Some).collect();
+        for &(_, idx) in &order {
+            new_conjuncts.push(slots[idx].take().unwrap());
+            new_stats.push(stats[idx]);
+        }
+        self.conjuncts = new_conjuncts;
+        self.conjunct_stats = new_stats;
     }
 }
 
 impl RecordStream for FilterStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         while let Some(record) = self.source.next()? {
-            let predicate = if self.variables.is_empty() {
-                self.formula.evaluate(record.to_variables(), &self.registry)?
-            } else {
-                let variables = common::types::merge(&self.variables, record.to_variables());
-                self.formula.evaluate(&variables, &self.registry)?
-            };
+            // Non-AND path: single formula evaluation
+            if self.conjuncts.is_empty() {
+                let formula = self.formula.as_ref().unwrap();
+                let predicate = if self.has_scope {
+                    formula.evaluate_in_scope(record.to_variables(), &self.variables, &self.registry)?
+                } else {
+                    formula.evaluate(record.to_variables(), &self.registry)?
+                };
+                if predicate == Some(true) {
+                    return Ok(Some(record));
+                }
+                continue;
+            }
 
-            if predicate == Some(true) {
+            // Adaptive AND path: evaluate conjuncts in order, tracking stats
+            self.rows_seen += 1;
+            if self.rows_seen % REORDER_INTERVAL == 0 {
+                self.maybe_reorder();
+            }
+
+            let vars = record.to_variables();
+            let scope = if self.has_scope { Some(&self.variables) } else { None };
+            let mut passed = true;
+            for (i, conjunct) in self.conjuncts.iter().enumerate() {
+                let start = std::time::Instant::now();
+                let result = conjunct.evaluate_impl(vars, scope, &self.registry)?;
+                let elapsed = start.elapsed().as_nanos() as u64;
+                let stats = &mut self.conjunct_stats[i];
+                stats.0 += 1; // rows_in
+                stats.2 += elapsed;
+                if result != Some(true) {
+                    stats.1 += 1; // rows_dropped
+                    passed = false;
+                    break;
+                }
+            }
+
+            if passed {
                 return Ok(Some(record));
             }
         }
@@ -466,14 +556,10 @@ impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if self.group_iterator.is_none() {
             let mut groups: HashMap<Option<Tuple>, GroupState> = HashMap::new();
+            let has_scope = !self.variables.is_empty();
             while let Some(record) = self.source.next()? {
-                let variables_owned;
-                let variables = if self.variables.is_empty() {
-                    record.to_variables()
-                } else {
-                    variables_owned = common::types::merge(&self.variables, record.to_variables());
-                    &variables_owned
-                };
+                let variables = record.to_variables();
+                let scope: Option<&Variables> = if has_scope { Some(&self.variables) } else { None };
 
                 let key = if self.keys.is_empty() {
                     None
@@ -488,11 +574,11 @@ impl RecordStream for GroupByStream {
                 for (i, def) in self.aggregate_defs.iter().enumerate() {
                     match &def.extraction {
                         ExtractionStrategy::Expression(expr) => {
-                            let val = expr.expression_value(&variables, &self.registry)?;
+                            let val = expr.expression_value_impl(variables, scope, &self.registry)?;
                             state.accumulators[i].accumulate(&val)?;
                         }
                         ExtractionStrategy::ColumnLookup(col_name) => {
-                            let val = variables.get(col_name).unwrap_or(&missing);
+                            let val = common::types::scoped_get(variables, scope, col_name).unwrap_or(&missing);
                             state.accumulators[i].accumulate(val)?;
                         }
                         ExtractionStrategy::RecordCapture => {
@@ -917,7 +1003,10 @@ impl RecordStream for LeftJoinStream {
 
 pub(crate) struct HashJoinStream {
     left: Box<dyn RecordStream>,
-    hash_table: HashMap<JoinKey, SmallVec<[Record; 1]>>,
+    /// All build-side records stored contiguously. The hash table maps keys to
+    /// index ranges into this vec, avoiding per-probe clones.
+    build_records: Vec<Record>,
+    hash_table: HashMap<JoinKey, SmallVec<[u32; 1]>>,
     join_type: LogicalJoinType,
     left_key_fields: Vec<ast::PathExpr>,
     right_key_fields: Vec<ast::PathExpr>,
@@ -925,7 +1014,8 @@ pub(crate) struct HashJoinStream {
     registry: Arc<FunctionRegistry>,
     // Iteration state
     current_left: Option<Record>,
-    current_matches: SmallVec<[Record; 1]>,
+    /// Indices into build_records for the current probe's matches.
+    current_match_indices: SmallVec<[u32; 1]>,
     match_index: usize,
     matched: bool,
     right_field_names: Vec<String>,
@@ -947,6 +1037,7 @@ impl HashJoinStream {
     ) -> Self {
         HashJoinStream {
             left,
+            build_records: Vec::new(),
             hash_table: HashMap::new(),
             join_type,
             left_key_fields,
@@ -954,7 +1045,7 @@ impl HashJoinStream {
             residual,
             registry,
             current_left: None,
-            current_matches: SmallVec::new(),
+            current_match_indices: SmallVec::new(),
             match_index: 0,
             matched: false,
             right_field_names: Vec::new(),
@@ -1007,7 +1098,9 @@ impl HashJoinStream {
             }
 
             let key = extract_key(&record, &self.right_key_fields);
-            self.hash_table.entry(key).or_insert_with(SmallVec::new).push(record);
+            let idx = self.build_records.len() as u32;
+            self.build_records.push(record);
+            self.hash_table.entry(key).or_insert_with(SmallVec::new).push(idx);
         }
 
         self.built = true;
@@ -1031,10 +1124,11 @@ impl RecordStream for HashJoinStream {
 
         loop {
             // If we have pending matches from a previous probe, yield them
-            if self.current_left.is_some() && self.match_index < self.current_matches.len() {
+            if self.current_left.is_some() && self.match_index < self.current_match_indices.len() {
                 let left = self.current_left.as_ref().unwrap();
-                let right = &self.current_matches[self.match_index];
+                let right_idx = self.current_match_indices[self.match_index] as usize;
                 self.match_index += 1;
+                let right = &self.build_records[right_idx];
                 let merged = left.merge(right);
 
                 // Apply residual filter if present
@@ -1083,7 +1177,8 @@ impl RecordStream for HashJoinStream {
                     }
 
                     let key = extract_key(&left_record, &self.left_key_fields);
-                    self.current_matches = self.hash_table
+                    // Copy only the small index vec, not the full Records
+                    self.current_match_indices = self.hash_table
                         .get(&key)
                         .cloned()
                         .unwrap_or_else(SmallVec::new);

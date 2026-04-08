@@ -174,15 +174,8 @@ impl BatchStreamingGroupByOperator {
                             let value = BatchToRowAdapter::extract_value(col, row_idx);
                             row_vars.insert(batch.names[col_idx].clone(), value);
                         }
-                        let merged_vars;
-                        let variables = if self.variables.is_empty() {
-                            &row_vars
-                        } else {
-                            merged_vars =
-                                crate::common::types::merge(&self.variables, &row_vars);
-                            &merged_vars
-                        };
-                        let val = expr.expression_value(variables, &self.registry)?;
+                        let scope: Option<&crate::common::types::Variables> = if self.variables.is_empty() { None } else { Some(&self.variables) };
+                        let val = expr.expression_value_impl(&row_vars, scope, &self.registry)?;
                         state.accumulators[agg_idx].accumulate(&val)?;
                     }
                     crate::execution::types::ExtractionStrategy::ColumnLookup(col_name) => {
@@ -192,8 +185,8 @@ impl BatchStreamingGroupByOperator {
                             let value = BatchToRowAdapter::extract_value(col, row_idx);
                             row_vars.insert(batch.names[col_idx].clone(), value);
                         }
-                        let val = row_vars
-                            .get(col_name)
+                        let scope: Option<&crate::common::types::Variables> = if self.variables.is_empty() { None } else { Some(&self.variables) };
+                        let val = crate::common::types::scoped_get(&row_vars, scope, col_name)
                             .cloned()
                             .unwrap_or(Value::Missing);
                         state.accumulators[agg_idx].accumulate(&val)?;

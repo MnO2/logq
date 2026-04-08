@@ -56,14 +56,14 @@ impl BatchGroupByOperator {
     }
 
     /// Build a group key from the row variables for the configured group key columns.
-    fn build_group_key(&self, row_vars: &Variables) -> Option<Tuple> {
+    fn build_group_key(&self, row_vars: &Variables, scope: Option<&Variables>) -> Option<Tuple> {
         if self.group_keys.is_empty() {
             None
         } else {
             let key: Tuple = self
                 .group_keys
                 .iter()
-                .map(|path| common::types::get_value_by_path_expr(path, 0, row_vars))
+                .map(|path| common::types::get_value_by_path_expr_scoped(path, 0, row_vars, scope))
                 .collect();
             Some(key)
         }
@@ -110,17 +110,12 @@ impl BatchGroupByOperator {
                     row_vars.insert(batch.names[col_idx].clone(), value);
                 }
 
-                // Merge with outer variables if present
-                let merged_vars;
-                let variables = if self.variables.is_empty() {
-                    &row_vars
-                } else {
-                    merged_vars = common::types::merge(&self.variables, &row_vars);
-                    &merged_vars
-                };
+                // Use scoped lookup instead of merge to avoid allocations
+                let variables = &row_vars;
+                let scope: Option<&common::types::Variables> = if self.variables.is_empty() { None } else { Some(&self.variables) };
 
                 // Build group key
-                let key = self.build_group_key(variables);
+                let key = self.build_group_key(variables, scope);
 
                 // Track seen keys
                 if !groups.contains(&key) {
@@ -137,7 +132,7 @@ impl BatchGroupByOperator {
                                 }
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -147,7 +142,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -158,7 +153,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -169,7 +164,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -180,7 +175,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -191,7 +186,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -202,7 +197,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -213,7 +208,7 @@ impl BatchGroupByOperator {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
-                                        .expression_value(variables, &self.registry)
+                                        .expression_value_impl(variables, scope, &self.registry)
                                         .map_err(crate::execution::types::StreamError::Expression)?;
                                     inner.add_record(&key, &val)?;
                                 }
@@ -231,15 +226,13 @@ impl BatchGroupByOperator {
                             }
                         }
                         Aggregate::PercentileDisc(ref mut inner, col_name) => {
-                            let val = variables
-                                .get(col_name)
+                            let val = common::types::scoped_get(variables, scope, col_name)
                                 .cloned()
                                 .unwrap_or(Value::Missing);
                             inner.add_record(&key, &val)?;
                         }
                         Aggregate::ApproxPercentile(ref mut inner, col_name) => {
-                            let val = variables
-                                .get(col_name)
+                            let val = common::types::scoped_get(variables, scope, col_name)
                                 .cloned()
                                 .unwrap_or(Value::Missing);
                             inner.add_record(&key, &val)?;
