@@ -141,6 +141,68 @@ impl Record {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum JoinKey {
+    /// Single string key: hash raw bytes.
+    SingleString(String),
+    /// Single integer key: use i32 directly.
+    SingleInt(i32),
+    /// Multi-column or exotic types: fall back to Vec<Value>.
+    Composite(Vec<Value>),
+}
+
+impl PartialEq for JoinKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (JoinKey::SingleString(a), JoinKey::SingleString(b)) => a == b,
+            (JoinKey::SingleInt(a), JoinKey::SingleInt(b)) => a == b,
+            (JoinKey::Composite(a), JoinKey::Composite(b)) => a == b,
+            _ => false, // Different variants are never equal
+        }
+    }
+}
+
+impl Eq for JoinKey {}
+
+impl std::hash::Hash for JoinKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash the discriminant first to prevent cross-variant collisions
+        std::mem::discriminant(self).hash(state);
+        match self {
+            JoinKey::SingleString(s) => s.hash(state),
+            JoinKey::SingleInt(i) => i.hash(state),
+            JoinKey::Composite(vals) => vals.hash(state),
+        }
+    }
+}
+
+/// Extract a join key from a record using bare field names.
+/// For single-column keys, specializes to SingleString or SingleInt.
+/// NULL and Missing keys use Composite path (they won't match anything
+/// since NULL != NULL in SQL semantics).
+pub(crate) fn extract_key(record: &Record, key_fields: &[String]) -> JoinKey {
+    if key_fields.len() == 1 {
+        match record.get_field_value(&key_fields[0]) {
+            Some(Value::String(s)) => JoinKey::SingleString(s.clone()),
+            Some(Value::Int(i)) => JoinKey::SingleInt(*i),
+            Some(other) => JoinKey::Composite(vec![other.clone()]),
+            None => JoinKey::Composite(vec![Value::Missing]),
+        }
+    } else {
+        JoinKey::Composite(
+            key_fields
+                .iter()
+                .map(|f| {
+                    record
+                        .get_field_value(f)
+                        .cloned()
+                        .unwrap_or(Value::Missing)
+                })
+                .collect(),
+        )
+    }
+}
+
 pub trait RecordStream {
     fn next(&mut self) -> StreamResult<Option<Record>>;
     fn close(&self);
@@ -1405,5 +1467,87 @@ mod tests {
         assert_eq!(record.to_variables()["cnt"], Value::Int(0));
         assert_eq!(record.to_variables()["total"], Value::Null);
         assert!(stream.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_join_key_single_int_hash_eq() {
+        let k1 = JoinKey::SingleInt(42);
+        let k2 = JoinKey::SingleInt(42);
+        let k3 = JoinKey::SingleInt(99);
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+
+        // Verify equal keys produce equal hashes
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        k1.hash(&mut h1);
+        k2.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+    }
+
+    #[test]
+    fn test_join_key_single_string_hash_eq() {
+        let k1 = JoinKey::SingleString("hello".to_string());
+        let k2 = JoinKey::SingleString("hello".to_string());
+        let k3 = JoinKey::SingleString("world".to_string());
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn test_join_key_no_cross_variant_collision() {
+        let k_int = JoinKey::SingleInt(42);
+        let k_comp = JoinKey::Composite(vec![Value::Int(42)]);
+        assert_ne!(k_int, k_comp);
+    }
+
+    #[test]
+    fn test_extract_key_single_int() {
+        let mut vars = Variables::default();
+        vars.insert("id".to_string(), Value::Int(42));
+        let record = Record::new_with_variables(vars);
+        let key = extract_key(&record, &["id".to_string()]);
+        assert_eq!(key, JoinKey::SingleInt(42));
+    }
+
+    #[test]
+    fn test_extract_key_single_string() {
+        let mut vars = Variables::default();
+        vars.insert("name".to_string(), Value::String("alice".to_string()));
+        let record = Record::new_with_variables(vars);
+        let key = extract_key(&record, &["name".to_string()]);
+        assert_eq!(key, JoinKey::SingleString("alice".to_string()));
+    }
+
+    #[test]
+    fn test_extract_key_null_returns_composite() {
+        let mut vars = Variables::default();
+        vars.insert("id".to_string(), Value::Null);
+        let record = Record::new_with_variables(vars);
+        let key = extract_key(&record, &["id".to_string()]);
+        assert!(matches!(key, JoinKey::Composite(_)));
+    }
+
+    #[test]
+    fn test_extract_key_multi_column() {
+        let mut vars = Variables::default();
+        vars.insert("a".to_string(), Value::Int(1));
+        vars.insert("b".to_string(), Value::String("x".to_string()));
+        let record = Record::new_with_variables(vars);
+        let key = extract_key(&record, &["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            key,
+            JoinKey::Composite(vec![Value::Int(1), Value::String("x".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_extract_key_missing_field() {
+        let vars = Variables::default();
+        let record = Record::new_with_variables(vars);
+        let key = extract_key(&record, &["nonexistent".to_string()]);
+        assert_eq!(key, JoinKey::Composite(vec![Value::Missing]));
     }
 }
