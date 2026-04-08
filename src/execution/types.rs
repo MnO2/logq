@@ -997,11 +997,21 @@ impl Node {
             Node::HashJoin { left, right, equi_keys, residual, join_type } => {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_stream = right.get(variables.clone(), registry.clone(), threads)?;
-                let left_key_fields: Vec<String> = equi_keys.iter()
-                    .map(|(l, _)| l.unwrap_last())
+                // Strip the table alias prefix from equi-key PathExprs.
+                // The equi-keys have paths like [alias, field] but the raw records
+                // from each side have just [field] as their top-level keys.
+                let strip_alias = |p: &PathExpr| -> PathExpr {
+                    if p.path_segments.len() > 1 {
+                        PathExpr::new(p.path_segments[1..].to_vec())
+                    } else {
+                        p.clone()
+                    }
+                };
+                let left_key_fields: Vec<PathExpr> = equi_keys.iter()
+                    .map(|(l, _)| strip_alias(l))
                     .collect();
-                let right_key_fields: Vec<String> = equi_keys.iter()
-                    .map(|(_, r)| r.unwrap_last())
+                let right_key_fields: Vec<PathExpr> = equi_keys.iter()
+                    .map(|(_, r)| strip_alias(r))
                     .collect();
                 // Default memory limit: 512 MB
                 let memory_limit = 512 * 1024 * 1024;

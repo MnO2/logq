@@ -177,28 +177,22 @@ impl std::hash::Hash for JoinKey {
     }
 }
 
-/// Extract a join key from a record using bare field names.
+/// Extract a join key from a record using path expressions.
 /// For single-column keys, specializes to SingleString or SingleInt.
 /// NULL and Missing keys use Composite path (they won't match anything
 /// since NULL != NULL in SQL semantics).
-pub(crate) fn extract_key(record: &Record, key_fields: &[String]) -> JoinKey {
+pub(crate) fn extract_key(record: &Record, key_fields: &[ast::PathExpr]) -> JoinKey {
     if key_fields.len() == 1 {
-        match record.get_field_value(&key_fields[0]) {
-            Some(Value::String(s)) => JoinKey::SingleString(s.clone()),
-            Some(Value::Int(i)) => JoinKey::SingleInt(*i),
-            Some(other) => JoinKey::Composite(vec![other.clone()]),
-            None => JoinKey::Composite(vec![Value::Missing]),
+        match record.get(&key_fields[0]) {
+            Value::String(s) => JoinKey::SingleString(s),
+            Value::Int(i) => JoinKey::SingleInt(i),
+            other => JoinKey::Composite(vec![other]),
         }
     } else {
         JoinKey::Composite(
             key_fields
                 .iter()
-                .map(|f| {
-                    record
-                        .get_field_value(f)
-                        .cloned()
-                        .unwrap_or(Value::Missing)
-                })
+                .map(|f| record.get(f))
                 .collect(),
         )
     }
@@ -925,8 +919,8 @@ pub(crate) struct HashJoinStream {
     left: Box<dyn RecordStream>,
     hash_table: HashMap<JoinKey, SmallVec<[Record; 1]>>,
     join_type: LogicalJoinType,
-    left_key_fields: Vec<String>,
-    right_key_fields: Vec<String>,
+    left_key_fields: Vec<ast::PathExpr>,
+    right_key_fields: Vec<ast::PathExpr>,
     residual: Option<Formula>,
     registry: Arc<FunctionRegistry>,
     // Iteration state
@@ -944,8 +938,8 @@ impl HashJoinStream {
     pub(crate) fn new(
         left: Box<dyn RecordStream>,
         right: Box<dyn RecordStream>,
-        left_key_fields: Vec<String>,
-        right_key_fields: Vec<String>,
+        left_key_fields: Vec<ast::PathExpr>,
+        right_key_fields: Vec<ast::PathExpr>,
         residual: Option<Formula>,
         join_type: LogicalJoinType,
         memory_limit: usize,
@@ -983,8 +977,8 @@ impl HashJoinStream {
 
             // Check for NULL/Missing keys — skip them (NULL != NULL in SQL)
             let has_null_key = self.right_key_fields.iter().any(|f| {
-                match record.get_field_value(f) {
-                    Some(Value::Null) | Some(Value::Missing) | None => true,
+                match record.get(f) {
+                    Value::Null | Value::Missing => true,
                     _ => false,
                 }
             });
@@ -1073,8 +1067,8 @@ impl RecordStream for HashJoinStream {
                 Some(left_record) => {
                     // Check for NULL/Missing keys on probe side
                     let has_null_key = self.left_key_fields.iter().any(|f| {
-                        match left_record.get_field_value(f) {
-                            Some(Value::Null) | Some(Value::Missing) | None => true,
+                        match left_record.get(f) {
+                            Value::Null | Value::Missing => true,
                             _ => false,
                         }
                     });
@@ -1696,7 +1690,7 @@ mod tests {
         let mut vars = Variables::default();
         vars.insert("id".to_string(), Value::Int(42));
         let record = Record::new_with_variables(vars);
-        let key = extract_key(&record, &["id".to_string()]);
+        let key = extract_key(&record, &[path("id")]);
         assert_eq!(key, JoinKey::SingleInt(42));
     }
 
@@ -1705,7 +1699,7 @@ mod tests {
         let mut vars = Variables::default();
         vars.insert("name".to_string(), Value::String("alice".to_string()));
         let record = Record::new_with_variables(vars);
-        let key = extract_key(&record, &["name".to_string()]);
+        let key = extract_key(&record, &[path("name")]);
         assert_eq!(key, JoinKey::SingleString("alice".to_string()));
     }
 
@@ -1714,7 +1708,7 @@ mod tests {
         let mut vars = Variables::default();
         vars.insert("id".to_string(), Value::Null);
         let record = Record::new_with_variables(vars);
-        let key = extract_key(&record, &["id".to_string()]);
+        let key = extract_key(&record, &[path("id")]);
         assert!(matches!(key, JoinKey::Composite(_)));
     }
 
@@ -1724,7 +1718,7 @@ mod tests {
         vars.insert("a".to_string(), Value::Int(1));
         vars.insert("b".to_string(), Value::String("x".to_string()));
         let record = Record::new_with_variables(vars);
-        let key = extract_key(&record, &["a".to_string(), "b".to_string()]);
+        let key = extract_key(&record, &[path("a"), path("b")]);
         assert_eq!(
             key,
             JoinKey::Composite(vec![Value::Int(1), Value::String("x".to_string())])
@@ -1735,8 +1729,12 @@ mod tests {
     fn test_extract_key_missing_field() {
         let vars = Variables::default();
         let record = Record::new_with_variables(vars);
-        let key = extract_key(&record, &["nonexistent".to_string()]);
+        let key = extract_key(&record, &[path("nonexistent")]);
         assert_eq!(key, JoinKey::Composite(vec![Value::Missing]));
+    }
+
+    fn path(name: &str) -> ast::PathExpr {
+        ast::PathExpr::new(vec![ast::PathSegment::AttrName(name.to_string())])
     }
 
     fn record_from_pairs(pairs: Vec<(&str, Value)>) -> Record {
@@ -1765,8 +1763,8 @@ mod tests {
         let mut join = HashJoinStream::new(
             in_memory_stream(left_records),
             in_memory_stream(right_records),
-            vec!["id".to_string()],
-            vec!["id".to_string()],
+            vec![path("id")],
+            vec![path("id")],
             None,
             types::LogicalJoinType::Inner,
             512 * 1024 * 1024,
@@ -1794,7 +1792,7 @@ mod tests {
         let mut join = HashJoinStream::new(
             in_memory_stream(left_records),
             in_memory_stream(right_records),
-            vec!["id".to_string()], vec!["id".to_string()],
+            vec![path("id")], vec![path("id")],
             None, types::LogicalJoinType::Left, 512 * 1024 * 1024,
             registry,
         );
@@ -1816,7 +1814,7 @@ mod tests {
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
             in_memory_stream(left), in_memory_stream(right),
-            vec!["id".to_string()], vec!["id".to_string()],
+            vec![path("id")], vec![path("id")],
             None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
             registry,
         );
@@ -1837,7 +1835,7 @@ mod tests {
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
             in_memory_stream(left), in_memory_stream(right),
-            vec!["id".to_string()], vec!["id".to_string()],
+            vec![path("id")], vec![path("id")],
             None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
             registry,
         );
@@ -1859,7 +1857,7 @@ mod tests {
         // INNER JOIN with empty right → 0 results
         let mut join = HashJoinStream::new(
             in_memory_stream(left.clone()), in_memory_stream(right.clone()),
-            vec!["id".to_string()], vec!["id".to_string()],
+            vec![path("id")], vec![path("id")],
             None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
             registry.clone(),
         );
@@ -1868,7 +1866,7 @@ mod tests {
         // LEFT JOIN with empty right → left row with no right field names (no padding possible)
         let mut join = HashJoinStream::new(
             in_memory_stream(left), in_memory_stream(right),
-            vec!["id".to_string()], vec!["id".to_string()],
+            vec![path("id")], vec![path("id")],
             None, types::LogicalJoinType::Left, 512 * 1024 * 1024,
             registry,
         );
@@ -1890,7 +1888,7 @@ mod tests {
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
             in_memory_stream(left), in_memory_stream(right),
-            vec!["name".to_string()], vec!["name".to_string()],
+            vec![path("name")], vec![path("name")],
             None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
             registry,
         );

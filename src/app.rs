@@ -1615,4 +1615,138 @@ mod tests {
         let result = run_format_query("squid", lines, r#"SELECT code_and_status, count(*) as cnt FROM it GROUP BY code_and_status"#);
         assert_eq!(result, Ok(()));
     }
+
+    // Helper to create two JSONL tables and run a query, returning structured results
+    fn run_two_table_query(
+        table_a_rows: &[&str],
+        table_b_rows: &[&str],
+        query: &str,
+    ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
+        let dir = tempdir().unwrap();
+
+        let file_path_a = dir.path().join("a.jsonl");
+        let mut file_a = File::create(file_path_a.clone()).unwrap();
+        for row in table_a_rows {
+            writeln!(file_a, "{}", row).unwrap();
+        }
+        file_a.sync_all().unwrap();
+        drop(file_a);
+
+        let file_path_b = dir.path().join("b.jsonl");
+        let mut file_b = File::create(file_path_b.clone()).unwrap();
+        for row in table_b_rows {
+            writeln!(file_b, "{}", row).unwrap();
+        }
+        file_b.sync_all().unwrap();
+        drop(file_b);
+
+        let mut data_sources = common::types::DataSourceRegistry::new();
+        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+
+        let result = run_to_vec(query, data_sources, 1);
+        dir.close().unwrap();
+        result
+    }
+
+    #[test]
+    fn test_e2e_inner_join_with_hash() {
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "x": "hello"}"#,
+                r#"{"id": 2, "x": "world"}"#,
+                r#"{"id": 3, "x": "foo"}"#,
+            ],
+            &[
+                r#"{"id": 1, "y": "alpha"}"#,
+                r#"{"id": 3, "y": "beta"}"#,
+            ],
+            r#"SELECT x, y FROM a INNER JOIN b ON a.id = b.id"#,
+        ).unwrap();
+
+        assert_eq!(result.len(), 2, "results: {:?}", result);
+        let xs: Vec<&common::types::Value> = result.iter().map(|r| &r[0].1).collect();
+        assert!(xs.contains(&&common::types::Value::String("hello".into())), "xs: {:?}", xs);
+        assert!(xs.contains(&&common::types::Value::String("foo".into())), "xs: {:?}", xs);
+    }
+
+    #[test]
+    fn test_e2e_left_join_with_hash() {
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "x": "hello"}"#,
+                r#"{"id": 2, "x": "world"}"#,
+                r#"{"id": 3, "x": "foo"}"#,
+            ],
+            &[
+                r#"{"id": 1, "y": "alpha"}"#,
+                r#"{"id": 3, "y": "beta"}"#,
+            ],
+            r#"SELECT x, y FROM a LEFT JOIN b ON a.id = b.id"#,
+        ).unwrap();
+
+        assert_eq!(result.len(), 3);
+        // id=2 row should have NULL for y
+        let world_row = result.iter().find(|r| r[0].1 == common::types::Value::String("world".into())).unwrap();
+        assert_eq!(world_row[1].1, common::types::Value::Null);
+    }
+
+    #[test]
+    fn test_e2e_cross_join_with_where_becomes_hash() {
+        // FROM a, b WHERE a.id = b.id → internally becomes hash join
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "x": "hello"}"#,
+                r#"{"id": 2, "x": "world"}"#,
+            ],
+            &[
+                r#"{"id": 1, "y": "alpha"}"#,
+                r#"{"id": 3, "y": "gamma"}"#,
+            ],
+            r#"SELECT x, y FROM a, b WHERE a.id = b.id"#,
+        ).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][0].1, common::types::Value::String("hello".into()));
+        assert_eq!(result[0][1].1, common::types::Value::String("alpha".into()));
+    }
+
+    #[test]
+    fn test_e2e_inner_join_with_aggregation() {
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "x": "hello"}"#,
+                r#"{"id": 2, "x": "world"}"#,
+                r#"{"id": 1, "x": "hi"}"#,
+            ],
+            &[
+                r#"{"id": 1, "y": "alpha"}"#,
+                r#"{"id": 3, "y": "beta"}"#,
+            ],
+            r#"SELECT y, count(*) as cnt FROM a INNER JOIN b ON a.id = b.id GROUP BY y"#,
+        ).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][0].1, common::types::Value::String("alpha".into()));
+        assert_eq!(result[0][1].1, common::types::Value::Int(2));
+    }
+
+    #[test]
+    fn test_e2e_join_null_keys_dont_match() {
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "x": "a"}"#,
+                r#"{"x": "b"}"#,
+            ],
+            &[
+                r#"{"id": 1, "y": "c"}"#,
+                r#"{"y": "d"}"#,
+            ],
+            r#"SELECT x, y FROM a INNER JOIN b ON a.id = b.id"#,
+        ).unwrap();
+
+        // Only id=1 matches; missing id rows should not match each other
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][0].1, common::types::Value::String("a".into()));
+    }
 }
