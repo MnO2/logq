@@ -660,7 +660,8 @@ pub(crate) struct CrossJoinStream {
     right_node: Node,
     right_variables: Variables,
     current_left: Option<Record>,
-    right_stream: Option<Box<dyn RecordStream>>,
+    right_rows: Option<Vec<Record>>,
+    right_index: usize,
     registry: Arc<FunctionRegistry>,
     threads: usize,
 }
@@ -672,33 +673,49 @@ impl CrossJoinStream {
             right_node,
             right_variables,
             current_left: None,
-            right_stream: None,
+            right_rows: None,
+            right_index: 0,
             registry,
             threads,
         }
+    }
+
+    fn materialize_right(&mut self) -> StreamResult<()> {
+        let mut right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone(), self.threads)
+            .map_err(|e| super::types::StreamError::Get(e))?;
+        let mut rows = Vec::new();
+        while let Some(record) = right_stream.next()? {
+            rows.push(record);
+        }
+        self.right_rows = Some(rows);
+        Ok(())
     }
 }
 
 impl RecordStream for CrossJoinStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
+        // Materialize right side on first call
+        if self.right_rows.is_none() {
+            self.materialize_right()?;
+        }
+
+        let right_rows = self.right_rows.as_ref().unwrap();
+
         loop {
-            // If we have a right stream, try to get next right record
-            if let Some(ref mut right) = self.right_stream {
-                if let Some(right_record) = right.next()? {
-                    // Merge left and right records
-                    let left = self.current_left.as_ref().unwrap();
-                    let merged = left.merge(&right_record);
-                    return Ok(Some(merged));
-                }
+            // If we have a current left record, try to get next right record by index
+            if self.current_left.is_some() && self.right_index < right_rows.len() {
+                let left = self.current_left.as_ref().unwrap();
+                let right_record = &right_rows[self.right_index];
+                self.right_index += 1;
+                let merged = left.merge(right_record);
+                return Ok(Some(merged));
             }
-            // Get next left record and reset right stream
+
+            // Get next left record and reset right index
             match self.left.next()? {
                 Some(left_record) => {
                     self.current_left = Some(left_record);
-                    // Re-create right stream from scratch
-                    let right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone(), self.threads)
-                        .map_err(|e| super::types::StreamError::Get(e))?;
-                    self.right_stream = Some(right_stream);
+                    self.right_index = 0;
                 }
                 None => return Ok(None),
             }
@@ -716,7 +733,8 @@ pub(crate) struct LeftJoinStream {
     right_variables: Variables,
     condition: Formula,
     current_left: Option<Record>,
-    right_stream: Option<Box<dyn RecordStream>>,
+    right_rows: Option<Vec<Record>>,
+    right_index: usize,
     matched: bool,
     right_field_names: Option<Vec<String>>,
     registry: Arc<FunctionRegistry>,
@@ -738,12 +756,30 @@ impl LeftJoinStream {
             right_variables,
             condition,
             current_left: None,
-            right_stream: None,
+            right_rows: None,
+            right_index: 0,
             matched: false,
             right_field_names: None,
             registry,
             threads,
         }
+    }
+
+    fn materialize_right(&mut self) -> StreamResult<()> {
+        let mut right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone(), self.threads)
+            .map_err(|e| super::types::StreamError::Get(e))?;
+        let mut rows = Vec::new();
+        while let Some(record) = right_stream.next()? {
+            rows.push(record);
+        }
+        // Populate right_field_names from first record if available
+        if !rows.is_empty() {
+            self.right_field_names = Some(
+                rows[0].to_variables().keys().cloned().collect(),
+            );
+        }
+        self.right_rows = Some(rows);
+        Ok(())
     }
 
     fn null_padded_right_record(&self) -> Record {
@@ -759,36 +795,32 @@ impl LeftJoinStream {
 
 impl RecordStream for LeftJoinStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
+        // Materialize right side on first call
+        if self.right_rows.is_none() {
+            self.materialize_right()?;
+        }
+
+        let right_rows = self.right_rows.as_ref().unwrap();
+
         loop {
-            // If we have a right stream, try to get next right record
-            if let Some(ref mut right) = self.right_stream {
-                if let Some(right_record) = right.next()? {
-                    // Cache right field names from first right record seen
-                    if self.right_field_names.is_none() {
-                        self.right_field_names = Some(
-                            right_record
-                                .to_variables()
-                                .keys()
-                                .cloned()
-                                .collect(),
-                        );
-                    }
+            // If we have a current left record, try to get next right record by index
+            if self.current_left.is_some() && self.right_index < right_rows.len() {
+                let right_record = &right_rows[self.right_index];
+                self.right_index += 1;
 
-                    let left = self.current_left.as_ref().unwrap();
-                    let merged = left.merge(&right_record);
+                let left = self.current_left.as_ref().unwrap();
+                let merged = left.merge(right_record);
 
-                    // Evaluate ON condition
-                    let merged_vars = common::types::merge(&self.right_variables, merged.to_variables());
-                    let predicate = self.condition.evaluate(&merged_vars, &self.registry)?;
+                // Evaluate ON condition
+                let merged_vars = common::types::merge(&self.right_variables, merged.to_variables());
+                let predicate = self.condition.evaluate(&merged_vars, &self.registry)?;
 
-                    if predicate == Some(true) {
-                        self.matched = true;
-                        return Ok(Some(merged));
-                    }
-                    // Condition didn't match; continue to next right row
-                    continue;
+                if predicate == Some(true) {
+                    self.matched = true;
+                    return Ok(Some(merged));
                 }
-                // Right stream exhausted for this left row
+                // Condition didn't match; continue to next right row
+                continue;
             }
 
             // If we just finished scanning right for a left row and found no match,
@@ -797,43 +829,17 @@ impl RecordStream for LeftJoinStream {
                 let left = self.current_left.take().unwrap();
                 let null_right = self.null_padded_right_record();
                 let merged = left.merge(&null_right);
-                // Reset state before returning
-                self.right_stream = None;
                 // Now fall through to get next left row on next call
                 // But first return this result
                 return Ok(Some(merged));
             }
 
-            // Get next left record and reset right stream
+            // Get next left record and reset right index
             match self.left.next()? {
                 Some(left_record) => {
                     self.current_left = Some(left_record);
                     self.matched = false;
-                    // Re-create right stream from scratch
-                    let right_stream = self
-                        .right_node
-                        .get(self.right_variables.clone(), self.registry.clone(), self.threads)
-                        .map_err(|e| super::types::StreamError::Get(e))?;
-                    self.right_stream = Some(right_stream);
-
-                    // If we don't have right_field_names yet, peek at first right record
-                    // to learn them (needed for NULL padding if no match at all)
-                    if self.right_field_names.is_none() {
-                        // Create a temporary stream to discover field names
-                        let mut peek_stream = self
-                            .right_node
-                            .get(self.right_variables.clone(), self.registry.clone(), self.threads)
-                            .map_err(|e| super::types::StreamError::Get(e))?;
-                        if let Some(peek_record) = peek_stream.next()? {
-                            self.right_field_names = Some(
-                                peek_record
-                                    .to_variables()
-                                    .keys()
-                                    .cloned()
-                                    .collect(),
-                            );
-                        }
-                    }
+                    self.right_index = 0;
                 }
                 None => return Ok(None),
             }
