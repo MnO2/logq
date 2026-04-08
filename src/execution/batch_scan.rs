@@ -48,11 +48,10 @@ impl BatchLineArena {
         self.spans.len()
     }
 
-    /// Convert to Vec<Vec<u8>> for temporary compatibility with
-    /// parse_field_column which takes &[Vec<u8>].
-    fn to_vecs(&self) -> Vec<Vec<u8>> {
+    /// Return borrowed slices into the arena buffer, avoiding per-line heap allocation.
+    fn to_slices(&self) -> Vec<&[u8]> {
         self.spans.iter()
-            .map(|&(start, end)| self.data[start..end].to_vec())
+            .map(|&(start, end)| &self.data[start..end])
             .collect()
     }
 }
@@ -102,7 +101,7 @@ impl BatchScanOperator {
         }
     }
 
-    fn read_lines(&mut self) -> Vec<Vec<u8>> {
+    fn read_lines(&mut self) {
         self.arena.clear();
         while self.arena.len() < BATCH_SIZE {
             self.buf.clear();
@@ -117,7 +116,6 @@ impl BatchScanOperator {
                 Err(_) => { self.done = true; break; }
             }
         }
-        self.arena.to_vecs()
     }
 }
 
@@ -128,11 +126,12 @@ impl BatchStream for BatchScanOperator {
                 return Ok(None);
             }
 
-            let lines = self.read_lines();
-            if lines.is_empty() {
+            self.read_lines();
+            if self.arena.len() == 0 {
                 return Ok(None);
             }
 
+            let lines = self.arena.to_slices();
             let len = lines.len();
 
             // Tokenize all lines using reusable scratch buffer
@@ -415,11 +414,11 @@ mod tests {
         assert_eq!(arena.get_line(0), b"hello world");
         assert_eq!(arena.get_line(1), b"foo bar baz");
 
-        // to_vecs compatibility
-        let vecs = arena.to_vecs();
-        assert_eq!(vecs.len(), 2);
-        assert_eq!(vecs[0], b"hello world");
-        assert_eq!(vecs[1], b"foo bar baz");
+        // to_slices: borrowed slices into arena buffer
+        let slices = arena.to_slices();
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[0], b"hello world");
+        assert_eq!(slices[1], b"foo bar baz");
 
         // Clear and reuse
         arena.clear();

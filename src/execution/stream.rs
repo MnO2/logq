@@ -387,6 +387,8 @@ const REORDER_INTERVAL: u64 = 1024;
 
 impl FilterStream {
     pub fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
+        // Fold constant sub-expressions before execution
+        let formula = formula.fold_constants();
         let has_scope = !variables.is_empty();
         // Try to flatten AND trees for adaptive reordering
         if matches!(&formula, Formula::And(_, _)) {

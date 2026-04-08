@@ -27,6 +27,8 @@ impl BatchFilterOperator {
             names: child.schema().names.clone(),
             types: child.schema().types.clone(),
         };
+        // Fold constant sub-expressions before execution
+        let formula = formula.fold_constants();
         Self { child, formula, variables, registry, schema }
     }
 }

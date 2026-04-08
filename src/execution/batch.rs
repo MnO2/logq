@@ -41,6 +41,16 @@ pub enum TypedColumn {
         null: Bitmap,
         missing: Bitmap,
     },
+    /// Dictionary-encoded strings.  Stores each unique string once in
+    /// `dict_data`/`dict_offsets` and a per-row `codes` array that indexes
+    /// into the dictionary.  Used automatically when cardinality is low.
+    DictUtf8 {
+        dict_data: PaddedVec<u8>,
+        dict_offsets: PaddedVec<u32>, // len = num_unique + 1
+        codes: PaddedVec<u16>,
+        null: Bitmap,
+        missing: Bitmap,
+    },
     DateTime {
         data: PaddedVec<i64>,
         null: Bitmap,
@@ -174,6 +184,19 @@ impl BatchToRowAdapter {
                 let start = offsets[row] as usize;
                 let end = offsets[row + 1] as usize;
                 let s = String::from_utf8_lossy(&data[start..end]).into_owned();
+                Value::String(s)
+            }
+            TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing } => {
+                if !missing.is_set(row) {
+                    return Value::Missing;
+                }
+                if !null.is_set(row) {
+                    return Value::Null;
+                }
+                let code = codes[row] as usize;
+                let start = dict_offsets[code] as usize;
+                let end = dict_offsets[code + 1] as usize;
+                let s = String::from_utf8_lossy(&dict_data[start..end]).into_owned();
                 Value::String(s)
             }
             TypedColumn::DateTime { data, null, missing } => {

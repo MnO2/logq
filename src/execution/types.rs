@@ -578,6 +578,94 @@ impl Formula {
             other => out.push(other),
         }
     }
+
+    /// Fold constant sub-expressions and simplify boolean logic.
+    /// Rewrites AND/OR with constant arms, NOT of constants, and
+    /// comparisons of two constants into `Formula::Constant`.
+    pub(crate) fn fold_constants(self) -> Formula {
+        match self {
+            Formula::And(left, right) => {
+                let left = left.fold_constants();
+                let right = right.fold_constants();
+                match (&left, &right) {
+                    (Formula::Constant(true), _) => right,
+                    (_, Formula::Constant(true)) => left,
+                    (Formula::Constant(false), _) | (_, Formula::Constant(false)) => Formula::Constant(false),
+                    _ => Formula::And(Box::new(left), Box::new(right)),
+                }
+            }
+            Formula::Or(left, right) => {
+                let left = left.fold_constants();
+                let right = right.fold_constants();
+                match (&left, &right) {
+                    (Formula::Constant(true), _) | (_, Formula::Constant(true)) => Formula::Constant(true),
+                    (Formula::Constant(false), _) => right,
+                    (_, Formula::Constant(false)) => left,
+                    _ => Formula::Or(Box::new(left), Box::new(right)),
+                }
+            }
+            Formula::Not(inner) => {
+                let inner = inner.fold_constants();
+                match inner {
+                    Formula::Constant(b) => Formula::Constant(!b),
+                    other => Formula::Not(Box::new(other)),
+                }
+            }
+            Formula::Predicate(ref rel, ref left, ref right) => {
+                if let (Expression::Constant(lv), Expression::Constant(rv)) = (left.as_ref(), right.as_ref()) {
+                    if let Some(result) = Self::evaluate_constant_comparison(rel, lv, rv) {
+                        return Formula::Constant(result);
+                    }
+                }
+                self
+            }
+            other => other,
+        }
+    }
+
+    /// Evaluate a comparison of two constant values at compile time.
+    fn evaluate_constant_comparison(rel: &Relation, left: &Value, right: &Value) -> Option<bool> {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                Some(match rel {
+                    Relation::Equal => a == b,
+                    Relation::NotEqual => a != b,
+                    Relation::MoreThan => a > b,
+                    Relation::LessThan => a < b,
+                    Relation::GreaterEqual => a >= b,
+                    Relation::LessEqual => a <= b,
+                })
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                Some(match rel {
+                    Relation::Equal => a == b,
+                    Relation::NotEqual => a != b,
+                    Relation::MoreThan => a > b,
+                    Relation::LessThan => a < b,
+                    Relation::GreaterEqual => a >= b,
+                    Relation::LessEqual => a <= b,
+                })
+            }
+            (Value::String(a), Value::String(b)) => {
+                Some(match rel {
+                    Relation::Equal => a == b,
+                    Relation::NotEqual => a != b,
+                    Relation::MoreThan => a > b,
+                    Relation::LessThan => a < b,
+                    Relation::GreaterEqual => a >= b,
+                    Relation::LessEqual => a <= b,
+                })
+            }
+            (Value::Boolean(a), Value::Boolean(b)) => {
+                match rel {
+                    Relation::Equal => Some(a == b),
+                    Relation::NotEqual => Some(a != b),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 
@@ -733,6 +821,20 @@ impl Node {
         required_fields: &[usize],
         threads: usize,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
+        self.try_get_batch_limited(variables, registry, required_fields, threads, None)
+    }
+
+    /// Like `try_get_batch` but with an optional row limit hint.
+    /// When a LIMIT is known, it's propagated to parallel scan operators
+    /// so they can stop scanning early once enough rows have been found.
+    fn try_get_batch_limited(
+        &self,
+        variables: &Variables,
+        registry: &Arc<FunctionRegistry>,
+        required_fields: &[usize],
+        threads: usize,
+        row_limit: Option<usize>,
+    ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
         match self {
             Node::DataSource(data_source, bindings) => {
                 if !bindings.is_empty() {
@@ -752,8 +854,8 @@ impl Node {
                         // Try parallel mmap path
                         if threads > 1 {
                             if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
-                                match parallel::parallel_scan_chunks(
-                                    &mmap, threads, &schema, &fields, &[], &None,
+                                match parallel::parallel_scan_chunks_limited(
+                                    &mmap, threads, &schema, &fields, &[], &None, row_limit,
                                 ) {
                                     Ok(chunk_batches) => {
                                         let batch_schema = BatchSchema {
@@ -806,8 +908,8 @@ impl Node {
                                 if threads > 1 {
                                     if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
                                         let pushed = Some((*formula.clone(), variables.clone(), registry.clone()));
-                                        match parallel::parallel_scan_chunks(
-                                            &mmap, threads, &schema, &all_fields, &filter_fields, &pushed,
+                                        match parallel::parallel_scan_chunks_limited(
+                                            &mmap, threads, &schema, &all_fields, &filter_fields, &pushed, row_limit,
                                         ) {
                                             Ok(chunk_batches) => {
                                                 let batch_schema = BatchSchema {
@@ -841,7 +943,7 @@ impl Node {
                     }
                 }
                 // Fallback: wrap with BatchFilterOperator for non-DataSource children
-                match source.try_get_batch(variables, registry, required_fields, threads) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
                             batch_stream, *formula.clone(), variables.clone(), registry.clone(),
@@ -853,7 +955,13 @@ impl Node {
                 }
             }
             Node::Limit(count, source) => {
-                match source.try_get_batch(variables, registry, required_fields, threads) {
+                let child_limit = Some(*count as usize);
+                // Merge: use the tighter of the two limits
+                let effective_limit = match (row_limit, child_limit) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, effective_limit) {
                     Some(Ok(batch_stream)) => {
                         let limit = BatchLimitOperator::new(batch_stream, *count);
                         Some(Ok(Box::new(limit) as Box<dyn BatchStream>))
@@ -879,7 +987,7 @@ impl Node {
                 {
                     return None;
                 }
-                match source.try_get_batch(variables, registry, required_fields, threads) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
                     Some(Ok(batch_stream)) => {
                         // Extract output column names from named_list
                         let output_names: Vec<String> = named_list.iter().filter_map(|named| {
@@ -912,7 +1020,7 @@ impl Node {
                 if let Some(params) = Self::detect_streaming_groupby(keys, source) {
                     // Bypass the Map node: get batch stream from the Map's child
                     let required = params.map_source.compute_required_fields_for_batch();
-                    match params.map_source.try_get_batch(variables, registry, &required, threads) {
+                    match params.map_source.try_get_batch_limited(variables, registry, &required, threads, row_limit) {
                         Some(Ok(batch_stream)) => {
                             let op = crate::execution::batch_streaming_groupby::BatchStreamingGroupByOperator::new(
                                 batch_stream,
@@ -930,7 +1038,7 @@ impl Node {
                     }
                 }
                 // Hash-based fallback
-                match source.try_get_batch(variables, registry, required_fields, threads) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
                     Some(Ok(batch_stream)) => {
                         let groupby = crate::execution::batch_groupby::BatchGroupByOperator::new(
                             batch_stream,
@@ -3759,5 +3867,74 @@ mod accumulator_tests {
         gs_a.merge(&gs_b);
         assert_eq!(gs_a.accumulators[0].finalize().unwrap(), Value::Int(5));
         assert_eq!(gs_a.accumulators[1].finalize().unwrap(), Value::Float(OrderedFloat(15.0f32)));
+    }
+
+    #[test]
+    fn test_fold_and_true_left() {
+        let f = Formula::And(
+            Box::new(Formula::Constant(true)),
+            Box::new(Formula::Predicate(
+                Relation::Equal,
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]))),
+                Box::new(Expression::Constant(Value::Int(1))),
+            )),
+        );
+        let folded = f.fold_constants();
+        assert!(matches!(folded, Formula::Predicate(Relation::Equal, _, _)));
+    }
+
+    #[test]
+    fn test_fold_and_false() {
+        let f = Formula::And(
+            Box::new(Formula::Constant(false)),
+            Box::new(Formula::Predicate(
+                Relation::Equal,
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]))),
+                Box::new(Expression::Constant(Value::Int(1))),
+            )),
+        );
+        assert_eq!(f.fold_constants(), Formula::Constant(false));
+    }
+
+    #[test]
+    fn test_fold_or_true() {
+        let f = Formula::Or(
+            Box::new(Formula::Constant(true)),
+            Box::new(Formula::Predicate(
+                Relation::Equal,
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]))),
+                Box::new(Expression::Constant(Value::Int(1))),
+            )),
+        );
+        assert_eq!(f.fold_constants(), Formula::Constant(true));
+    }
+
+    #[test]
+    fn test_fold_not_constant() {
+        assert_eq!(
+            Formula::Not(Box::new(Formula::Constant(true))).fold_constants(),
+            Formula::Constant(false),
+        );
+        assert_eq!(
+            Formula::Not(Box::new(Formula::Constant(false))).fold_constants(),
+            Formula::Constant(true),
+        );
+    }
+
+    #[test]
+    fn test_fold_constant_comparison() {
+        let f = Formula::Predicate(
+            Relation::MoreThan,
+            Box::new(Expression::Constant(Value::Int(10))),
+            Box::new(Expression::Constant(Value::Int(5))),
+        );
+        assert_eq!(f.fold_constants(), Formula::Constant(true));
+
+        let f = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Constant(Value::String("a".to_string()))),
+            Box::new(Expression::Constant(Value::String("b".to_string()))),
+        );
+        assert_eq!(f.fold_constants(), Formula::Constant(false));
     }
 }

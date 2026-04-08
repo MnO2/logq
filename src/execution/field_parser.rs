@@ -4,6 +4,7 @@ use crate::simd::bitmap::Bitmap;
 use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
 use crate::simd::selection::SelectionVector;
 use crate::common::types::Value;
+use hashbrown::HashMap;
 
 /// Parse a single field column from all rows in the batch.
 pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
@@ -29,12 +30,12 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
                 }
                 offsets_builder.push(data_builder.len() as u32);
             }
-            TypedColumn::Utf8 {
+            try_dict_encode(TypedColumn::Utf8 {
                 data: data_builder.seal(),
                 offsets: offsets_builder.seal(),
                 null: null_bm,
                 missing: missing_bm,
-            }
+            })
         }
         DataType::Integral => {
             let mut data = Vec::with_capacity(len);
@@ -171,12 +172,12 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                 }
                 offsets_builder.push(data_builder.len() as u32);
             }
-            TypedColumn::Utf8 {
+            try_dict_encode(TypedColumn::Utf8 {
                 data: data_builder.seal(),
                 offsets: offsets_builder.seal(),
                 null: null_bm,
                 missing: missing_bm,
-            }
+            })
         }
         DataType::Integral => {
             let mut data = Vec::with_capacity(len);
@@ -305,6 +306,72 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                 }
             }
             TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+        }
+    }
+}
+
+/// Attempt to dictionary-encode a Utf8 column.
+/// If the number of unique values is less than half the row count (and <= 4096),
+/// returns a DictUtf8 column; otherwise returns the original Utf8 unchanged.
+fn try_dict_encode(col: TypedColumn) -> TypedColumn {
+    let (data, offsets, null, missing) = match col {
+        TypedColumn::Utf8 { data, offsets, null, missing } => (data, offsets, null, missing),
+        other => return other,
+    };
+    let len = offsets.len() - 1;
+    if len == 0 {
+        return TypedColumn::Utf8 { data, offsets, null, missing };
+    }
+
+    // Phase 1: determine unique strings and assign codes.
+    // Use borrowed slices in a block so the borrow is dropped before we move `data`.
+    let result = {
+        let mut dict: HashMap<&[u8], u16> = HashMap::with_capacity(32);
+        let mut dict_spans: Vec<(usize, usize)> = Vec::new();
+        let mut codes: Vec<u16> = Vec::with_capacity(len);
+        let mut too_high = false;
+
+        for i in 0..len {
+            let start = offsets[i] as usize;
+            let end = offsets[i + 1] as usize;
+            let field = &data[start..end];
+            let next_code = dict.len() as u16;
+            let code = *dict.entry(field).or_insert_with(|| {
+                dict_spans.push((start, end));
+                next_code
+            });
+            codes.push(code);
+
+            if dict.len() > 4096 || dict.len() * 2 > len {
+                too_high = true;
+                break;
+            }
+        }
+
+        if too_high {
+            None
+        } else {
+            Some((dict_spans, codes))
+        }
+    }; // dict (with borrows into data) is dropped here
+
+    match result {
+        None => TypedColumn::Utf8 { data, offsets, null, missing },
+        Some((dict_spans, codes)) => {
+            let mut dict_data_builder = PaddedVecBuilder::<u8>::new();
+            let mut dict_offsets_builder = PaddedVecBuilder::<u32>::with_capacity(dict_spans.len() + 1);
+            dict_offsets_builder.push(0);
+            for &(start, end) in &dict_spans {
+                dict_data_builder.extend_from_slice(&data[start..end]);
+                dict_offsets_builder.push(dict_data_builder.len() as u32);
+            }
+            TypedColumn::DictUtf8 {
+                dict_data: dict_data_builder.seal(),
+                dict_offsets: dict_offsets_builder.seal(),
+                codes: PaddedVec::from_vec(codes),
+                null,
+                missing,
+            }
         }
     }
 }
@@ -481,5 +548,54 @@ mod tests {
             }
             _ => panic!("expected Utf8"),
         }
+    }
+
+    #[test]
+    fn test_dict_encode_low_cardinality() {
+        // 8 rows with only 2 unique values → should dict-encode
+        let lines: Vec<Vec<u8>> = vec![
+            b"200".to_vec(), b"404".to_vec(), b"200".to_vec(), b"200".to_vec(),
+            b"404".to_vec(), b"200".to_vec(), b"404".to_vec(), b"200".to_vec(),
+        ];
+        let fields: Vec<Vec<(usize, usize)>> = lines.iter().map(|l| vec![(0, l.len())]).collect();
+        let col = parse_field_column(&lines, &fields, 0, &DataType::String);
+        match &col {
+            TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, .. } => {
+                // 2 unique dictionary entries
+                assert_eq!(dict_offsets.len() - 1, 2);
+                // Verify codes map correctly
+                let code_200 = codes[0]; // first row is "200"
+                let code_404 = codes[1]; // second row is "404"
+                assert_ne!(code_200, code_404);
+                assert_eq!(codes[2], code_200); // "200"
+                assert_eq!(codes[4], code_404); // "404"
+                // Verify dictionary entries
+                for c in 0..2 {
+                    let s = dict_offsets[c] as usize;
+                    let e = dict_offsets[c + 1] as usize;
+                    let entry = &dict_data[s..e];
+                    assert!(entry == b"200" || entry == b"404");
+                }
+            }
+            _ => panic!("expected DictUtf8 for low-cardinality data, got Utf8"),
+        }
+
+        // Verify extract_value round-trips correctly
+        use crate::execution::batch::BatchToRowAdapter;
+        for (i, expected) in ["200","404","200","200","404","200","404","200"].iter().enumerate() {
+            match BatchToRowAdapter::extract_value(&col, i) {
+                Value::String(s) => assert_eq!(s, *expected, "row {i}"),
+                other => panic!("row {i}: expected String, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_dict_encode_high_cardinality_stays_utf8() {
+        // All unique values → cardinality = 100% → should NOT dict-encode
+        let lines: Vec<Vec<u8>> = (0..10).map(|i| format!("val_{i}").into_bytes()).collect();
+        let fields: Vec<Vec<(usize, usize)>> = lines.iter().map(|l| vec![(0, l.len())]).collect();
+        let col = parse_field_column(&lines, &fields, 0, &DataType::String);
+        assert!(matches!(col, TypedColumn::Utf8 { .. }), "high cardinality should stay Utf8");
     }
 }

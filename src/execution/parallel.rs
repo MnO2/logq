@@ -106,10 +106,31 @@ pub(crate) fn parallel_scan_chunks(
     filter_field_indices: &[usize],
     pushed_predicate: &Option<(Formula, Variables, Arc<FunctionRegistry>)>,
 ) -> StreamResult<Vec<Vec<ColumnBatch>>> {
+    parallel_scan_chunks_limited(
+        data, num_threads, schema, projected_fields,
+        filter_field_indices, pushed_predicate, None,
+    )
+}
+
+/// Like `parallel_scan_chunks` but with an optional row limit.
+/// When set, workers stop early once `row_limit` total active rows have been
+/// collected across all chunks. This avoids scanning the full file for LIMIT queries.
+pub(crate) fn parallel_scan_chunks_limited(
+    data: &[u8],
+    num_threads: usize,
+    schema: &LogSchema,
+    projected_fields: &[usize],
+    filter_field_indices: &[usize],
+    pushed_predicate: &Option<(Formula, Variables, Arc<FunctionRegistry>)>,
+    row_limit: Option<usize>,
+) -> StreamResult<Vec<Vec<ColumnBatch>>> {
     let chunks = split_chunks(data, num_threads);
     if chunks.is_empty() {
         return Ok(vec![]);
     }
+
+    let global_count = std::sync::atomic::AtomicUsize::new(0);
+    let limit = row_limit.unwrap_or(usize::MAX);
 
     let partial_results: Vec<StreamResult<Vec<ColumnBatch>>> = chunks
         .par_iter()
@@ -124,7 +145,13 @@ pub(crate) fn parallel_scan_chunks(
             );
             let mut batches = Vec::new();
             while let Some(batch) = scanner.next_batch()? {
+                let active = batch.selection.count_active(batch.len);
                 batches.push(batch);
+                // Check if we've collectively found enough rows
+                let prev = global_count.fetch_add(active, std::sync::atomic::Ordering::Relaxed);
+                if prev + active >= limit {
+                    break;
+                }
             }
             Ok(batches)
         })
