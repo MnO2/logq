@@ -455,6 +455,7 @@ dependencies = [
 name = "logq"
 version = "0.1.19"
 dependencies = [
+ "ahash",
  "anyhow",
  "chrono",
  "clap",
@@ -473,6 +474,7 @@ dependencies = [
  "rand 0.8.0",
  "rayon",
  "regex",
+ "smallvec",
  "tdigest",
  "tempfile",
  "thiserror",
@@ -957,6 +959,12 @@ dependencies = [
  "ryu",
  "serde",
 ]
+
+[[package]]
+name = "smallvec"
+version = "1.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "strsim"
