@@ -145,6 +145,21 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
             collect_node_fields(left, out);
             collect_node_fields(right, out);
         }
+        Node::HashJoin { left, right, equi_keys, residual, .. } => {
+            collect_node_fields(left, out);
+            collect_node_fields(right, out);
+            for (lk, rk) in equi_keys {
+                if let Some(PathSegment::AttrName(name)) = lk.path_segments.first() {
+                    out.insert(name.clone());
+                }
+                if let Some(PathSegment::AttrName(name)) = rk.path_segments.first() {
+                    out.insert(name.clone());
+                }
+            }
+            if let Some(r) = residual {
+                collect_formula_fields(r, out);
+            }
+        }
     }
 }
 

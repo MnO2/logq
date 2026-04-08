@@ -16,6 +16,13 @@ pub enum PhysicalPlanError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LogicalJoinType {
+    Inner,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
     DataSource(DataSource, Vec<common::Binding>),
     Filter(Box<Formula>, Box<Node>),
@@ -26,6 +33,13 @@ pub(crate) enum Node {
     Distinct(Box<Node>),
     CrossJoin(Box<Node>, Box<Node>),
     LeftJoin(Box<Node>, Box<Node>, Box<Formula>), // left, right, ON condition
+    HashJoin {
+        left: Box<Node>,
+        right: Box<Node>,
+        equi_keys: Vec<(ast::PathExpr, ast::PathExpr)>,
+        residual: Option<Box<Formula>>,
+        join_type: LogicalJoinType,
+    },
     Union(Box<Node>, Box<Node>),                   // Concatenate two result sets
     Intersect(Box<Node>, Box<Node>, bool),          // Rows in both (bool = ALL)
     Except(Box<Node>, Box<Node>, bool),             // Rows in left not in right (bool = ALL)
@@ -123,6 +137,32 @@ impl Node {
                 let (physical_condition, condition_variables) = condition.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&left_variables, &common::merge(&right_variables, &condition_variables));
                 let node = execution::Node::LeftJoin(left_child, right_child, physical_condition);
+                Ok((Box::new(node), return_variables))
+            }
+            Node::HashJoin { left, right, equi_keys, residual, join_type } => {
+                let (left_child, left_variables) = left.physical(physical_plan_creator)?;
+                let (right_child, right_variables) = right.physical(physical_plan_creator)?;
+                let mut return_variables = common::merge(&left_variables, &right_variables);
+                let physical_residual = match residual {
+                    Some(r) => {
+                        let (pr, rv) = r.physical(physical_plan_creator)?;
+                        return_variables = common::merge(&return_variables, &rv);
+                        Some(pr)
+                    }
+                    None => None,
+                };
+                let exec_join_type = match join_type {
+                    LogicalJoinType::Inner => execution::LogicalJoinType::Inner,
+                    LogicalJoinType::Left => execution::LogicalJoinType::Left,
+                    LogicalJoinType::Right => execution::LogicalJoinType::Right,
+                };
+                let node = execution::Node::HashJoin {
+                    left: left_child,
+                    right: right_child,
+                    equi_keys: equi_keys.clone(),
+                    residual: physical_residual,
+                    join_type: exec_join_type,
+                };
                 Ok((Box::new(node), return_variables))
             }
             Node::Union(left, right) => {
@@ -907,5 +947,32 @@ mod test {
 
         assert_eq!(expected_group_by, *physical_formula);
         assert_eq!(expected_variables, variables);
+    }
+
+    #[test]
+    fn test_hash_join_physical() {
+        let path_a = PathExpr::new(vec![PathSegment::AttrName("a_id".to_string())]);
+        let path_b = PathExpr::new(vec![PathSegment::AttrName("b_id".to_string())]);
+
+        let left = Node::DataSource(
+            common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            vec![],
+        );
+        let right = Node::DataSource(
+            common::DataSource::Stdin("jsonl".to_string(), "b".to_string()),
+            vec![],
+        );
+
+        let hash_join = Node::HashJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            equi_keys: vec![(path_a.clone(), path_b.clone())],
+            residual: None,
+            join_type: LogicalJoinType::Inner,
+        };
+
+        let mut creator = PhysicalPlanCreator::new();
+        let result = hash_join.physical(&mut creator);
+        assert!(result.is_ok());
     }
 }

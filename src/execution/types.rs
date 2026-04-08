@@ -547,6 +547,13 @@ struct StreamingGroupByParams<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogicalJoinType {
+    Inner,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
@@ -557,6 +564,13 @@ pub enum Node {
     Distinct(Box<Node>),
     CrossJoin(Box<Node>, Box<Node>),
     LeftJoin(Box<Node>, Box<Node>, Box<Formula>),
+    HashJoin {
+        left: Box<Node>,
+        right: Box<Node>,
+        equi_keys: Vec<(PathExpr, PathExpr)>,
+        residual: Option<Box<Formula>>,
+        join_type: LogicalJoinType,
+    },
     Union(Box<Node>, Box<Node>),
     Intersect(Box<Node>, Box<Node>, bool),
     Except(Box<Node>, Box<Node>, bool),
@@ -977,6 +991,9 @@ impl Node {
                 let right_node = *right.clone();
                 let right_variables = variables;
                 Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone(), registry, threads)))
+            }
+            Node::HashJoin { .. } => {
+                todo!("HashJoinStream implementation in Step 8")
             }
             Node::Union(left, right) => {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
