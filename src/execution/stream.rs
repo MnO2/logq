@@ -49,6 +49,13 @@ impl Record {
         None
     }
 
+    /// Direct field access by bare name. Bypasses PathExpr construction.
+    /// For the join key extraction hot path.
+    #[inline]
+    pub(crate) fn get_field_value(&self, field_name: &str) -> Option<&Value> {
+        self.variables.get(field_name)
+    }
+
     pub(crate) fn alias(&mut self, bindings: &Vec<common::types::Binding>) {
         for binding in bindings.iter() {
             let val = common::types::get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
@@ -1353,6 +1360,18 @@ mod tests {
         let record = stream.next().unwrap().unwrap();
         assert_eq!(record.to_variables()["cnt"], Value::Int(3));
         assert!(stream.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_record_get_field_value() {
+        let mut vars = Variables::default();
+        vars.insert("status".to_string(), Value::Int(200));
+        vars.insert("host".to_string(), Value::String("example.com".to_string()));
+        let record = Record::new_with_variables(vars);
+
+        assert_eq!(record.get_field_value("status"), Some(&Value::Int(200)));
+        assert_eq!(record.get_field_value("host"), Some(&Value::String("example.com".to_string())));
+        assert_eq!(record.get_field_value("missing"), None);
     }
 
     #[test]
