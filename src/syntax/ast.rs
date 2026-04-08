@@ -26,6 +26,8 @@ pub(crate) enum Query {
 pub(crate) enum JoinType {
     Cross,
     Left,
+    Inner,
+    Right,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

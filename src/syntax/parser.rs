@@ -105,7 +105,8 @@ fn is_keyword(s: &str) -> bool {
         b'l' => ["lateral", "left", "like", "limit"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
         b'm' => ["missing"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
         b'n' => ["not", "null"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
-        b'o' => ["on", "or", "order"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'o' => ["on", "or", "order", "outer"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
+        b'r' => ["right"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
         b's' => ["select"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
         b't' => ["then", "true"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
         b'u' => ["union"].iter().any(|kw| kw.eq_ignore_ascii_case(s)),
@@ -541,6 +542,41 @@ fn left_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, as
     Ok((i, (JoinType::Left, right_ref, on_condition)))
 }
 
+/// Parse [INNER] JOIN ... ON ... returning (JoinType::Inner, TableReference, Expression)
+/// Bare `JOIN` (without INNER keyword) also maps to Inner.
+fn inner_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, ast::Expression), nom::error::Error<&str>> {
+    let (i, _) = multispace0(i)?;
+    // Optional "INNER" keyword
+    let (i, _) = opt(terminated(tag_no_case("inner"), multispace1))(i)?;
+    let (i, _) = tag_no_case("join")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, right_ref) = table_reference(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, _) = tag_no_case("on")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, on_condition) = expression(i)?;
+
+    Ok((i, (JoinType::Inner, right_ref, on_condition)))
+}
+
+/// Parse RIGHT [OUTER] JOIN ... ON ... returning (JoinType::Right, TableReference, Expression)
+fn right_join_clause(i: &str) -> IResult<&str, (JoinType, ast::TableReference, ast::Expression), nom::error::Error<&str>> {
+    let (i, _) = multispace0(i)?;
+    let (i, _) = tag_no_case("right")(i)?;
+    let (i, _) = multispace1(i)?;
+    // Optional "OUTER" keyword
+    let (i, _) = opt(terminated(tag_no_case("outer"), multispace1))(i)?;
+    let (i, _) = tag_no_case("join")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, right_ref) = table_reference(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, _) = tag_no_case("on")(i)?;
+    let (i, _) = multispace1(i)?;
+    let (i, on_condition) = expression(i)?;
+
+    Ok((i, (JoinType::Right, right_ref, on_condition)))
+}
+
 fn having_expression(i: &str) -> IResult<&str, ast::WhereExpression, nom::error::Error<&str>> {
     map(preceded(tag_no_case("having"), expression), ast::WhereExpression::new)(i)
 }
@@ -595,8 +631,8 @@ fn from_clause(i: &str) -> IResult<&str, FromClause, nom::error::Error<&str>> {
     let (i, _) = space1(i)?;
     let (i, base) = table_reference_list(i)?;
 
-    // Try to parse zero or more LEFT JOIN clauses chained after the base
-    let (i, joins) = many0(left_join_clause)(i)?;
+    // Try to parse zero or more JOIN clauses (LEFT, RIGHT, INNER, or bare JOIN) chained after the base
+    let (i, joins) = many0(alt((left_join_clause, right_join_clause, inner_join_clause)))(i)?;
 
     let result = joins.into_iter().fold(base, |acc, (join_type, right_ref, on_expr)| {
         FromClause::Join {
@@ -2441,5 +2477,33 @@ mod test {
     fn test_except_parsing() {
         let result = query("select a from it except select b from it");
         assert!(result.is_ok(), "EXCEPT should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_parse_inner_join() {
+        let input = "SELECT a.x, b.y FROM a INNER JOIN b ON a.id = b.id";
+        let result = query(input);
+        assert!(result.is_ok(), "INNER JOIN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_parse_bare_join() {
+        let input = "SELECT a.x, b.y FROM a JOIN b ON a.id = b.id";
+        let result = query(input);
+        assert!(result.is_ok(), "Bare JOIN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_parse_right_join() {
+        let input = "SELECT a.x, b.y FROM a RIGHT JOIN b ON a.id = b.id";
+        let result = query(input);
+        assert!(result.is_ok(), "RIGHT JOIN should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_parse_right_outer_join() {
+        let input = "SELECT a.x, b.y FROM a RIGHT OUTER JOIN b ON a.id = b.id";
+        let result = query(input);
+        assert!(result.is_ok(), "RIGHT OUTER JOIN should parse, got: {:?}", result);
     }
 }

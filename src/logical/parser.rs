@@ -680,6 +680,18 @@ fn build_from_node(
                     let formula = parse_logic(ctx, on_expr)?;
                     Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
                 }
+                JoinType::Inner => {
+                    // Temporary: reuse LeftJoin node until proper InnerJoin is added
+                    let on_expr = condition.as_ref().expect("INNER JOIN requires ON condition");
+                    let formula = parse_logic(ctx, on_expr)?;
+                    Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
+                }
+                JoinType::Right => {
+                    // Temporary: reuse LeftJoin node until proper RightJoin is added
+                    let on_expr = condition.as_ref().expect("RIGHT JOIN requires ON condition");
+                    let formula = parse_logic(ctx, on_expr)?;
+                    Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula))
+                }
             }
         }
     }
