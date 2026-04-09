@@ -54,9 +54,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                     },
                     "string" | "varchar" => match value {
                         Value::String(_) => Ok(value.clone()),
-                        Value::Int(i) => Ok(Value::String(i.to_string())),
-                        Value::Float(f) => Ok(Value::String(f.to_string())),
-                        Value::Boolean(b) => Ok(Value::String(b.to_string())),
+                        Value::Int(i) => Ok(Value::String(i.to_string().into())),
+                        Value::Float(f) => Ok(Value::String(f.to_string().into())),
+                        Value::Boolean(b) => Ok(Value::String(b.to_string().into())),
                         _ => Ok(Value::Null),
                     },
                     "boolean" => match value {
@@ -97,7 +97,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                     num = (num as u32 / radix) as i32;
                 }
                 if *n < 0 { result.push('-'); }
-                Ok(Value::String(result.chars().rev().collect()))
+                Ok(Value::String(result.chars().rev().collect::<String>().into()))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -129,10 +129,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::Int(n), Value::Int(places)) => {
-                Ok(Value::String(format!("{:.prec$}", *n as f64, prec = *places as usize)))
+                Ok(Value::String(format!("{:.prec$}", *n as f64, prec = *places as usize).into()))
             }
             (Value::Float(f), Value::Int(places)) => {
-                Ok(Value::String(format!("{:.prec$}", f.into_inner() as f64, prec = *places as usize)))
+                Ok(Value::String(format!("{:.prec$}", f.into_inner() as f64, prec = *places as usize).into()))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),

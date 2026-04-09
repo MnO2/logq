@@ -58,7 +58,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 };
                 match re.captures(s) {
                     Some(caps) => match caps.get(group_index) {
-                        Some(m) => Ok(Value::String(m.as_str().to_string())),
+                        Some(m) => Ok(Value::String(m.as_str().into())),
                         None => Ok(Value::Null),
                     },
                     None => Ok(Value::Null),
@@ -77,7 +77,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             (Value::String(s), Value::String(pattern)) => {
                 let re = get_or_compile_regex(pattern)?;
                 let matches: Vec<Value> = re.find_iter(s)
-                    .map(|m| Value::String(m.as_str().to_string()))
+                    .map(|m| Value::String(m.as_str().into()))
                     .collect();
                 Ok(Value::Array(matches))
             }
@@ -93,7 +93,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1], &args[2]) {
             (Value::String(s), Value::String(pattern), Value::String(replacement)) => {
                 let re = get_or_compile_regex(pattern)?;
-                Ok(Value::String(re.replace_all(s, replacement.as_str()).to_string()))
+                Ok(Value::String(re.replace_all(s, replacement.as_str()).into_owned().into()))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -108,7 +108,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             (Value::String(s), Value::String(pattern)) => {
                 let re = get_or_compile_regex(pattern)?;
                 let parts: Vec<Value> = re.split(s)
-                    .map(|p| Value::String(p.to_string()))
+                    .map(|p| Value::String(p.into()))
                     .collect();
                 Ok(Value::Array(parts))
             }

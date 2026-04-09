@@ -6,6 +6,36 @@ use crate::simd::selection::SelectionVector;
 use crate::common::types::Value;
 use hashbrown::HashMap;
 
+/// Fast i32 parsing from ASCII bytes without UTF-8 validation or allocator.
+#[inline]
+fn parse_i32_fast(bytes: &[u8]) -> Option<i32> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let (neg, start) = if bytes[0] == b'-' {
+        (true, 1)
+    } else {
+        (false, 0)
+    };
+    if start >= bytes.len() {
+        return None;
+    }
+    let mut n: i32 = 0;
+    for &b in &bytes[start..] {
+        if b < b'0' || b > b'9' {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add((b - b'0') as i32)?;
+    }
+    Some(if neg { -n } else { n })
+}
+
+/// Fast f32 parsing using the fast-float crate.
+#[inline]
+fn parse_f32_fast(bytes: &[u8]) -> Option<f32> {
+    fast_float::parse::<f32, &[u8]>(bytes).ok()
+}
+
 /// Parse a single field column from all rows in the batch.
 pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
     lines: &[L],
@@ -44,10 +74,10 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
-                    match s.parse::<i32>() {
-                        Ok(v) => data.push(v),
-                        Err(_) => { data.push(0); null_bm.unset(row); }
+                    let bytes = &lines[row].as_ref()[start..end];
+                    match parse_i32_fast(bytes) {
+                        Some(v) => data.push(v),
+                        None => { data.push(0); null_bm.unset(row); }
                     }
                 } else {
                     data.push(0);
@@ -67,10 +97,10 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             for row in 0..len {
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
-                    match s.parse::<f32>() {
-                        Ok(v) => data.push(v),
-                        Err(_) => { data.push(0.0); null_bm.unset(row); }
+                    let bytes = &lines[row].as_ref()[start..end];
+                    match parse_f32_fast(bytes) {
+                        Some(v) => data.push(v),
+                        None => { data.push(0.0); null_bm.unset(row); }
                     }
                 } else {
                     data.push(0.0);
@@ -191,10 +221,10 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
-                    match s.parse::<i32>() {
-                        Ok(v) => data.push(v),
-                        Err(_) => { data.push(0); null_bm.unset(row); }
+                    let bytes = &lines[row].as_ref()[start..end];
+                    match parse_i32_fast(bytes) {
+                        Some(v) => data.push(v),
+                        None => { data.push(0); null_bm.unset(row); }
                     }
                 } else {
                     data.push(0);
@@ -219,10 +249,10 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                 }
                 if field_idx < fields[row].len() {
                     let (start, end) = fields[row][field_idx];
-                    let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("0");
-                    match s.parse::<f32>() {
-                        Ok(v) => data.push(v),
-                        Err(_) => { data.push(0.0); null_bm.unset(row); }
+                    let bytes = &lines[row].as_ref()[start..end];
+                    match parse_f32_fast(bytes) {
+                        Some(v) => data.push(v),
+                        None => { data.push(0.0); null_bm.unset(row); }
                     }
                 } else {
                     data.push(0.0);

@@ -181,7 +181,7 @@ fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
         ast::Value::Boolean(b) => Ok(Box::new(types::Expression::Constant(common::Value::Boolean(*b)))),
         ast::Value::Float(f) => Ok(Box::new(types::Expression::Constant(common::Value::Float(*f)))),
         ast::Value::Integral(i) => Ok(Box::new(types::Expression::Constant(common::Value::Int(*i)))),
-        ast::Value::StringLiteral(s) => Ok(Box::new(types::Expression::Constant(common::Value::String(s.clone())))),
+        ast::Value::StringLiteral(s) => Ok(Box::new(types::Expression::Constant(common::Value::String(s.clone().into())))),
         ast::Value::Null => Ok(Box::new(types::Expression::Constant(common::Value::Null))),
         ast::Value::Missing => Ok(Box::new(types::Expression::Constant(common::Value::Missing))),
     }

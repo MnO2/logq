@@ -24,7 +24,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.to_uppercase())),
+            Value::String(s) => Ok(Value::String(s.to_uppercase().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -35,7 +35,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.to_lowercase())),
+            Value::String(s) => Ok(Value::String(s.to_lowercase().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -80,10 +80,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         _ => return Err(ExpressionError::InvalidArguments),
                     };
                     let result: String = s.chars().skip(start).take(len).collect();
-                    Ok(Value::String(result))
+                    Ok(Value::String(result.into()))
                 } else {
                     let result: String = s.chars().skip(start).collect();
-                    Ok(Value::String(result))
+                    Ok(Value::String(result.into()))
                 }
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -96,7 +96,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.trim().to_string())),
+            Value::String(s) => Ok(Value::String(s.trim().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -108,7 +108,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1], &args[2]) {
             (Value::String(s), Value::String(search), Value::String(replacement)) => {
-                Ok(Value::String(s.replace(search.as_str(), replacement.as_str())))
+                Ok(Value::String(s.replace(search.as_str(), replacement.as_str()).into()))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -120,7 +120,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.chars().rev().collect())),
+            Value::String(s) => Ok(Value::String(s.chars().rev().collect::<String>().into())),
             Value::Array(a) => {
                 let mut reversed = a.clone();
                 reversed.reverse();
@@ -138,7 +138,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::Int(n)) => {
                 let count = (*n).max(0) as usize;
-                Ok(Value::String(s.repeat(count)))
+                Ok(Value::String(s.repeat(count).into()))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -157,7 +157,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 };
                 let pad = if args.len() == 3 {
                     match &args[2] {
-                        Value::String(p) => p.clone(),
+                        Value::String(p) => p.to_string(),
                         _ => return Err(ExpressionError::InvalidArguments),
                     }
                 } else {
@@ -166,7 +166,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 let char_len = s.chars().count();
                 if char_len >= size {
                     // Truncate to size
-                    Ok(Value::String(s.chars().take(size).collect()))
+                    Ok(Value::String(s.chars().take(size).collect::<String>().into()))
                 } else {
                     let needed = size - char_len;
                     let pad_chars: Vec<char> = pad.chars().collect();
@@ -178,7 +178,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         prefix.push(pad_chars[i % pad_chars.len()]);
                     }
                     prefix.push_str(s);
-                    Ok(Value::String(prefix))
+                    Ok(Value::String(prefix.into()))
                 }
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -198,7 +198,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 };
                 let pad = if args.len() == 3 {
                     match &args[2] {
-                        Value::String(p) => p.clone(),
+                        Value::String(p) => p.to_string(),
                         _ => return Err(ExpressionError::InvalidArguments),
                     }
                 } else {
@@ -206,18 +206,18 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 };
                 let char_len = s.chars().count();
                 if char_len >= size {
-                    Ok(Value::String(s.chars().take(size).collect()))
+                    Ok(Value::String(s.chars().take(size).collect::<String>().into()))
                 } else {
                     let needed = size - char_len;
                     let pad_chars: Vec<char> = pad.chars().collect();
                     if pad_chars.is_empty() {
                         return Ok(Value::String(s.clone()));
                     }
-                    let mut result = s.clone();
+                    let mut result = s.to_string();
                     for i in 0..needed {
                         result.push(pad_chars[i % pad_chars.len()]);
                     }
-                    Ok(Value::String(result))
+                    Ok(Value::String(result.into()))
                 }
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -230,7 +230,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.trim_start().to_string())),
+            Value::String(s) => Ok(Value::String(s.trim_start().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -241,7 +241,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.trim_end().to_string())),
+            Value::String(s) => Ok(Value::String(s.trim_end().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -319,7 +319,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::String(delim)) => {
                 let parts: Vec<Value> = s.split(delim.as_str())
-                    .map(|part| Value::String(part.to_string()))
+                    .map(|part| Value::String(part.into()))
                     .collect();
                 Ok(Value::Array(parts))
             }
@@ -337,9 +337,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 let parts: Vec<&str> = s.split(delim.as_str()).collect();
                 let index = (*idx - 1) as usize; // 1-based to 0-based
                 if index < parts.len() {
-                    Ok(Value::String(parts[index].to_string()))
+                    Ok(Value::String(parts[index].into()))
                 } else {
-                    Ok(Value::String(String::new()))
+                    Ok(Value::String("".into()))
                 }
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -363,15 +363,15 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 Value::Null => return Ok(Value::Null),
                 _ => return Err(ExpressionError::InvalidArguments),
             };
-            let mut parts: Vec<String> = Vec::new();
+            let mut parts: Vec<&str> = Vec::new();
             for arg in &args[1..] {
                 match arg {
-                    Value::String(s) => parts.push(s.clone()),
+                    Value::String(s) => parts.push(s),
                     Value::Null | Value::Missing => continue, // skip nulls/missing
                     _ => return Err(ExpressionError::InvalidArguments),
                 }
             }
-            Ok(Value::String(parts.join(&sep)))
+            Ok(Value::String(parts.join(&*sep).into()))
         }),
     })?;
 
@@ -383,7 +383,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::Int(cp) => {
                 match char::from_u32(*cp as u32) {
-                    Some(c) => Ok(Value::String(c.to_string())),
+                    Some(c) => Ok(Value::String(c.to_string().into())),
                     None => Err(ExpressionError::InvalidArguments),
                 }
             }
@@ -477,33 +477,33 @@ mod tests {
     #[test]
     fn test_upper() {
         let r = make_registry();
-        assert_eq!(r.call("upper", &[Value::String("hello".to_string())]), Ok(Value::String("HELLO".to_string())));
+        assert_eq!(r.call("upper", &[Value::String("hello".to_string().into())]), Ok(Value::String("HELLO".to_string().into())));
     }
 
     #[test]
     fn test_lower() {
         let r = make_registry();
-        assert_eq!(r.call("lower", &[Value::String("HELLO".to_string())]), Ok(Value::String("hello".to_string())));
+        assert_eq!(r.call("lower", &[Value::String("HELLO".to_string().into())]), Ok(Value::String("hello".to_string().into())));
     }
 
     #[test]
     fn test_char_length() {
         let r = make_registry();
-        assert_eq!(r.call("char_length", &[Value::String("hello".to_string())]), Ok(Value::Int(5)));
+        assert_eq!(r.call("char_length", &[Value::String("hello".to_string().into())]), Ok(Value::Int(5)));
     }
 
     #[test]
     fn test_character_length_alias() {
         let r = make_registry();
-        assert_eq!(r.call("character_length", &[Value::String("hello".to_string())]), Ok(Value::Int(5)));
+        assert_eq!(r.call("character_length", &[Value::String("hello".to_string().into())]), Ok(Value::Int(5)));
     }
 
     #[test]
     fn test_substring_two_args() {
         let r = make_registry();
         assert_eq!(
-            r.call("substring", &[Value::String("hello".to_string()), Value::Int(2)]),
-            Ok(Value::String("ello".to_string()))
+            r.call("substring", &[Value::String("hello".to_string().into()), Value::Int(2)]),
+            Ok(Value::String("ello".to_string().into()))
         );
     }
 
@@ -511,23 +511,23 @@ mod tests {
     fn test_substring_three_args() {
         let r = make_registry();
         assert_eq!(
-            r.call("substring", &[Value::String("hello".to_string()), Value::Int(2), Value::Int(3)]),
-            Ok(Value::String("ell".to_string()))
+            r.call("substring", &[Value::String("hello".to_string().into()), Value::Int(2), Value::Int(3)]),
+            Ok(Value::String("ell".to_string().into()))
         );
     }
 
     #[test]
     fn test_trim() {
         let r = make_registry();
-        assert_eq!(r.call("trim", &[Value::String("  hello  ".to_string())]), Ok(Value::String("hello".to_string())));
+        assert_eq!(r.call("trim", &[Value::String("  hello  ".to_string().into())]), Ok(Value::String("hello".to_string().into())));
     }
 
     #[test]
     fn test_concat_operator() {
         let r = make_registry();
         assert_eq!(
-            r.call("Concat", &[Value::String("hello".to_string()), Value::String(" world".to_string())]),
-            Ok(Value::String("hello world".to_string()))
+            r.call("Concat", &[Value::String("hello".to_string().into()), Value::String(" world".to_string().into())]),
+            Ok(Value::String("hello world".to_string().into()))
         );
     }
 
@@ -535,8 +535,8 @@ mod tests {
     fn test_concat_null_propagation_behavioral_change() {
         let r = make_registry();
         // BEHAVIORAL CHANGE: Missing > Null precedence (previously Null > Missing for Concat)
-        assert_eq!(r.call("Concat", &[Value::Missing, Value::String("x".to_string())]), Ok(Value::Missing));
-        assert_eq!(r.call("Concat", &[Value::Null, Value::String("x".to_string())]), Ok(Value::Null));
+        assert_eq!(r.call("Concat", &[Value::Missing, Value::String("x".to_string().into())]), Ok(Value::Missing));
+        assert_eq!(r.call("Concat", &[Value::Null, Value::String("x".to_string().into())]), Ok(Value::Null));
         assert_eq!(r.call("Concat", &[Value::Null, Value::Missing]), Ok(Value::Missing));
     }
 

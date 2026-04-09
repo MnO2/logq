@@ -2,6 +2,7 @@ use crate::common;
 use crate::functions::FunctionRegistry;
 use crate::syntax::ast;
 use chrono;
+use compact_str::CompactString;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ pub enum Value {
     Int(i32),
     Float(OrderedFloat<f32>),
     Boolean(bool),
-    String(String),
+    String(CompactString),
     Null,
     DateTime(chrono::DateTime<chrono::offset::FixedOffset>),
     HttpRequest(Box<common::types::HttpRequest>),

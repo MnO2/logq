@@ -88,7 +88,7 @@ impl BatchStreamingGroupByOperator {
         interval: &str,
         registry: &Arc<FunctionRegistry>,
     ) -> Result<Value, StreamError> {
-        let args = vec![Value::String(interval.to_string()), ts_val.clone()];
+        let args = vec![Value::String(interval.into()), ts_val.clone()];
         registry
             .call("time_bucket", &args)
             .map_err(StreamError::Expression)
@@ -402,10 +402,10 @@ mod tests {
         );
 
         op.completed_keys
-            .push(Value::String("bucket_a".to_string()));
+            .push(Value::String("bucket_a".to_string().into()));
         op.completed_values.push(vec![Value::Int(10)]);
         op.completed_keys
-            .push(Value::String("bucket_b".to_string()));
+            .push(Value::String("bucket_b".to_string().into()));
         op.completed_values.push(vec![Value::Int(20)]);
 
         let batch = op.emit_output_batch().unwrap();
@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(batch.names[1], "cnt");
 
         let k0 = BatchToRowAdapter::extract_value(&batch.columns[0], 0);
-        assert_eq!(k0, Value::String("bucket_a".to_string()));
+        assert_eq!(k0, Value::String("bucket_a".to_string().into()));
         let v0 = BatchToRowAdapter::extract_value(&batch.columns[1], 0);
         assert_eq!(v0, Value::Int(10));
     }

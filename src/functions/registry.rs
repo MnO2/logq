@@ -208,14 +208,14 @@ mod tests {
             arity: Arity::Exact(1),
             null_handling: NullHandling::Custom,
             func: Box::new(|args| match &args[0] {
-                Value::Null => Ok(Value::String("was_null".to_string())),
+                Value::Null => Ok(Value::String("was_null".to_string().into())),
                 other => Ok(other.clone()),
             }),
         }).unwrap();
 
         assert_eq!(
             registry.call("custom", &[Value::Null]),
-            Ok(Value::String("was_null".to_string()))
+            Ok(Value::String("was_null".to_string().into()))
         );
     }
 

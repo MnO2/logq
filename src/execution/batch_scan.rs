@@ -11,7 +11,22 @@ use crate::execution::log_schema::LogSchema;
 use crate::execution::datasource::DataType;
 use crate::execution::types::{Formula, StreamResult};
 use crate::functions::FunctionRegistry;
+use crate::simd::bitmap::Bitmap;
+use crate::simd::padded_vec::PaddedVecBuilder;
 use crate::simd::selection::SelectionVector;
+
+/// Scan-time aggregation mode. When set, the scan operator accumulates
+/// aggregates directly during scanning without constructing full column batches,
+/// then emits a single-row result batch at the end.
+#[derive(Debug, Clone)]
+pub(crate) enum ScanAggregation {
+    /// COUNT(*) — count all rows passing the filter.
+    CountStar,
+    /// COUNT(column) — count non-null/non-missing values in the given field index.
+    CountColumn(usize),
+    /// SUM(column) — sum values in an integer/float field.
+    SumColumn(usize),
+}
 
 /// Arena-style storage for batch lines. Stores all line bytes in a single
 /// contiguous buffer with a spans index, avoiding per-line heap allocation.
@@ -69,6 +84,9 @@ pub(crate) struct BatchScanOperator {
     buf: String,
     offsets_scratch: Vec<(usize, usize)>,
     arena: BatchLineArena,
+    /// Optional scan-time aggregation. When set, the operator accumulates
+    /// the aggregate during scanning and emits a single-row result.
+    scan_aggregation: Option<ScanAggregation>,
 }
 
 impl BatchScanOperator {
@@ -98,7 +116,14 @@ impl BatchScanOperator {
             buf: String::with_capacity(512),
             offsets_scratch: Vec::with_capacity(30),
             arena: BatchLineArena::new(),
+            scan_aggregation: None,
         }
+    }
+
+    pub fn with_scan_aggregation(mut self, agg: ScanAggregation, output_schema: BatchSchema) -> Self {
+        self.scan_aggregation = Some(agg);
+        self.batch_schema = output_schema;
+        self
     }
 
     fn read_lines(&mut self) {
@@ -117,10 +142,171 @@ impl BatchScanOperator {
             }
         }
     }
+
+    /// Consume all input in aggregation mode, returning a single-row result batch.
+    /// This avoids constructing projected columns — only filter fields are parsed
+    /// (if a predicate is pushed), and the aggregate is accumulated directly.
+    fn next_batch_aggregated(&mut self, agg: ScanAggregation) -> StreamResult<Option<ColumnBatch>> {
+        if self.done {
+            return Ok(None);
+        }
+        // Clear aggregation mode so subsequent calls return None
+        self.scan_aggregation = None;
+
+        let mut count: i64 = 0;
+        let mut sum: f64 = 0.0;
+
+        loop {
+            self.read_lines();
+            if self.arena.len() == 0 {
+                break;
+            }
+
+            let lines = self.arena.to_slices();
+            let len = lines.len();
+
+            // Tokenize all lines
+            let mut line_fields: Vec<Vec<(usize, usize)>> = Vec::with_capacity(len);
+            for line in &lines {
+                tokenize_line_into(line, &mut self.offsets_scratch);
+                line_fields.push(self.offsets_scratch.clone());
+            }
+
+            if let Some((ref formula, ref variables, ref registry)) = self.pushed_predicate {
+                // Parse only filter fields for predicate evaluation
+                let mut filter_columns = Vec::with_capacity(self.filter_field_indices.len());
+                let mut filter_names = Vec::with_capacity(self.filter_field_indices.len());
+                for &field_idx in &self.filter_field_indices {
+                    let datatype = self.schema.field_type(field_idx);
+                    let col = parse_field_column(&lines, &line_fields, field_idx, &datatype);
+                    filter_columns.push(col);
+                    filter_names.push(self.schema.field_name(field_idx).to_string());
+                }
+
+                let filter_batch = ColumnBatch {
+                    columns: filter_columns,
+                    names: filter_names,
+                    selection: SelectionVector::All,
+                    len,
+                };
+
+                let bitmap = evaluate_batch_predicate(formula, &filter_batch, variables, registry)?;
+
+                match &agg {
+                    ScanAggregation::CountStar => {
+                        count += bitmap.count_ones() as i64;
+                    }
+                    ScanAggregation::CountColumn(field_idx) => {
+                        // Parse the target column to check for nulls/missing
+                        let datatype = self.schema.field_type(*field_idx);
+                        let col = parse_field_column(&lines, &line_fields, *field_idx, &datatype);
+                        let valid = col.validity_bitmap(len);
+                        let active = bitmap.and(&valid);
+                        count += active.count_ones() as i64;
+                    }
+                    ScanAggregation::SumColumn(field_idx) => {
+                        let datatype = self.schema.field_type(*field_idx);
+                        let col = parse_field_column(&lines, &line_fields, *field_idx, &datatype);
+                        // Sum active, valid values
+                        match &col {
+                            TypedColumn::Int32 { data, null, missing, .. } => {
+                                for i in 0..len {
+                                    if bitmap.is_set(i) && null.is_set(i) && missing.is_set(i) {
+                                        sum += data[i] as f64;
+                                    }
+                                }
+                            }
+                            TypedColumn::Float32 { data, null, missing, .. } => {
+                                for i in 0..len {
+                                    if bitmap.is_set(i) && null.is_set(i) && missing.is_set(i) {
+                                        sum += data[i] as f64;
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Non-numeric column — sum is 0
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No predicate — all rows active
+                match &agg {
+                    ScanAggregation::CountStar => {
+                        count += len as i64;
+                    }
+                    ScanAggregation::CountColumn(field_idx) => {
+                        let datatype = self.schema.field_type(*field_idx);
+                        let col = parse_field_column(&lines, &line_fields, *field_idx, &datatype);
+                        let valid = col.validity_bitmap(len);
+                        count += valid.count_ones() as i64;
+                    }
+                    ScanAggregation::SumColumn(field_idx) => {
+                        let datatype = self.schema.field_type(*field_idx);
+                        let col = parse_field_column(&lines, &line_fields, *field_idx, &datatype);
+                        match &col {
+                            TypedColumn::Int32 { data, null, missing, .. } => {
+                                for i in 0..len {
+                                    if null.is_set(i) && missing.is_set(i) {
+                                        sum += data[i] as f64;
+                                    }
+                                }
+                            }
+                            TypedColumn::Float32 { data, null, missing, .. } => {
+                                for i in 0..len {
+                                    if null.is_set(i) && missing.is_set(i) {
+                                        sum += data[i] as f64;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build single-row result batch
+        match agg {
+            ScanAggregation::CountStar | ScanAggregation::CountColumn(_) => {
+                let mut builder = PaddedVecBuilder::<i32>::with_capacity(1);
+                builder.push(count as i32);
+                let data = builder.seal();
+                let null_bm = Bitmap::all_set(1);
+                let missing_bm = Bitmap::all_set(1);
+                let col = TypedColumn::Int32 { data, null: null_bm, missing: missing_bm };
+                Ok(Some(ColumnBatch {
+                    columns: vec![col],
+                    names: self.batch_schema.names.clone(),
+                    selection: SelectionVector::All,
+                    len: 1,
+                }))
+            }
+            ScanAggregation::SumColumn(_) => {
+                let mut builder = PaddedVecBuilder::<f32>::with_capacity(1);
+                builder.push(sum as f32);
+                let data = builder.seal();
+                let null_bm = Bitmap::all_set(1);
+                let missing_bm = Bitmap::all_set(1);
+                let col = TypedColumn::Float32 { data, null: null_bm, missing: missing_bm };
+                Ok(Some(ColumnBatch {
+                    columns: vec![col],
+                    names: self.batch_schema.names.clone(),
+                    selection: SelectionVector::All,
+                    len: 1,
+                }))
+            }
+        }
+    }
 }
 
 impl BatchStream for BatchScanOperator {
     fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        // Scan-time aggregation: consume all input, return single-row result
+        if let Some(ref agg) = self.scan_aggregation {
+            return self.next_batch_aggregated(agg.clone());
+        }
+
         loop {
             if self.done {
                 return Ok(None);
@@ -350,7 +536,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("method".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("GET".to_string()))),
+            Box::new(Expression::Constant(Value::String("GET".to_string().into()))),
         );
 
         let mut scan = BatchScanOperator::new(
@@ -391,7 +577,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("method".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("GET".to_string()))),
+            Box::new(Expression::Constant(Value::String("GET".to_string().into()))),
         );
 
         let mut scan = BatchScanOperator::new(
@@ -427,5 +613,128 @@ mod tests {
         arena.push_line(b"reused line");
         assert_eq!(arena.len(), 1);
         assert_eq!(arena.get_line(0), b"reused line");
+    }
+
+    #[test]
+    fn test_scan_aggregation_count_star_no_predicate() {
+        // 3 lines, no predicate => COUNT(*) = 3
+        let data = b"ts1 1 host1 status1 100 GET url1 rfc1 peer1 type1\n\
+                      ts2 2 host2 status2 200 POST url2 rfc2 peer2 type2\n\
+                      ts3 3 host3 status3 300 GET url3 rfc3 peer3 type3\n";
+        let reader: Box<dyn BufRead> = Box::new(Cursor::new(data.to_vec()));
+        let schema = LogSchema::from_format("squid");
+        let projected = vec![0];
+        let output_schema = BatchSchema {
+            names: vec!["_count".to_string()],
+            types: vec![crate::execution::batch::ColumnType::Int32],
+        };
+        let mut scan = BatchScanOperator::new(reader, schema, projected, vec![], None)
+            .with_scan_aggregation(ScanAggregation::CountStar, output_schema);
+
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert_eq!(batch.len, 1);
+        assert_eq!(batch.columns.len(), 1);
+        // Extract the count value
+        match &batch.columns[0] {
+            TypedColumn::Int32 { data, .. } => assert_eq!(data[0], 3),
+            _ => panic!("expected Int32 column"),
+        }
+        // Second call should return None
+        assert!(scan.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_scan_aggregation_count_star_with_predicate() {
+        // 3 lines, filter method == "GET" => COUNT(*) = 2
+        let data = b"ts1 1 host1 status1 100 GET url1 rfc1 peer1 type1\n\
+                      ts2 2 host2 status2 200 POST url2 rfc2 peer2 type2\n\
+                      ts3 3 host3 status3 300 GET url3 rfc3 peer3 type3\n";
+        let reader: Box<dyn BufRead> = Box::new(Cursor::new(data.to_vec()));
+        let schema = LogSchema::from_format("squid");
+        let projected = vec![5]; // method field
+        let filter_fields = vec![5];
+
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let formula = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Variable(PathExpr::new(vec![
+                PathSegment::AttrName("method".to_string()),
+            ]))),
+            Box::new(Expression::Constant(Value::String("GET".to_string().into()))),
+        );
+
+        let output_schema = BatchSchema {
+            names: vec!["_count".to_string()],
+            types: vec![crate::execution::batch::ColumnType::Int32],
+        };
+        let mut scan = BatchScanOperator::new(
+            reader, schema, projected, filter_fields,
+            Some((formula, Variables::new(), registry)),
+        ).with_scan_aggregation(ScanAggregation::CountStar, output_schema);
+
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert_eq!(batch.len, 1);
+        match &batch.columns[0] {
+            TypedColumn::Int32 { data, .. } => assert_eq!(data[0], 2),
+            _ => panic!("expected Int32 column"),
+        }
+    }
+
+    #[test]
+    fn test_scan_aggregation_count_star_all_filtered() {
+        // All rows have POST, filter for GET => COUNT(*) = 0
+        let data = b"ts1 1 host1 status1 100 POST url1 rfc1 peer1 type1\n\
+                      ts2 2 host2 status2 200 POST url2 rfc2 peer2 type2\n";
+        let reader: Box<dyn BufRead> = Box::new(Cursor::new(data.to_vec()));
+        let schema = LogSchema::from_format("squid");
+        let projected = vec![5];
+        let filter_fields = vec![5];
+
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let formula = Formula::Predicate(
+            Relation::Equal,
+            Box::new(Expression::Variable(PathExpr::new(vec![
+                PathSegment::AttrName("method".to_string()),
+            ]))),
+            Box::new(Expression::Constant(Value::String("GET".to_string().into()))),
+        );
+
+        let output_schema = BatchSchema {
+            names: vec!["_count".to_string()],
+            types: vec![crate::execution::batch::ColumnType::Int32],
+        };
+        let mut scan = BatchScanOperator::new(
+            reader, schema, projected, filter_fields,
+            Some((formula, Variables::new(), registry)),
+        ).with_scan_aggregation(ScanAggregation::CountStar, output_schema);
+
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert_eq!(batch.len, 1);
+        match &batch.columns[0] {
+            TypedColumn::Int32 { data, .. } => assert_eq!(data[0], 0),
+            _ => panic!("expected Int32 column"),
+        }
+    }
+
+    #[test]
+    fn test_scan_aggregation_empty_input() {
+        let data = b"";
+        let reader: Box<dyn BufRead> = Box::new(Cursor::new(data.to_vec()));
+        let schema = LogSchema::from_format("squid");
+        let projected = vec![0];
+        let output_schema = BatchSchema {
+            names: vec!["_count".to_string()],
+            types: vec![crate::execution::batch::ColumnType::Int32],
+        };
+        let mut scan = BatchScanOperator::new(reader, schema, projected, vec![], None)
+            .with_scan_aggregation(ScanAggregation::CountStar, output_schema);
+
+        // Empty input should still return a result batch with count=0
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert_eq!(batch.len, 1);
+        match &batch.columns[0] {
+            TypedColumn::Int32 { data, .. } => assert_eq!(data[0], 0),
+            _ => panic!("expected Int32 column"),
+        }
     }
 }

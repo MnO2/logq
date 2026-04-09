@@ -10,7 +10,7 @@ fn value_to_sort_string(v: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Boolean(b) => b.to_string(),
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         Value::Null => "null".to_string(),
         Value::Missing => "missing".to_string(),
         Value::DateTime(dt) => dt.to_string(),
@@ -138,7 +138,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 match &args[2] {
                     Value::Missing => return Ok(Value::Missing),
                     Value::Null => return Ok(Value::Null),
-                    Value::String(s) => Some(s.clone()),
+                    Value::String(s) => Some(s.to_string()),
                     _ => return Err(ExpressionError::InvalidArguments),
                 }
             } else {
@@ -151,7 +151,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                     Value::Null | Value::Missing => {
                         null_replacement.clone()
                     }
-                    Value::String(s) => Some(s.clone()),
+                    Value::String(s) => Some(s.to_string()),
                     Value::Int(i) => Some(i.to_string()),
                     Value::Float(f) => Some(f.to_string()),
                     Value::Boolean(b) => Some(b.to_string()),
@@ -159,7 +159,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 })
                 .collect();
 
-            Ok(Value::String(parts.join(delimiter)))
+            Ok(Value::String(parts.join(&*delimiter).into()))
         }),
     })?;
 
@@ -418,7 +418,7 @@ mod tests {
     }
 
     fn str_array(vals: &[&str]) -> Value {
-        Value::Array(vals.iter().map(|v| Value::String(v.to_string())).collect())
+        Value::Array(vals.iter().map(|v| Value::String((*v).into())).collect())
     }
 
     #[test]

@@ -446,7 +446,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     fn key(s: &str) -> Option<Tuple> {
-        Some(vec![Value::String(s.to_string())])
+        Some(vec![Value::String(s.to_string().into())])
     }
 
     #[test]
@@ -545,7 +545,7 @@ mod tests {
 
     fn make_record(name: &str) -> Variables {
         let mut vars = Variables::new();
-        vars.insert("name".to_string(), Value::String(name.to_string()));
+        vars.insert("name".to_string(), Value::String(name.to_string().into()));
         vars
     }
 

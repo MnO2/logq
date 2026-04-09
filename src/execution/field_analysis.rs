@@ -231,7 +231,7 @@ mod tests {
 
     /// Helper: build a string constant.
     fn str_const(s: &str) -> Expression {
-        Expression::Constant(Value::String(s.to_string()))
+        Expression::Constant(Value::String(s.to_string().into()))
     }
 
     fn elb_schema() -> LogSchema {

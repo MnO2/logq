@@ -52,6 +52,14 @@ impl Bitmap {
         Bitmap { words }
     }
 
+    /// In-place AND: mutates self to be self & other, avoiding allocation.
+    pub fn and_inplace(&mut self, other: &Bitmap) {
+        debug_assert_eq!(self.words.len(), other.words.len());
+        for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
+            *a &= *b;
+        }
+    }
+
     pub fn or(&self, other: &Bitmap) -> Bitmap {
         debug_assert_eq!(self.words.len(), other.words.len());
         let words = self.words.iter().zip(other.words.iter())

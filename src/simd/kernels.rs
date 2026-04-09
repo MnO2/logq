@@ -107,16 +107,17 @@ pub fn str_eq_batch(
     }
 }
 
-// --- String contains (scalar fallback) ---
+// --- String contains (SIMD-accelerated via memchr) ---
 
 pub fn str_contains_scalar(
     haystack: &[u8], offsets: &[u32], needle: &[u8], result: &mut [u8],
 ) {
+    let finder = memchr::memmem::Finder::new(needle);
     for i in 0..offsets.len() - 1 {
         let start = offsets[i] as usize;
         let end = offsets[i + 1] as usize;
         let hay = &haystack[start..end];
-        result[i] = hay.windows(needle.len()).any(|w| w == needle) as u8;
+        result[i] = finder.find(hay).is_some() as u8;
     }
 }
 

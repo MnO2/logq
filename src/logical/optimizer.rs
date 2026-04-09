@@ -97,7 +97,7 @@ mod tests {
     }
 
     fn str_const(v: &str) -> Box<Expression> {
-        Box::new(Expression::Constant(Value::String(v.to_string())))
+        Box::new(Expression::Constant(Value::String(v.to_string().into())))
     }
 
     #[test]

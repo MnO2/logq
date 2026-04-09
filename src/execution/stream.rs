@@ -184,7 +184,7 @@ impl std::hash::Hash for JoinKey {
 pub(crate) fn extract_key(record: &Record, key_fields: &[ast::PathExpr]) -> JoinKey {
     if key_fields.len() == 1 {
         match record.get(&key_fields[0]) {
-            Value::String(s) => JoinKey::SingleString(s),
+            Value::String(s) => JoinKey::SingleString(s.to_string()),
             Value::Int(i) => JoinKey::SingleInt(i),
             other => JoinKey::Composite(vec![other]),
         }
@@ -1363,20 +1363,20 @@ mod tests {
     #[test]
     fn test_limit_stream() {
         let mut variables: Variables = Variables::default();
-        variables.insert("const".to_string(), Value::String("example.com".to_string()));
+        variables.insert("const".to_string(), Value::String("example.com".to_string().into()));
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8001)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8002)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
@@ -1389,7 +1389,7 @@ mod tests {
 
         let expected = vec![Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         )];
 
         assert_eq!(expected, result);
@@ -1406,20 +1406,20 @@ mod tests {
         let predicate = types::Formula::Predicate(rel, left, right);
 
         let mut variables: Variables = Variables::default();
-        variables.insert("const".to_string(), Value::String("example.com".to_string()));
+        variables.insert("const".to_string(), Value::String("example.com".to_string().into()));
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8001)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8002)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
@@ -1433,7 +1433,7 @@ mod tests {
 
         let expected = vec![Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8001)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         )];
 
         assert_eq!(expected, result);
@@ -1444,20 +1444,20 @@ mod tests {
         let named_list = vec![Named::Star];
 
         let mut variables: Variables = Variables::default();
-        variables.insert("const".to_string(), Value::String("example.com".to_string()));
+        variables.insert("const".to_string(), Value::String("example.com".to_string().into()));
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8001)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8002)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
@@ -1472,15 +1472,15 @@ mod tests {
         let expected = vec![
             Record::new(
                 &vec!["host".to_string(), "port".to_string()],
-                vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+                vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
             ),
             Record::new(
                 &vec!["host".to_string(), "port".to_string()],
-                vec![Value::String("example.com".to_string()), Value::Int(8001)],
+                vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
             ),
             Record::new(
                 &vec!["host".to_string(), "port".to_string()],
-                vec![Value::String("example01.com".to_string()), Value::Int(8002)],
+                vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
             ),
         ];
 
@@ -1496,20 +1496,20 @@ mod tests {
         )];
 
         let mut variables: Variables = Variables::default();
-        variables.insert("const".to_string(), Value::String("example.com".to_string()));
+        variables.insert("const".to_string(), Value::String("example.com".to_string().into()));
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8001)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example01.com".to_string()), Value::Int(8002)],
+            vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
@@ -1535,19 +1535,19 @@ mod tests {
         let mut records = VecDeque::new();
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("other.com".to_string()), Value::Int(8001)],
+            vec![Value::String("other.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
             &vec!["host".to_string(), "port".to_string()],
-            vec![Value::String("example.com".to_string()), Value::Int(8000)],
+            vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
@@ -1561,11 +1561,11 @@ mod tests {
         let expected = vec![
             Record::new(
                 &vec!["host".to_string(), "port".to_string()],
-                vec![Value::String("example.com".to_string()), Value::Int(8000)],
+                vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
             ),
             Record::new(
                 &vec!["host".to_string(), "port".to_string()],
-                vec![Value::String("other.com".to_string()), Value::Int(8001)],
+                vec![Value::String("other.com".to_string().into()), Value::Int(8001)],
             ),
         ];
 
@@ -1706,11 +1706,11 @@ mod tests {
     fn test_record_get_field_value() {
         let mut vars = Variables::default();
         vars.insert("status".to_string(), Value::Int(200));
-        vars.insert("host".to_string(), Value::String("example.com".to_string()));
+        vars.insert("host".to_string(), Value::String("example.com".to_string().into()));
         let record = Record::new_with_variables(vars);
 
         assert_eq!(record.get_field_value("status"), Some(&Value::Int(200)));
-        assert_eq!(record.get_field_value("host"), Some(&Value::String("example.com".to_string())));
+        assert_eq!(record.get_field_value("host"), Some(&Value::String("example.com".to_string().into())));
         assert_eq!(record.get_field_value("missing"), None);
     }
 
@@ -1793,7 +1793,7 @@ mod tests {
     #[test]
     fn test_extract_key_single_string() {
         let mut vars = Variables::default();
-        vars.insert("name".to_string(), Value::String("alice".to_string()));
+        vars.insert("name".to_string(), Value::String("alice".to_string().into()));
         let record = Record::new_with_variables(vars);
         let key = extract_key(&record, &[path("name")]);
         assert_eq!(key, JoinKey::SingleString("alice".to_string()));
@@ -1812,12 +1812,12 @@ mod tests {
     fn test_extract_key_multi_column() {
         let mut vars = Variables::default();
         vars.insert("a".to_string(), Value::Int(1));
-        vars.insert("b".to_string(), Value::String("x".to_string()));
+        vars.insert("b".to_string(), Value::String("x".to_string().into()));
         let record = Record::new_with_variables(vars);
         let key = extract_key(&record, &[path("a"), path("b")]);
         assert_eq!(
             key,
-            JoinKey::Composite(vec![Value::Int(1), Value::String("x".to_string())])
+            JoinKey::Composite(vec![Value::Int(1), Value::String("x".to_string().into())])
         );
     }
 

@@ -1,7 +1,9 @@
 pub mod batch;
+pub(crate) mod batch_distinct;
 pub mod batch_filter;
 pub mod batch_groupby;
 pub mod batch_limit;
+pub(crate) mod batch_orderby;
 pub mod batch_predicate;
 pub mod batch_project;
 pub mod batch_scan;

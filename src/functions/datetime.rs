@@ -382,7 +382,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.000000Z");
         assert_eq!(
-            r.call("date_part", &[Value::String("year".to_string()), dt]),
+            r.call("date_part", &[Value::String("year".to_string().into()), dt]),
             Ok(Value::Float(OrderedFloat(2015.0)))
         );
     }
@@ -392,7 +392,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.000000Z");
         assert_eq!(
-            r.call("date_part", &[Value::String("month".to_string()), dt]),
+            r.call("date_part", &[Value::String("month".to_string().into()), dt]),
             Ok(Value::Float(OrderedFloat(11.0)))
         );
     }
@@ -402,7 +402,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.000000Z");
         assert_eq!(
-            r.call("date_part", &[Value::String("day".to_string()), dt]),
+            r.call("date_part", &[Value::String("day".to_string().into()), dt]),
             Ok(Value::Float(OrderedFloat(7.0)))
         );
     }
@@ -412,7 +412,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.000000Z");
         assert_eq!(
-            r.call("date_part", &[Value::String("hour".to_string()), dt]),
+            r.call("date_part", &[Value::String("hour".to_string().into()), dt]),
             Ok(Value::Float(OrderedFloat(18.0)))
         );
     }
@@ -422,7 +422,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.000000Z");
         assert_eq!(
-            r.call("date_part", &[Value::String("minute".to_string()), dt]),
+            r.call("date_part", &[Value::String("minute".to_string().into()), dt]),
             Ok(Value::Float(OrderedFloat(45.0)))
         );
     }
@@ -432,7 +432,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.000000Z");
         assert_eq!(
-            r.call("date_part", &[Value::String("second".to_string()), dt]),
+            r.call("date_part", &[Value::String("second".to_string().into()), dt]),
             Ok(Value::Float(OrderedFloat(37.0)))
         );
     }
@@ -441,11 +441,11 @@ mod tests {
     fn test_date_part_null_propagation() {
         let r = make_registry();
         assert_eq!(
-            r.call("date_part", &[Value::String("year".to_string()), Value::Null]),
+            r.call("date_part", &[Value::String("year".to_string().into()), Value::Null]),
             Ok(Value::Null)
         );
         assert_eq!(
-            r.call("date_part", &[Value::String("year".to_string()), Value::Missing]),
+            r.call("date_part", &[Value::String("year".to_string().into()), Value::Missing]),
             Ok(Value::Missing)
         );
     }
@@ -456,7 +456,7 @@ mod tests {
         let dt = make_datetime("2015-11-07T18:45:37.691548Z");
         let expected = make_datetime("2015-11-07T18:45:00.000000Z");
         assert_eq!(
-            r.call("time_bucket", &[Value::String("5 minutes".to_string()), dt]),
+            r.call("time_bucket", &[Value::String("5 minutes".to_string().into()), dt]),
             Ok(expected)
         );
     }
@@ -467,7 +467,7 @@ mod tests {
         let dt = make_datetime("2015-11-07T18:45:37.691548Z");
         let expected = make_datetime("2015-11-07T18:45:30.000000Z");
         assert_eq!(
-            r.call("time_bucket", &[Value::String("15 seconds".to_string()), dt]),
+            r.call("time_bucket", &[Value::String("15 seconds".to_string().into()), dt]),
             Ok(expected)
         );
     }
@@ -478,7 +478,7 @@ mod tests {
         let dt = make_datetime("2015-11-07T18:45:37.691548Z");
         let expected = make_datetime("2015-11-07T18:00:00.000000Z");
         assert_eq!(
-            r.call("time_bucket", &[Value::String("2 hours".to_string()), dt]),
+            r.call("time_bucket", &[Value::String("2 hours".to_string().into()), dt]),
             Ok(expected)
         );
     }
@@ -488,7 +488,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.691548Z");
         assert_eq!(
-            r.call("time_bucket", &[Value::String("0 second".to_string()), dt]),
+            r.call("time_bucket", &[Value::String("0 second".to_string().into()), dt]),
             Err(ExpressionError::TimeIntervalZero)
         );
     }
@@ -498,7 +498,7 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2015-11-07T18:45:37.691548Z");
         assert_eq!(
-            r.call("time_bucket", &[Value::String("7 seconds".to_string()), dt]),
+            r.call("time_bucket", &[Value::String("7 seconds".to_string().into()), dt]),
             Err(ExpressionError::TimeIntervalNotSupported)
         );
     }
@@ -507,11 +507,11 @@ mod tests {
     fn test_time_bucket_null_propagation() {
         let r = make_registry();
         assert_eq!(
-            r.call("time_bucket", &[Value::String("5 minutes".to_string()), Value::Null]),
+            r.call("time_bucket", &[Value::String("5 minutes".to_string().into()), Value::Null]),
             Ok(Value::Null)
         );
         assert_eq!(
-            r.call("time_bucket", &[Value::String("5 minutes".to_string()), Value::Missing]),
+            r.call("time_bucket", &[Value::String("5 minutes".to_string().into()), Value::Missing]),
             Ok(Value::Missing)
         );
     }

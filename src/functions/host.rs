@@ -11,7 +11,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
-            Value::Host(h) => Ok(Value::String(h.hostname.clone())),
+            Value::Host(h) => Ok(Value::String(h.hostname.clone().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -54,7 +54,7 @@ mod tests {
     fn test_host_name() {
         let r = make_registry();
         let host = make_host("example.com", 8080);
-        assert_eq!(r.call("host_name", &[host]), Ok(Value::String("example.com".to_string())));
+        assert_eq!(r.call("host_name", &[host]), Ok(Value::String("example.com".to_string().into())));
     }
 
     #[test]

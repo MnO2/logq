@@ -10,7 +10,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
             Value::Object(map) => {
-                let keys: Vec<Value> = map.keys().map(|k| Value::String(k.clone())).collect();
+                let keys: Vec<Value> = map.keys().map(|k| Value::String(k.clone().into())).collect();
                 Ok(Value::Array(keys))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -40,7 +40,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Object(map) => {
                 let entries: Vec<Value> = map
                     .iter()
-                    .map(|(k, v)| Value::Array(vec![Value::String(k.clone()), v.clone()]))
+                    .map(|(k, v)| Value::Array(vec![Value::String(k.clone().into()), v.clone()]))
                     .collect();
                 Ok(Value::Array(entries))
             }
@@ -55,7 +55,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::Object(map), Value::String(key)) => {
-                Ok(map.get(key).cloned().unwrap_or(Value::Null))
+                Ok(map.get(key.as_str()).cloned().unwrap_or(Value::Null))
             }
             (Value::Array(arr), Value::Int(idx)) => {
                 let idx = (*idx - 1) as usize; // 1-based to 0-based
@@ -94,7 +94,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                     match entry {
                         Value::Array(pair) if pair.len() == 2 => match &pair[0] {
                             Value::String(key) => {
-                                map.insert(key.clone(), pair[1].clone());
+                                map.insert(key.to_string(), pair[1].clone());
                             }
                             _ => return Err(ExpressionError::InvalidArguments),
                         },

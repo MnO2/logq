@@ -112,7 +112,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("status".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("200".to_string()))),
+            Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());

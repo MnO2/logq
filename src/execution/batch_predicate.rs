@@ -9,6 +9,7 @@ use crate::simd::filter_cache::evaluate_cached_two_pass;
 use crate::simd::kernels;
 use crate::syntax::ast::{PathExpr, PathSegment};
 use std::sync::Arc;
+use regex::Regex;
 
 /// Evaluate a physical Formula against a ColumnBatch, returning a Bitmap
 /// of rows where the predicate is true.
@@ -30,13 +31,14 @@ pub(crate) fn evaluate_batch_predicate(
             evaluate_comparison(relation, left, right, batch, variables, registry)
         }
         Formula::And(left, right) => {
-            let left_bm = evaluate_batch_predicate(left, batch, variables, registry)?;
+            let mut left_bm = evaluate_batch_predicate(left, batch, variables, registry)?;
             // Short-circuit: if left eliminated all rows, skip right entirely
             if left_bm.count_ones() == 0 {
                 return Ok(left_bm);
             }
             let right_bm = evaluate_batch_predicate_masked(right, batch, variables, registry, Some(&left_bm))?;
-            Ok(left_bm.and(&right_bm))
+            left_bm.and_inplace(&right_bm);
+            Ok(left_bm)
         }
         Formula::Or(left, right) => {
             let left_bm = evaluate_batch_predicate(left, batch, variables, registry)?;
@@ -57,7 +59,15 @@ pub(crate) fn evaluate_batch_predicate(
             let bm = evaluate_is_missing(expr, batch)?;
             Ok(bm.not(batch.len))
         }
-        // Fallback for Like, NotLike, In, NotIn, ExpressionPredicate
+        // LIKE/NotLike: push down to dictionary-encoded columns
+        Formula::Like(expr, pattern_expr) | Formula::NotLike(expr, pattern_expr) => {
+            let is_not_like = matches!(formula, Formula::NotLike(_, _));
+            if let Some(bm) = try_dict_like_pushdown(expr, pattern_expr, is_not_like, batch, variables, registry)? {
+                return Ok(bm);
+            }
+            evaluate_scalar_fallback(formula, batch, variables, registry)
+        }
+        // Fallback for In, NotIn, ExpressionPredicate
         _ => evaluate_scalar_fallback(formula, batch, variables, registry),
     }
 }
@@ -81,7 +91,7 @@ fn evaluate_batch_predicate_masked(
         }
         // Recurse with mask for nested AND
         Formula::And(left, right) => {
-            let left_bm = evaluate_batch_predicate_masked(left, batch, variables, registry, pre_mask)?;
+            let mut left_bm = evaluate_batch_predicate_masked(left, batch, variables, registry, pre_mask)?;
             if left_bm.count_ones() == 0 {
                 return Ok(left_bm);
             }
@@ -91,7 +101,8 @@ fn evaluate_batch_predicate_masked(
                 None => left_bm.clone(),
             };
             let right_bm = evaluate_batch_predicate_masked(right, batch, variables, registry, Some(&combined))?;
-            Ok(left_bm.and(&right_bm))
+            left_bm.and_inplace(&right_bm);
+            Ok(left_bm)
         }
         // For these patterns, delegate to the regular evaluator
         // (they use SIMD kernels or simple bitmap ops, not scalar fallback)
@@ -171,8 +182,12 @@ fn evaluate_column_vs_constant(
             let needle_bytes = needle.as_bytes();
             let bm =
                 evaluate_cached_two_pass(data, offsets, &|field: &[u8]| field == needle_bytes, len);
-            let valid = null.and(missing);
-            Ok(bm.and(&valid))
+            if col.all_present(len) {
+                Ok(bm)
+            } else {
+                let valid = null.and(missing);
+                Ok(bm.and(&valid))
+            }
         }
         // String not-equal
         (TypedColumn::Utf8 { data, offsets, null, missing }, Value::String(needle))
@@ -181,8 +196,12 @@ fn evaluate_column_vs_constant(
             let needle_bytes = needle.as_bytes();
             let bm =
                 evaluate_cached_two_pass(data, offsets, &|field: &[u8]| field != needle_bytes, len);
-            let valid = null.and(missing);
-            Ok(bm.and(&valid))
+            if col.all_present(len) {
+                Ok(bm)
+            } else {
+                let valid = null.and(missing);
+                Ok(bm.and(&valid))
+            }
         }
         // String ordering comparisons -- use filter cache with byte comparison
         (TypedColumn::Utf8 { data, offsets, null, missing }, Value::String(needle))
@@ -203,14 +222,17 @@ fn evaluate_column_vs_constant(
                 _ => unreachable!(),
             };
             let bm = evaluate_cached_two_pass(data, offsets, &*cmp_fn, len);
-            let valid = null.and(missing);
-            Ok(bm.and(&valid))
+            if col.all_present(len) {
+                Ok(bm)
+            } else {
+                let valid = null.and(missing);
+                Ok(bm.and(&valid))
+            }
         }
         // DictUtf8: compare needle against dictionary entries, then broadcast via codes
         (TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing }, Value::String(needle)) => {
             let needle_bytes = needle.as_bytes();
             let dict_size = dict_offsets.len() - 1;
-            // Build a match table: for each dictionary code, does it match?
             let mut match_table = vec![0u8; dict_size];
             for c in 0..dict_size {
                 let start = dict_offsets[c] as usize;
@@ -225,12 +247,15 @@ fn evaluate_column_vs_constant(
                     Relation::LessEqual => (entry <= needle_bytes) as u8,
                 };
             }
-            // Broadcast: look up each row's code in the match table
             let mut result_bytes = vec![0u8; len];
             kernels::dict_broadcast(codes, &match_table, &mut result_bytes);
             let bm = Bitmap::pack_from_bytes(&result_bytes);
-            let valid = null.and(missing);
-            Ok(bm.and(&valid))
+            if col.all_present(len) {
+                Ok(bm)
+            } else {
+                let valid = null.and(missing);
+                Ok(bm.and(&valid))
+            }
         }
         // Int32 comparisons -- use SIMD kernels
         (TypedColumn::Int32 { data, null, missing }, Value::Int(threshold)) => {
@@ -247,8 +272,12 @@ fn evaluate_column_vs_constant(
                 Relation::NotEqual => kernels::filter_ne_i32(data, threshold, &mut result_bytes),
             }
             let bm = Bitmap::pack_from_bytes(&result_bytes);
-            let valid = null.and(missing);
-            Ok(bm.and(&valid))
+            if col.all_present(len) {
+                Ok(bm)
+            } else {
+                let valid = null.and(missing);
+                Ok(bm.and(&valid))
+            }
         }
         // Float32 comparisons -- use SIMD kernels
         (TypedColumn::Float32 { data, null, missing }, Value::Float(threshold)) => {
@@ -263,8 +292,12 @@ fn evaluate_column_vs_constant(
                 Relation::NotEqual => kernels::filter_ne_f32(data, t, &mut result_bytes),
             }
             let bm = Bitmap::pack_from_bytes(&result_bytes);
-            let valid = null.and(missing);
-            Ok(bm.and(&valid))
+            if col.all_present(len) {
+                Ok(bm)
+            } else {
+                let valid = null.and(missing);
+                Ok(bm.and(&valid))
+            }
         }
         // Fallback: row-by-row for Mixed columns and type mismatches
         _ => {
@@ -335,6 +368,76 @@ fn evaluate_is_missing(expr: &Expression, batch: &ColumnBatch) -> StreamResult<B
     }
     // Column not found -> all rows are "missing" for that column
     Ok(Bitmap::all_set(batch.len))
+}
+
+/// Push LIKE/NOT LIKE down to dictionary-encoded or plain Utf8 string columns.
+/// Evaluates the regex once per dictionary entry (or unique value), then broadcasts.
+fn try_dict_like_pushdown(
+    expr: &Expression,
+    pattern_expr: &Expression,
+    is_not_like: bool,
+    batch: &ColumnBatch,
+    variables: &Variables,
+    registry: &Arc<FunctionRegistry>,
+) -> StreamResult<Option<Bitmap>> {
+    let col_name = match expr_to_column_name(expr) {
+        Some(name) => name,
+        None => return Ok(None),
+    };
+    let col_idx = match batch.names.iter().position(|n| n == col_name) {
+        Some(idx) => idx,
+        None => return Ok(None),
+    };
+    // Pattern must be a constant string
+    let pattern_str = match pattern_expr {
+        Expression::Constant(Value::String(s)) => s.as_str(),
+        _ => return Ok(None),
+    };
+    // Compile the LIKE pattern to a regex
+    let regex_pattern = crate::execution::types::like_pattern_to_regex(pattern_str);
+    let re = match Regex::new(&regex_pattern) {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    let col = &batch.columns[col_idx];
+    match col {
+        TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing } => {
+            let dict_size = dict_offsets.len() - 1;
+            let mut match_table = vec![0u8; dict_size];
+            for c in 0..dict_size {
+                let start = dict_offsets[c] as usize;
+                let end = dict_offsets[c + 1] as usize;
+                let entry = std::str::from_utf8(&dict_data[start..end]).unwrap_or("");
+                let matched = re.is_match(entry);
+                match_table[c] = if is_not_like { !matched as u8 } else { matched as u8 };
+            }
+            let mut result_bytes = vec![0u8; batch.len];
+            kernels::dict_broadcast(codes, &match_table, &mut result_bytes);
+            let bm = Bitmap::pack_from_bytes(&result_bytes);
+            if col.all_present(batch.len) {
+                Ok(Some(bm))
+            } else {
+                let valid = null.and(missing);
+                Ok(Some(bm.and(&valid)))
+            }
+        }
+        TypedColumn::Utf8 { data, offsets, null, missing } => {
+            // Use filter cache for Utf8 LIKE
+            let bm = evaluate_cached_two_pass(data, offsets, &|field: &[u8]| {
+                let s = std::str::from_utf8(field).unwrap_or("");
+                let matched = re.is_match(s);
+                if is_not_like { !matched } else { matched }
+            }, batch.len);
+            if col.all_present(batch.len) {
+                Ok(Some(bm))
+            } else {
+                let valid = null.and(missing);
+                Ok(Some(bm.and(&valid)))
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 fn evaluate_scalar_fallback(
@@ -478,7 +581,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("status".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("200".to_string()))),
+            Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let result =
@@ -649,7 +752,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("status".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("200".to_string()))),
+            Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
@@ -669,7 +772,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("status".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("200".to_string()))),
+            Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
@@ -686,7 +789,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("status".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("banana".to_string()))),
+            Box::new(Expression::Constant(Value::String("banana".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
@@ -703,7 +806,7 @@ mod tests {
             Box::new(Expression::Variable(PathExpr::new(vec![
                 PathSegment::AttrName("status".to_string()),
             ]))),
-            Box::new(Expression::Constant(Value::String("999".to_string()))),
+            Box::new(Expression::Constant(Value::String("999".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();

@@ -800,8 +800,8 @@ fn json_to_data_model(parsed: &JsonValue) -> Value {
             Value::Array(a)
         }
         json::JsonValue::Null => Value::Null,
-        json::JsonValue::String(s) => Value::String(s.clone()),
-        json::JsonValue::Short(s) => Value::String(s.to_string()),
+        json::JsonValue::String(s) => Value::String(s.clone().into()),
+        json::JsonValue::Short(s) => Value::String(s.to_string().into()),
         json::JsonValue::Boolean(b) => Value::Boolean(*b),
         json::JsonValue::Number(n) => {
             let fixed = n.as_fixed_point_i64(4).unwrap();
@@ -907,7 +907,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
                         record_vars.insert(field_names[i].clone(), Value::DateTime(dt));
                     }
                     DataType::String => {
-                        record_vars.insert(field_names[i].clone(), Value::String(s.to_string()));
+                        record_vars.insert(field_names[i].clone(), Value::String(s.into()));
                     }
                     DataType::Integral => {
                         let i_val = s.parse::<i32>()?;
@@ -978,20 +978,20 @@ mod tests {
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
             Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:33.559871Z").unwrap()),
-            Value::String("elb1".to_string()),
+            Value::String("elb1".to_string().into()),
             Value::Host(Box::new(common::types::parse_host("78.168.134.92:4586").unwrap())),
             Value::Host(Box::new(common::types::parse_host("10.0.0.215:80").unwrap())),
             Value::Float(OrderedFloat::from(0.000_036)),
             Value::Float(OrderedFloat::from(0.001_035)),
             Value::Float(OrderedFloat::from(0.000_025)),
-            Value::String("200".to_string()),
-            Value::String("200".to_string()),
+            Value::String("200".to_string().into()),
+            Value::String("200".to_string().into()),
             Value::Int(0),
             Value::Int(42355),
             Value::HttpRequest(Box::new(common::types::parse_http_request("GET https://example.com:443/ HTTP/1.1").unwrap())),
-            Value::String("\"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36\"".to_string()),
-            Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
-            Value::String("TLSv1.2".to_string()),
+            Value::String("\"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36\"".into()),
+            Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string().into()),
+            Value::String("TLSv1.2".to_string().into()),
             Value::Null,
             Value::Null
         ];
@@ -1005,22 +1005,22 @@ mod tests {
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
             Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap()),
-            Value::String("elb1".to_string()),
+            Value::String("elb1".to_string().into()),
             Value::Host(Box::new(common::types::parse_host("176.219.166.226:48384").unwrap())),
             Value::Host(Box::new(common::types::parse_host("10.0.2.143:80").unwrap())),
             Value::Float(OrderedFloat::from(0.000_023)),
             Value::Float(OrderedFloat::from(0.000_348)),
             Value::Float(OrderedFloat::from(0.000_025)),
-            Value::String("200".to_string()),
-            Value::String("200".to_string()),
+            Value::String("200".to_string().into()),
+            Value::String("200".to_string().into()),
             Value::Int(0),
             Value::Int(41690),
             Value::HttpRequest(Box::new(common::types::parse_http_request("GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1").unwrap())),
-            Value::String("\"Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]\"".to_string()),
-            Value::String("-".to_string()),
-            Value::String("-".to_string()),
-            Value::String("arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067".to_string()),
-            Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string()),
+            Value::String("\"Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]\"".into()),
+            Value::String("-".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067".to_string().into()),
+            Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string().into()),
         ];
         let expected: Option<Record> = Some(Record::new(fields, data));
 
@@ -1034,34 +1034,34 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = ApplicationLoadBalancerLogField::field_names();
         let data = vec![
-            Value::String("http".to_string()),
+            Value::String("http".to_string().into()),
             Value::DateTime(chrono::DateTime::parse_from_rfc3339("2018-07-02T22:23:00.186641Z").unwrap()),
-            Value::String("app/my-loadbalancer/50dc6c495c0c9188".to_string()),
+            Value::String("app/my-loadbalancer/50dc6c495c0c9188".to_string().into()),
             Value::Host(Box::new(common::types::parse_host("192.168.131.39:2817").unwrap())),
             Value::Host(Box::new(common::types::parse_host("10.0.0.1:80").unwrap())),
             Value::Float(OrderedFloat::from(0.000)),
             Value::Float(OrderedFloat::from(0.001)),
             Value::Float(OrderedFloat::from(0.000)),
-            Value::String("200".to_string()),
-            Value::String("200".to_string()),
+            Value::String("200".to_string().into()),
+            Value::String("200".to_string().into()),
             Value::Int(34),
             Value::Int(366),
             Value::HttpRequest(Box::new(common::types::parse_http_request("GET http://www.example.com:80/ HTTP/1.1").unwrap())),
-            Value::String("\"curl/7.46.0\"".to_string()),
-            Value::String("-".to_string()),
-            Value::String("-".to_string()),
+            Value::String("\"curl/7.46.0\"".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("-".to_string().into()),
             Value::String(
                 "arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067"
-                    .to_string(),
+                    .into(),
             ),
-            Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string()),
-            Value::String("\"-\"".to_string()),
-            Value::String("\"-\"".to_string()),
-            Value::String("0".to_string()),
-            Value::String("2018-07-02T22:22:48.364000Z".to_string()),
-            Value::String("\"forward\"".to_string()),
-            Value::String("\"-\"".to_string()),
-            Value::String("\"-\"".to_string()),
+            Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string().into()),
+            Value::String("\"-\"".to_string().into()),
+            Value::String("\"-\"".to_string().into()),
+            Value::String("0".to_string().into()),
+            Value::String("2018-07-02T22:22:48.364000Z".to_string().into()),
+            Value::String("\"forward\"".to_string().into()),
+            Value::String("\"-\"".to_string().into()),
+            Value::String("\"-\"".to_string().into()),
         ];
         let expected: Option<Record> = Some(Record::new(fields, data));
 
@@ -1075,30 +1075,30 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = S3Field::field_names();
         let data = vec![
-            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string()),
-            Value::String("awsexamplebucket".to_string()),
-            Value::String("[06/Feb/2019:00:00:38 +0000]".to_string()),
-            Value::String("192.0.2.3".to_string()),
-            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string()),
-            Value::String("3E57427F3EXAMPLE".to_string()),
-            Value::String("REST.GET.VERSIONING".to_string()),
-            Value::String("-".to_string()),
-            Value::String("\"GET /awsexamplebucket?versioning HTTP/1.1\"".to_string()),
-            Value::String("200".to_string()),
-            Value::String("-".to_string()),
-            Value::String("113".to_string()),
-            Value::String("-".to_string()),
-            Value::String("7".to_string()),
-            Value::String("-".to_string()),
-            Value::String("\"-\"".to_string()),
-            Value::String("\"S3Console/0.4\"".to_string()),
-            Value::String("-".to_string()),
-            Value::String("s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234=".to_string()),
-            Value::String("SigV2".to_string()),
-            Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
-            Value::String("AuthHeader".to_string()),
-            Value::String("awsexamplebucket.s3.amazonaws.com".to_string()),
-            Value::String("TLSV1.1".to_string()),
+            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string().into()),
+            Value::String("awsexamplebucket".to_string().into()),
+            Value::String("[06/Feb/2019:00:00:38 +0000]".to_string().into()),
+            Value::String("192.0.2.3".to_string().into()),
+            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string().into()),
+            Value::String("3E57427F3EXAMPLE".to_string().into()),
+            Value::String("REST.GET.VERSIONING".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("\"GET /awsexamplebucket?versioning HTTP/1.1\"".to_string().into()),
+            Value::String("200".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("113".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("7".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("\"-\"".to_string().into()),
+            Value::String("\"S3Console/0.4\"".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234=".to_string().into()),
+            Value::String("SigV2".to_string().into()),
+            Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string().into()),
+            Value::String("AuthHeader".to_string().into()),
+            Value::String("awsexamplebucket.s3.amazonaws.com".to_string().into()),
+            Value::String("TLSV1.1".to_string().into()),
         ];
         let expected: Option<Record> = Some(Record::new(fields, data));
 
@@ -1112,16 +1112,16 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = SquidLogField::field_names();
         let data = vec![
-            Value::String("1515734740.494".to_string()),
-            Value::String("1".to_string()),
-            Value::String("[MASKEDIPADDRESS]".to_string()),
-            Value::String("TCP_DENIED/407".to_string()),
-            Value::String("3922".to_string()),
-            Value::String("CONNECT".to_string()),
-            Value::String("d.dropbox.com:443".to_string()),
-            Value::String("-".to_string()),
-            Value::String("HIER_NONE/-".to_string()),
-            Value::String("text/html".to_string()),
+            Value::String("1515734740.494".to_string().into()),
+            Value::String("1".to_string().into()),
+            Value::String("[MASKEDIPADDRESS]".to_string().into()),
+            Value::String("TCP_DENIED/407".to_string().into()),
+            Value::String("3922".to_string().into()),
+            Value::String("CONNECT".to_string().into()),
+            Value::String("d.dropbox.com:443".to_string().into()),
+            Value::String("-".to_string().into()),
+            Value::String("HIER_NONE/-".to_string().into()),
+            Value::String("text/html".to_string().into()),
         ];
         let expected: Option<Record> = Some(Record::new(fields, data));
 

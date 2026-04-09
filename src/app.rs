@@ -169,15 +169,15 @@ pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, out
                             obj[key] = json::Null;
                         }
                         common::types::Value::String(s) => {
-                            obj[key] = s.into();
+                            obj[key] = s.to_string().into();
                         }
                         common::types::Value::Missing => obj[key] = json::Null,
                         common::types::Value::Object(_) => {
                             //
-                            obj[key] = json::JsonValue::String("{ ... }".to_string());
+                            obj[key] = json::JsonValue::String("{ ... }".to_string().into());
                         }
                         common::types::Value::Array(_) => {
-                            obj[key] = json::JsonValue::String("[ ... ]".to_string());
+                            obj[key] = json::JsonValue::String("[ ... ]".to_string().into());
                         }
                     }
                 }
@@ -1213,7 +1213,7 @@ mod tests {
         assert_eq!(results.len(), 2);
         for row in &results {
             let status = &row.iter().find(|(k, _)| k == "elb_status_code").unwrap().1;
-            assert_eq!(status, &common::types::Value::String("200".to_string()));
+            assert_eq!(status, &common::types::Value::String("200".to_string().into()));
         }
     }
 
@@ -1265,7 +1265,7 @@ mod tests {
         let results = run_format_query_to_vec("alb", lines, r#"SELECT type, elb_status_code FROM it WHERE type = "https""#).unwrap();
         assert_eq!(results.len(), 1);
         let type_val = &results[0].iter().find(|(k, _)| k == "type").unwrap().1;
-        assert_eq!(type_val, &common::types::Value::String("https".to_string()));
+        assert_eq!(type_val, &common::types::Value::String("https".to_string().into()));
     }
 
     #[test]
@@ -1307,7 +1307,7 @@ mod tests {
         assert_eq!(results.len(), 3);
         for row in &results {
             let op = &row.iter().find(|(k, _)| k == "operation").unwrap().1;
-            assert_eq!(op, &common::types::Value::String("REST.GET.OBJECT".to_string()));
+            assert_eq!(op, &common::types::Value::String("REST.GET.OBJECT".to_string().into()));
         }
     }
 
@@ -1362,7 +1362,7 @@ mod tests {
         assert_eq!(results.len(), 2);
         for row in &results {
             let method = &row.iter().find(|(k, _)| k == "method").unwrap().1;
-            assert_eq!(method, &common::types::Value::String("GET".to_string()));
+            assert_eq!(method, &common::types::Value::String("GET".to_string().into()));
         }
     }
 
@@ -1614,6 +1614,41 @@ mod tests {
         ];
         let result = run_format_query("squid", lines, r#"SELECT code_and_status, count(*) as cnt FROM it GROUP BY code_and_status"#);
         assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_scan_aggregation_count_star_pushdown() {
+        // Test that SELECT COUNT(*) FROM it WHERE method = 'GET'
+        // uses scan-time aggregation and returns the correct count
+        let lines = &[
+            r#"1515734740.000      1 [10.0.0.1] TCP_DENIED/407 3922 GET http://a.com/ - HIER_NONE/- text/html"#,
+            r#"1515734741.000      2 [10.0.0.2] TCP_MISS/200 15234 POST http://b.com/ - HIER_DIRECT/1.2.3.4 text/html"#,
+            r#"1515734742.000      3 [10.0.0.3] TCP_HIT/200 8432 GET http://c.com/ - HIER_DIRECT/1.2.3.5 text/html"#,
+            r#"1515734743.000      4 [10.0.0.4] TCP_DENIED/403 2100 CONNECT http://d.com/ - HIER_NONE/- text/html"#,
+            r#"1515734744.000      5 [10.0.0.5] TCP_MISS/200 9200 GET http://e.com/ - HIER_DIRECT/1.2.3.6 text/html"#,
+        ];
+        let result = run_format_query_to_vec(
+            "squid", lines,
+            r#"SELECT count(*) as cnt FROM it WHERE method = "GET""#,
+        ).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][0].1, common::types::Value::Int(3));
+    }
+
+    #[test]
+    fn test_scan_aggregation_count_star_no_filter() {
+        // Test SELECT COUNT(*) FROM it (no WHERE clause)
+        let lines = &[
+            r#"1515734740.000      1 [10.0.0.1] TCP_DENIED/407 3922 GET http://a.com/ - HIER_NONE/- text/html"#,
+            r#"1515734741.000      2 [10.0.0.2] TCP_MISS/200 15234 POST http://b.com/ - HIER_DIRECT/1.2.3.4 text/html"#,
+            r#"1515734742.000      3 [10.0.0.3] TCP_HIT/200 8432 GET http://c.com/ - HIER_DIRECT/1.2.3.5 text/html"#,
+        ];
+        let result = run_format_query_to_vec(
+            "squid", lines,
+            r#"SELECT count(*) as cnt FROM it"#,
+        ).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0][0].1, common::types::Value::Int(3));
     }
 
     // Helper to create two JSONL tables and run a query, returning structured results

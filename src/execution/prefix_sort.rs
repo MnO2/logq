@@ -584,7 +584,7 @@ mod tests {
             Value::Boolean(true),
             Value::Int(1),
             Value::Float(OrderedFloat::from(1.0f32)),
-            Value::String("a".to_string()),
+            Value::String("a".to_string().into()),
             Value::Null,
         ];
 
@@ -604,7 +604,7 @@ mod tests {
         let slot_width = encoder.slot_width();
 
         let mut string_slot = vec![0u8; slot_width];
-        encoder.encode_value(&Value::String("zzz".to_string()), &mut string_slot, false);
+        encoder.encode_value(&Value::String("zzz".to_string().into()), &mut string_slot, false);
 
         let mut null_slot = vec![0u8; slot_width];
         encoder.encode_value(&Value::Null, &mut null_slot, false);
@@ -692,8 +692,8 @@ mod tests {
     fn test_prefix_sort_string_with_prefix_collision() {
         let fields = vec!["x".to_string()];
         let records = vec![
-            make_record(&fields, vec![Value::String("abcdefghijklmnopXYZ".to_string())]),
-            make_record(&fields, vec![Value::String("abcdefghijklmnopABC".to_string())]),
+            make_record(&fields, vec![Value::String("abcdefghijklmnopXYZ".to_string().into())]),
+            make_record(&fields, vec![Value::String("abcdefghijklmnopABC".to_string().into())]),
         ];
         let keys = vec![path("x")];
         let orderings = vec![Ordering::Asc];
@@ -702,8 +702,8 @@ mod tests {
         let result = encoder.sort(records, &keys, &orderings);
 
         let vals: Vec<Value> = result.iter().map(|r| r.get(&path("x"))).collect();
-        assert_eq!(vals[0], Value::String("abcdefghijklmnopABC".to_string()));
-        assert_eq!(vals[1], Value::String("abcdefghijklmnopXYZ".to_string()));
+        assert_eq!(vals[0], Value::String("abcdefghijklmnopABC".to_string().into()));
+        assert_eq!(vals[1], Value::String("abcdefghijklmnopXYZ".to_string().into()));
     }
 
     #[test]
@@ -767,7 +767,7 @@ mod tests {
         let records: Vec<Record> = (0..500).map(|_| {
             make_record(&fields, vec![
                 Value::Int(rng.gen_range(-1000..1000)),
-                Value::String(format!("str_{}", rng.gen_range(0..50))),
+                Value::String(format!("str_{}", rng.gen_range(0..50)).into()),
             ])
         }).collect();
 

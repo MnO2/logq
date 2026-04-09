@@ -40,6 +40,9 @@ memmap2 = "0.9"
 rayon = "1.10"
 ahash = "0.7"
 smallvec = "1"
+memchr = "2"
+fast-float = "0.2"
+compact_str = "0.8"
 
 [dev-dependencies]
 criterion = "0.3"

@@ -63,6 +63,38 @@ pub enum TypedColumn {
     },
 }
 
+impl TypedColumn {
+    /// Returns a bitmap where bit i is set iff row i is present (non-null and non-missing).
+    pub fn validity_bitmap(&self, _len: usize) -> crate::simd::bitmap::Bitmap {
+        let (null, missing) = match self {
+            TypedColumn::Int32 { null, missing, .. } => (null, missing),
+            TypedColumn::Float32 { null, missing, .. } => (null, missing),
+            TypedColumn::Boolean { null, missing, .. } => (null, missing),
+            TypedColumn::Utf8 { null, missing, .. } => (null, missing),
+            TypedColumn::DictUtf8 { null, missing, .. } => (null, missing),
+            TypedColumn::DateTime { null, missing, .. } => (null, missing),
+            TypedColumn::Mixed { null, missing, .. } => (null, missing),
+        };
+        null.and(missing)
+    }
+
+    /// Returns true when all rows have present (non-null, non-missing) values.
+    /// When true, predicate evaluation can skip null/missing bitmap checks.
+    #[inline]
+    pub fn all_present(&self, len: usize) -> bool {
+        let (null, missing) = match self {
+            TypedColumn::Int32 { null, missing, .. } => (null, missing),
+            TypedColumn::Float32 { null, missing, .. } => (null, missing),
+            TypedColumn::Boolean { null, missing, .. } => (null, missing),
+            TypedColumn::Utf8 { null, missing, .. } => (null, missing),
+            TypedColumn::DictUtf8 { null, missing, .. } => (null, missing),
+            TypedColumn::DateTime { null, missing, .. } => (null, missing),
+            TypedColumn::Mixed { null, missing, .. } => (null, missing),
+        };
+        null.count_ones() == len && missing.count_ones() == len
+    }
+}
+
 /// A batch of up to BATCH_SIZE rows in columnar layout.
 pub struct ColumnBatch {
     pub columns: Vec<TypedColumn>,
@@ -184,7 +216,7 @@ impl BatchToRowAdapter {
                 let start = offsets[row] as usize;
                 let end = offsets[row + 1] as usize;
                 let s = String::from_utf8_lossy(&data[start..end]).into_owned();
-                Value::String(s)
+                Value::String(s.into())
             }
             TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing } => {
                 if !missing.is_set(row) {
@@ -197,7 +229,7 @@ impl BatchToRowAdapter {
                 let start = dict_offsets[code] as usize;
                 let end = dict_offsets[code + 1] as usize;
                 let s = String::from_utf8_lossy(&dict_data[start..end]).into_owned();
-                Value::String(s)
+                Value::String(s.into())
             }
             TypedColumn::DateTime { data, null, missing } => {
                 if !missing.is_set(row) {
@@ -626,13 +658,13 @@ mod tests {
             Record::new_with_variables({
                 let mut v = LinkedHashMap::new();
                 v.insert("x".to_string(), Value::Int(1));
-                v.insert("y".to_string(), Value::String("hello".to_string()));
+                v.insert("y".to_string(), Value::String("hello".to_string().into()));
                 v
             }),
             Record::new_with_variables({
                 let mut v = LinkedHashMap::new();
                 v.insert("x".to_string(), Value::Int(2));
-                v.insert("y".to_string(), Value::String("world".to_string()));
+                v.insert("y".to_string(), Value::String("world".to_string().into()));
                 v
             }),
         ];
@@ -664,7 +696,7 @@ mod tests {
         let records: Vec<Record> = (0..3).map(|i| {
             let mut v = LinkedHashMap::new();
             v.insert("id".to_string(), Value::Int(i));
-            v.insert("name".to_string(), Value::String(format!("item_{}", i)));
+            v.insert("name".to_string(), Value::String(format!("item_{}", i).into()));
             Record::new_with_variables(v)
         }).collect();
 
@@ -679,7 +711,7 @@ mod tests {
         for i in 0..3 {
             let record = row_stream.next().unwrap().unwrap();
             assert_eq!(record.to_variables()["id"], Value::Int(i));
-            assert_eq!(record.to_variables()["name"], Value::String(format!("item_{}", i)));
+            assert_eq!(record.to_variables()["name"], Value::String(format!("item_{}", i).into()));
         }
         assert!(row_stream.next().unwrap().is_none());
     }

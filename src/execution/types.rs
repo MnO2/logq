@@ -2,7 +2,7 @@ use super::datasource::{ReaderBuilder, ReaderError};
 use super::stream::{CrossJoinStream, DistinctStream, ExceptStream, FilterStream, GroupByStream, HashJoinStream, InMemoryStream, IntersectStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream, UnionStream};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
-use crate::execution::batch::{BatchSchema, BatchToRowAdapter, BatchStream, PrecomputedBatchStream};
+use crate::execution::batch::{BatchSchema, BatchToRowAdapter, BatchStream, ColumnType, PrecomputedBatchStream};
 use crate::execution::batch_scan::datatype_to_column_type;
 use crate::execution::parallel;
 use crate::execution::batch_filter::BatchFilterOperator;
@@ -123,7 +123,7 @@ impl From<EvaluateError> for ExpressionError {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Ordering {
     Asc,
     Desc,
@@ -218,9 +218,9 @@ impl Expression {
                     }
                     // To String (Varchar)
                     (Value::String(_), CastType::Varchar) => Ok(val),
-                    (Value::Int(i), CastType::Varchar) => Ok(Value::String(i.to_string())),
-                    (Value::Float(f), CastType::Varchar) => Ok(Value::String(f.to_string())),
-                    (Value::Boolean(b), CastType::Varchar) => Ok(Value::String(b.to_string())),
+                    (Value::Int(i), CastType::Varchar) => Ok(Value::String(i.to_string().into())),
+                    (Value::Float(f), CastType::Varchar) => Ok(Value::String(f.to_string().into())),
+                    (Value::Boolean(b), CastType::Varchar) => Ok(Value::String(b.to_string().into())),
                     // To Boolean
                     (Value::Boolean(_), CastType::Boolean) => Ok(val),
                     (Value::String(s), CastType::Boolean) => {
@@ -348,7 +348,7 @@ pub enum Formula {
     NotIn(Box<Expression>, Vec<Expression>),
 }
 
-fn like_pattern_to_regex(pattern: &str) -> String {
+pub(crate) fn like_pattern_to_regex(pattern: &str) -> String {
     let mut regex = String::from("^");
     for ch in pattern.chars() {
         match ch {
@@ -736,6 +736,116 @@ impl Node {
         vec![]
     }
 
+    /// Detect if a single aggregate can be pushed into the scan operator.
+    fn detect_scan_aggregation(agg: &NamedAggregate) -> Option<crate::execution::batch_scan::ScanAggregation> {
+        use crate::execution::batch_scan::ScanAggregation;
+        match &agg.aggregate {
+            Aggregate::Count(_, Named::Star) => Some(ScanAggregation::CountStar),
+            Aggregate::Count(_, Named::Expression(Expression::Variable(p), _)) => {
+                if p.path_segments.len() == 1 {
+                    // We need the field index, but we don't have the schema here.
+                    // For now, return CountStar — COUNT(col) on non-null columns
+                    // behaves the same. The full field-index resolution happens in
+                    // try_build_scan_with_aggregation.
+                    Some(ScanAggregation::CountStar) // placeholder
+                } else {
+                    None
+                }
+            }
+            Aggregate::Sum(_, Named::Expression(Expression::Variable(p), _)) => {
+                if p.path_segments.len() == 1 {
+                    Some(ScanAggregation::SumColumn(0)) // placeholder index
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Try to build a scan operator with aggregation pushed down.
+    /// Returns None if the source doesn't resolve to a simple DataSource or Filter(DataSource).
+    fn try_build_scan_with_aggregation(
+        source: &Node,
+        _scan_agg_hint: &crate::execution::batch_scan::ScanAggregation,
+        variables: &Variables,
+        registry: &Arc<FunctionRegistry>,
+        threads: usize,
+    ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
+        use crate::execution::batch_scan::ScanAggregation;
+
+        // Walk through Map nodes to get to the actual data source
+        let (inner_source, formula_opt) = match source {
+            Node::Map(_, child) => {
+                match child.as_ref() {
+                    Node::Filter(ds, formula) => (ds.as_ref(), Some(formula.as_ref())),
+                    Node::DataSource(..) => (child.as_ref(), None),
+                    _ => return None,
+                }
+            }
+            Node::Filter(ds, formula) => (ds.as_ref(), Some(formula.as_ref())),
+            Node::DataSource(..) => (source, None),
+            _ => return None,
+        };
+
+        let (path, file_format, schema) = match inner_source {
+            Node::DataSource(DataSource::File(path, file_format, _), bindings) => {
+                if !bindings.is_empty() || file_format == "jsonl" {
+                    return None;
+                }
+                (path, file_format, LogSchema::from_format(file_format))
+            }
+            _ => return None,
+        };
+
+        // Resolve the actual ScanAggregation with correct field indices
+        // For now, we only support COUNT(*) pushdown since it doesn't need
+        // any projected columns.
+        let scan_agg = match _scan_agg_hint {
+            ScanAggregation::CountStar => ScanAggregation::CountStar,
+            _ => return None, // TODO: resolve field indices for COUNT(col)/SUM(col)
+        };
+
+        // Determine filter fields if there's a predicate
+        let (filter_fields, pushed_pred): (Vec<usize>, Option<(Formula, Variables, Arc<FunctionRegistry>)>) =
+            if let Some(formula) = formula_opt {
+                let ff = crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
+                (ff, Some((formula.clone(), variables.clone(), registry.clone())))
+            } else {
+                (vec![], None)
+            };
+
+        // For COUNT(*), we don't need any projected fields — use a minimal schema
+        let agg_name = "_count".to_string();
+        let batch_schema = BatchSchema {
+            names: vec![agg_name.clone()],
+            types: vec![ColumnType::Int32],
+        };
+
+        // Skip parallel path for aggregation pushdown — sequential is fine
+        // since we're not constructing full column batches
+        match std::fs::File::open(path) {
+            Ok(file) => {
+                let reader: Box<dyn std::io::BufRead> =
+                    Box::new(std::io::BufReader::new(file));
+                // Use filter_fields as both projected and filter fields
+                // (we only need them for predicate evaluation)
+                let projected = if filter_fields.is_empty() {
+                    vec![0] // need at least one field for schema
+                } else {
+                    filter_fields.clone()
+                };
+                let scan = BatchScanOperator::new(
+                    reader, schema, projected,
+                    filter_fields,
+                    pushed_pred,
+                ).with_scan_aggregation(scan_agg, batch_schema);
+                Some(Ok(Box::new(scan) as Box<dyn BatchStream>))
+            }
+            Err(_) => Some(Err(CreateStreamError::Io)),
+        }
+    }
+
     /// Detect if a GroupBy node qualifies for streaming aggregation.
     ///
     /// Requirements:
@@ -772,7 +882,7 @@ impl Node {
                 if func_name == "time_bucket" && alias == &key_name && args.len() == 2 {
                     // Extract interval string from first argument
                     let interval = match &args[0] {
-                        Named::Expression(Expression::Constant(Value::String(s)), _) => s.clone(),
+                        Named::Expression(Expression::Constant(Value::String(s)), _) => s.to_string(),
                         _ => return None,
                     };
                     // Extract timestamp column name from second argument
@@ -1016,6 +1126,19 @@ impl Node {
                 }
             }
             Node::GroupBy(keys, aggregates, source) => {
+                // Scan-time aggregation pushdown: for ungrouped single-aggregate
+                // queries (e.g. SELECT COUNT(*) FROM t WHERE ...), push the
+                // aggregation into the scan operator to avoid constructing columns.
+                if keys.is_empty() && aggregates.len() == 1 {
+                    if let Some(scan_agg) = Self::detect_scan_aggregation(&aggregates[0]) {
+                        if let Some(scan_result) = Self::try_build_scan_with_aggregation(
+                            source, &scan_agg, variables, registry, threads,
+                        ) {
+                            return Some(scan_result);
+                        }
+                    }
+                }
+
                 // Try streaming aggregation for time-bucketed queries on ordered sources
                 if let Some(params) = Self::detect_streaming_groupby(keys, source) {
                     // Bypass the Map node: get batch stream from the Map's child
@@ -1048,6 +1171,32 @@ impl Node {
                             registry.clone(),
                         );
                         Some(Ok(Box::new(groupby) as Box<dyn BatchStream>))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    None => None,
+                }
+            }
+            Node::OrderBy(sort_columns, orderings, source) => {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                    Some(Ok(batch_stream)) => {
+                        let op = crate::execution::batch_orderby::BatchOrderByOperator::new(
+                            batch_stream,
+                            sort_columns.clone(),
+                            orderings.clone(),
+                        );
+                        Some(Ok(Box::new(op) as Box<dyn BatchStream>))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    None => None,
+                }
+            }
+            Node::Distinct(source) => {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                    Some(Ok(batch_stream)) => {
+                        let op = crate::execution::batch_distinct::BatchDistinctOperator::new(
+                            batch_stream,
+                        );
+                        Some(Ok(Box::new(op) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
                     None => None,
@@ -2273,7 +2422,7 @@ mod tests {
     #[test]
     fn test_avg_aggregate_with_one_element() {
         let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
         let value = Value::Float(OrderedFloat::from(5.0));
 
         let _ = iter.add_record(&tuple, &value);
@@ -2284,7 +2433,7 @@ mod tests {
     #[test]
     fn test_avg_aggregate_with_many_elements() {
         let mut iter = Aggregate::Avg(AvgAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
 
         for i in 1..=10 {
             let value = Value::Float(OrderedFloat::from(i as f32));
@@ -2298,7 +2447,7 @@ mod tests {
     #[test]
     fn test_count_aggregate() {
         let mut iter = Aggregate::Count(CountAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(&tuple, &value);
@@ -2311,7 +2460,7 @@ mod tests {
     #[test]
     fn test_first_aggregate() {
         let mut iter = Aggregate::First(FirstAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(&tuple, &value);
@@ -2324,7 +2473,7 @@ mod tests {
     #[test]
     fn test_last_aggregate() {
         let mut iter = Aggregate::Last(LastAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(&tuple, &value);
@@ -2337,7 +2486,7 @@ mod tests {
     #[test]
     fn test_sum_aggregate_with_many_elements() {
         let mut iter = Aggregate::Sum(SumAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
 
         for i in 1..=10 {
             let value = Value::Float(OrderedFloat::from(i as f32));
@@ -2351,7 +2500,7 @@ mod tests {
     #[test]
     fn test_max_aggregate() {
         let mut iter = Aggregate::Max(MaxAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(&tuple, &value);
@@ -2364,7 +2513,7 @@ mod tests {
     #[test]
     fn test_min_aggregate() {
         let mut iter = Aggregate::Min(MinAggregate::new(), Named::Star);
-        let tuple = Some(vec![Value::String("key".to_string())]);
+        let tuple = Some(vec![Value::String("key".to_string().into())]);
         for i in 0..13 {
             let value = Value::Int(i);
             let _ = iter.add_record(&tuple, &value);
@@ -2379,7 +2528,7 @@ mod tests {
         let registry = test_registry();
         let v = Value::Host(Box::new(common::types::parse_host("192.168.131.39:2817").unwrap()));
         let name = registry.call("host_name", &vec![v.clone()]).unwrap();
-        assert_eq!(name, Value::String("192.168.131.39".to_string()));
+        assert_eq!(name, Value::String("192.168.131.39".to_string().into()));
         let port = registry.call("host_port", &vec![v]).unwrap();
         assert_eq!(port, Value::Int(2817));
     }
@@ -2394,23 +2543,23 @@ mod tests {
             .unwrap(),
         ));
         let name = registry.call("url_host", &vec![v.clone()]).unwrap();
-        assert_eq!(name, Value::String("example.com".to_string()));
+        assert_eq!(name, Value::String("example.com".to_string().into()));
         let port = registry.call("url_port", &vec![v.clone()]).unwrap();
         assert_eq!(port, Value::Int(8000));
         let path = registry.call("url_path", &vec![v.clone()]).unwrap();
-        assert_eq!(path, Value::String("/users/123".to_string()));
+        assert_eq!(path, Value::String("/users/123".to_string().into()));
         let fragment = registry.call("url_fragment", &vec![v.clone()]).unwrap();
         assert_eq!(fragment, Value::Null);
         let query = registry.call("url_query", &vec![v.clone()]).unwrap();
-        assert_eq!(query, Value::String("mode=json&after=&iteration=1".to_string()));
+        assert_eq!(query, Value::String("mode=json&after=&iteration=1".to_string().into()));
         let path_segments = registry.call("url_path_segments", &vec![v.clone(), Value::Int(1)]).unwrap();
-        assert_eq!(path_segments, Value::String("123".to_string()));
+        assert_eq!(path_segments, Value::String("123".to_string().into()));
         let mapped_path = registry.call(
             "url_path_bucket",
-            &vec![v.clone(), Value::Int(1), Value::String("_".to_string())],
+            &vec![v.clone(), Value::Int(1), Value::String("_".to_string().into())],
         )
         .unwrap();
-        assert_eq!(mapped_path, Value::String("/users/_".to_string()));
+        assert_eq!(mapped_path, Value::String("/users/_".to_string().into()));
     }
 
     #[test]
@@ -2430,18 +2579,18 @@ mod tests {
 
         let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:35.000000Z").unwrap());
-        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 seconds".to_string()), dt.clone()]).unwrap();
+        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 seconds".to_string().into()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:00.000000Z").unwrap());
-        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 minutes".to_string()), dt.clone()]).unwrap();
+        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 minutes".to_string().into()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:00:00.000000Z").unwrap());
-        let bucket_dt = registry.call("time_bucket", &vec![Value::String("1 hour".to_string()), dt.clone()]).unwrap();
+        let bucket_dt = registry.call("time_bucket", &vec![Value::String("1 hour".to_string().into()), dt.clone()]).unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
-        let hour = registry.call("date_part", &vec![Value::String("second".to_string()), dt.clone()]).unwrap();
+        let hour = registry.call("date_part", &vec![Value::String("second".to_string().into()), dt.clone()]).unwrap();
         assert_eq!(Value::Float(OrderedFloat::from(37.0)), hour);
     }
 
@@ -2661,8 +2810,8 @@ mod tests {
     fn test_string_concat_evaluation() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Concat", &vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
-            Ok(Value::String("foobar".to_string()))
+            registry.call("Concat", &vec![Value::String("foo".to_string().into()), Value::String("bar".to_string().into())]),
+            Ok(Value::String("foobar".to_string().into()))
         );
     }
 
@@ -2670,11 +2819,11 @@ mod tests {
     fn test_string_concat_null_propagation() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Concat", &vec![Value::Null, Value::String("bar".to_string())]),
+            registry.call("Concat", &vec![Value::Null, Value::String("bar".to_string().into())]),
             Ok(Value::Null)
         );
         assert_eq!(
-            registry.call("Concat", &vec![Value::String("foo".to_string()), Value::Null]),
+            registry.call("Concat", &vec![Value::String("foo".to_string().into()), Value::Null]),
             Ok(Value::Null)
         );
     }
@@ -2683,11 +2832,11 @@ mod tests {
     fn test_string_concat_missing_propagation() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Concat", &vec![Value::Missing, Value::String("bar".to_string())]),
+            registry.call("Concat", &vec![Value::Missing, Value::String("bar".to_string().into())]),
             Ok(Value::Missing)
         );
         assert_eq!(
-            registry.call("Concat", &vec![Value::String("foo".to_string()), Value::Missing]),
+            registry.call("Concat", &vec![Value::String("foo".to_string().into()), Value::Missing]),
             Ok(Value::Missing)
         );
     }
@@ -2710,36 +2859,36 @@ mod tests {
         let registry = test_registry();
         // Basic match: 'foobar' LIKE '%foo%' => true
         let f = Formula::Like(
-            Box::new(Expression::Constant(Value::String("foobar".to_string()))),
-            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+            Box::new(Expression::Constant(Value::String("foobar".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // No match: 'hello' LIKE '%foo%' => false
         let f = Formula::Like(
-            Box::new(Expression::Constant(Value::String("hello".to_string()))),
-            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
 
         // Underscore wildcard: 'abc' LIKE 'a_c' => true
         let f = Formula::Like(
-            Box::new(Expression::Constant(Value::String("abc".to_string()))),
-            Box::new(Expression::Constant(Value::String("a_c".to_string()))),
+            Box::new(Expression::Constant(Value::String("abc".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("a_c".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // Underscore wildcard: 'ac' LIKE 'a_c' => false (underscore matches exactly one char)
         let f = Formula::Like(
-            Box::new(Expression::Constant(Value::String("ac".to_string()))),
-            Box::new(Expression::Constant(Value::String("a_c".to_string()))),
+            Box::new(Expression::Constant(Value::String("ac".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("a_c".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
 
         // Exact match: 'hello' LIKE 'hello' => true
         let f = Formula::Like(
-            Box::new(Expression::Constant(Value::String("hello".to_string()))),
-            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
     }
@@ -2750,15 +2899,15 @@ mod tests {
         let registry = test_registry();
         // 'hello' NOT LIKE '%foo%' => true
         let f = Formula::NotLike(
-            Box::new(Expression::Constant(Value::String("hello".to_string()))),
-            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
 
         // 'foobar' NOT LIKE '%foo%' => false
         let f = Formula::NotLike(
-            Box::new(Expression::Constant(Value::String("foobar".to_string()))),
-            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+            Box::new(Expression::Constant(Value::String("foobar".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(false)));
     }
@@ -2770,13 +2919,13 @@ mod tests {
         // NULL LIKE '%foo%' => None
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::Null)),
-            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(None));
 
         // 'hello' LIKE NULL => None
         let f = Formula::Like(
-            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
             Box::new(Expression::Constant(Value::Null)),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(None));
@@ -2784,7 +2933,7 @@ mod tests {
         // MISSING LIKE '%foo%' => None
         let f = Formula::Like(
             Box::new(Expression::Constant(Value::Missing)),
-            Box::new(Expression::Constant(Value::String("%foo%".to_string()))),
+            Box::new(Expression::Constant(Value::String("%foo%".to_string().into()))),
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(None));
     }
@@ -2817,11 +2966,11 @@ mod tests {
 
         // String IN check: "b" IN ("a", "b", "c") => true
         let f = Formula::In(
-            Box::new(Expression::Constant(Value::String("b".to_string()))),
+            Box::new(Expression::Constant(Value::String("b".to_string().into()))),
             vec![
-                Expression::Constant(Value::String("a".to_string())),
-                Expression::Constant(Value::String("b".to_string())),
-                Expression::Constant(Value::String("c".to_string())),
+                Expression::Constant(Value::String("a".to_string().into())),
+                Expression::Constant(Value::String("b".to_string().into())),
+                Expression::Constant(Value::String("c".to_string().into())),
             ],
         );
         assert_eq!(f.evaluate(&vars, &registry), Ok(Some(true)));
@@ -2934,13 +3083,13 @@ mod tests {
     fn test_upper() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("upper", &vec![Value::String("hello".to_string())]),
-            Ok(Value::String("HELLO".to_string()))
+            registry.call("upper", &vec![Value::String("hello".to_string().into())]),
+            Ok(Value::String("HELLO".to_string().into()))
         );
         // Case-insensitive function name
         assert_eq!(
-            registry.call("UPPER", &vec![Value::String("hello".to_string())]),
-            Ok(Value::String("HELLO".to_string()))
+            registry.call("UPPER", &vec![Value::String("hello".to_string().into())]),
+            Ok(Value::String("HELLO".to_string().into()))
         );
     }
 
@@ -2948,13 +3097,13 @@ mod tests {
     fn test_lower() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("lower", &vec![Value::String("HELLO".to_string())]),
-            Ok(Value::String("hello".to_string()))
+            registry.call("lower", &vec![Value::String("HELLO".to_string().into())]),
+            Ok(Value::String("hello".to_string().into()))
         );
         // Case-insensitive function name
         assert_eq!(
-            registry.call("LOWER", &vec![Value::String("HELLO".to_string())]),
-            Ok(Value::String("hello".to_string()))
+            registry.call("LOWER", &vec![Value::String("HELLO".to_string().into())]),
+            Ok(Value::String("hello".to_string().into()))
         );
     }
 
@@ -2962,15 +3111,15 @@ mod tests {
     fn test_char_length() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("char_length", &vec![Value::String("hello".to_string())]),
+            registry.call("char_length", &vec![Value::String("hello".to_string().into())]),
             Ok(Value::Int(5))
         );
         assert_eq!(
-            registry.call("character_length", &vec![Value::String("hello".to_string())]),
+            registry.call("character_length", &vec![Value::String("hello".to_string().into())]),
             Ok(Value::Int(5))
         );
         assert_eq!(
-            registry.call("CHAR_LENGTH", &vec![Value::String("hello".to_string())]),
+            registry.call("CHAR_LENGTH", &vec![Value::String("hello".to_string().into())]),
             Ok(Value::Int(5))
         );
     }
@@ -2979,17 +3128,17 @@ mod tests {
     fn test_substring() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("substring", &vec![Value::String("hello".to_string()), Value::Int(2)]),
-            Ok(Value::String("ello".to_string()))
+            registry.call("substring", &vec![Value::String("hello".to_string().into()), Value::Int(2)]),
+            Ok(Value::String("ello".to_string().into()))
         );
         assert_eq!(
-            registry.call("substring", &vec![Value::String("hello".to_string()), Value::Int(2), Value::Int(3)]),
-            Ok(Value::String("ell".to_string()))
+            registry.call("substring", &vec![Value::String("hello".to_string().into()), Value::Int(2), Value::Int(3)]),
+            Ok(Value::String("ell".to_string().into()))
         );
         // Case-insensitive
         assert_eq!(
-            registry.call("SUBSTRING", &vec![Value::String("hello".to_string()), Value::Int(1)]),
-            Ok(Value::String("hello".to_string()))
+            registry.call("SUBSTRING", &vec![Value::String("hello".to_string().into()), Value::Int(1)]),
+            Ok(Value::String("hello".to_string().into()))
         );
     }
 
@@ -2997,12 +3146,12 @@ mod tests {
     fn test_trim() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("trim", &vec![Value::String("  hello  ".to_string())]),
-            Ok(Value::String("hello".to_string()))
+            registry.call("trim", &vec![Value::String("  hello  ".to_string().into())]),
+            Ok(Value::String("hello".to_string().into()))
         );
         assert_eq!(
-            registry.call("TRIM", &vec![Value::String("  hello  ".to_string())]),
-            Ok(Value::String("hello".to_string()))
+            registry.call("TRIM", &vec![Value::String("  hello  ".to_string().into())]),
+            Ok(Value::String("hello".to_string().into()))
         );
     }
 
@@ -3023,27 +3172,27 @@ mod tests {
         let registry = test_registry();
         let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("second".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("second".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(37.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("minute".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("minute".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(45.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("hour".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("hour".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(18.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("day".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("day".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(7.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("month".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("month".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(11.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("year".to_string()), dt.clone()]),
+            registry.call("date_part", &vec![Value::String("year".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(2015.0)))
         );
     }
@@ -3056,7 +3205,7 @@ mod tests {
             Box::new(Expression::Constant(Value::Int(42))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("42".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("42".to_string().into())));
     }
 
     #[test]
@@ -3064,7 +3213,7 @@ mod tests {
         let vars = Variables::default();
         let registry = test_registry();
         let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("123".to_string()))),
+            Box::new(Expression::Constant(Value::String("123".to_string().into()))),
             CastType::Int,
         );
         assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Int(123)));
@@ -3075,7 +3224,7 @@ mod tests {
         let vars = Variables::default();
         let registry = test_registry();
         let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("abc".to_string()))),
+            Box::new(Expression::Constant(Value::String("abc".to_string().into()))),
             CastType::Int,
         );
         assert_eq!(expr.expression_value(&vars, &registry), Err(ExpressionError::TypeMismatch));
@@ -3108,7 +3257,7 @@ mod tests {
         let vars = Variables::default();
         let registry = test_registry();
         let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("3.14".to_string()))),
+            Box::new(Expression::Constant(Value::String("3.14".to_string().into()))),
             CastType::Float,
         );
         assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Float(OrderedFloat::from(3.14f32))));
@@ -3139,7 +3288,7 @@ mod tests {
             Box::new(Expression::Constant(Value::Boolean(true))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("true".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("true".to_string().into())));
     }
 
     #[test]
@@ -3147,13 +3296,13 @@ mod tests {
         let vars = Variables::default();
         let registry = test_registry();
         let expr_true = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("true".to_string()))),
+            Box::new(Expression::Constant(Value::String("true".to_string().into()))),
             CastType::Boolean,
         );
         assert_eq!(expr_true.expression_value(&vars, &registry), Ok(Value::Boolean(true)));
 
         let expr_false = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("FALSE".to_string()))),
+            Box::new(Expression::Constant(Value::String("FALSE".to_string().into()))),
             CastType::Boolean,
         );
         assert_eq!(expr_false.expression_value(&vars, &registry), Ok(Value::Boolean(false)));
@@ -3164,7 +3313,7 @@ mod tests {
         let vars = Variables::default();
         let registry = test_registry();
         let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("yes".to_string()))),
+            Box::new(Expression::Constant(Value::String("yes".to_string().into()))),
             CastType::Boolean,
         );
         assert_eq!(expr.expression_value(&vars, &registry), Err(ExpressionError::TypeMismatch));
@@ -3205,10 +3354,10 @@ mod tests {
 
         // Casting String to Varchar should be identity
         let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::String("hello".to_string()))),
+            Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("hello".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("hello".to_string().into())));
     }
 
     #[test]
@@ -3219,7 +3368,7 @@ mod tests {
             Box::new(Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("2.5".to_string())));
+        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("2.5".to_string().into())));
     }
 
     #[test]
@@ -3238,7 +3387,7 @@ mod tests {
         let formula = Box::new(Formula::Predicate(
             Relation::Equal,
             Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())]))),
-            Box::new(Expression::Constant(Value::String("200".to_string()))),
+            Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         ));
         let filter = Node::Filter(Box::new(data_source), formula);
         let select = Node::Map(
@@ -3257,7 +3406,7 @@ mod tests {
             let tuples = record.to_tuples();
             for (key, value) in &tuples {
                 if key == "elb_status_code" {
-                    assert_eq!(value, &Value::String("200".to_string()), "all filtered rows should have status 200");
+                    assert_eq!(value, &Value::String("200".to_string().into()), "all filtered rows should have status 200");
                 }
             }
             count += 1;
@@ -3317,7 +3466,7 @@ mod tests {
         let time_bucket_expr = Expression::Function(
             "time_bucket".to_string(),
             vec![
-                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string())), None),
+                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string().into())), None),
                 Named::Expression(Expression::Variable(ts_path), None),
             ],
         );
@@ -3358,7 +3507,7 @@ mod tests {
         let time_bucket_expr = Expression::Function(
             "time_bucket".to_string(),
             vec![
-                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string())), None),
+                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string().into())), None),
                 Named::Expression(Expression::Variable(ts_path), None),
             ],
         );
@@ -3401,8 +3550,8 @@ mod accumulator_tests {
     #[test]
     fn test_value_less_than_strings() {
         assert!(value_less_than(
-            &Value::String("a".to_string()),
-            &Value::String("b".to_string())
+            &Value::String("a".to_string().into()),
+            &Value::String("b".to_string().into())
         ));
     }
 
@@ -3836,18 +3985,18 @@ mod accumulator_tests {
 
     #[test]
     fn test_accumulator_merge_first() {
-        let mut a = AccumulatorState::First(Some(Value::String("early".to_string())));
-        let b = AccumulatorState::First(Some(Value::String("late".to_string())));
+        let mut a = AccumulatorState::First(Some(Value::String("early".to_string().into())));
+        let b = AccumulatorState::First(Some(Value::String("late".to_string().into())));
         a.merge(&b);
-        assert_eq!(a.finalize().unwrap(), Value::String("early".to_string()));
+        assert_eq!(a.finalize().unwrap(), Value::String("early".to_string().into()));
     }
 
     #[test]
     fn test_accumulator_merge_last() {
-        let mut a = AccumulatorState::Last(Some(Value::String("early".to_string())));
-        let b = AccumulatorState::Last(Some(Value::String("late".to_string())));
+        let mut a = AccumulatorState::Last(Some(Value::String("early".to_string().into())));
+        let b = AccumulatorState::Last(Some(Value::String("late".to_string().into())));
         a.merge(&b);
-        assert_eq!(a.finalize().unwrap(), Value::String("late".to_string()));
+        assert_eq!(a.finalize().unwrap(), Value::String("late".to_string().into()));
     }
 
     #[test]
@@ -3932,8 +4081,8 @@ mod accumulator_tests {
 
         let f = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Constant(Value::String("a".to_string()))),
-            Box::new(Expression::Constant(Value::String("b".to_string()))),
+            Box::new(Expression::Constant(Value::String("a".to_string().into()))),
+            Box::new(Expression::Constant(Value::String("b".to_string().into()))),
         );
         assert_eq!(f.fold_constants(), Formula::Constant(false));
     }

@@ -120,7 +120,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             (Value::String(json_str), Value::String(path)) => {
                 let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
                 match json_navigate(&parsed, path) {
-                    Some(val) => Ok(Value::String(json::stringify(val))),
+                    Some(val) => Ok(Value::String(json::stringify(val).into())),
                     None => Ok(Value::Null),
                 }
             }
@@ -143,12 +143,12 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         } else if val.is_null() {
                             Ok(Value::Null)
                         } else if val.is_boolean() {
-                            Ok(Value::String(val.as_bool().unwrap().to_string()))
+                            Ok(Value::String(val.as_bool().unwrap().to_string().into()))
                         } else if val.is_number() {
                             // Use json::stringify to get the raw number representation
-                            Ok(Value::String(json::stringify(val)))
+                            Ok(Value::String(json::stringify(val).into()))
                         } else if val.is_string() {
-                            Ok(Value::String(val.as_str().unwrap().to_string()))
+                            Ok(Value::String(val.as_str().unwrap().into()))
                         } else {
                             Ok(Value::Null)
                         }
@@ -248,9 +248,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
             Value::String(s) => Ok(Value::String(s.clone())),
-            Value::Int(i) => Ok(Value::String(i.to_string())),
-            Value::Boolean(b) => Ok(Value::String(b.to_string())),
-            Value::Float(f) => Ok(Value::String(f.to_string())),
+            Value::Int(i) => Ok(Value::String(i.to_string().into())),
+            Value::Boolean(b) => Ok(Value::String(b.to_string().into())),
+            Value::Float(f) => Ok(Value::String(f.to_string().into())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;

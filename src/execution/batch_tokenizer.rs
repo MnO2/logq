@@ -2,7 +2,8 @@
 
 /// Tokenize a single line into field byte ranges (start, end).
 /// Mirrors the existing LogTokenizer but works on &[u8] and returns
-/// byte offsets instead of string slices.
+/// byte offsets instead of string slices. Uses memchr for SIMD-accelerated
+/// delimiter scanning.
 pub(crate) fn tokenize_line(line: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::with_capacity(20);
     let mut pos = 0;
@@ -21,43 +22,40 @@ pub(crate) fn tokenize_line(line: &[u8]) -> Vec<(usize, usize)> {
             b'"' => {
                 let start = pos;
                 pos += 1;
-                while pos < len && line[pos] != b'"' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
+                if let Some(offset) = memchr::memchr(b'"', &line[pos..]) {
+                    pos += offset + 1;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
             b'\'' => {
                 let start = pos;
                 pos += 1;
-                while pos < len && line[pos] != b'\'' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
+                if let Some(offset) = memchr::memchr(b'\'', &line[pos..]) {
+                    pos += offset + 1;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
             b'[' => {
                 let start = pos;
                 pos += 1;
-                while pos < len && line[pos] != b']' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
+                if let Some(offset) = memchr::memchr(b']', &line[pos..]) {
+                    pos += offset + 1;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
             _ => {
                 let start = pos;
-                while pos < len {
-                    match line[pos] {
-                        b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'[' | b']' => break,
-                        _ => pos += 1,
-                    }
+                // SIMD scan for next delimiter (space, tab, or quote start)
+                if let Some(offset) = memchr::memchr3(b' ', b'\t', b'"', &line[pos..]) {
+                    pos += offset;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
@@ -87,43 +85,39 @@ pub(crate) fn tokenize_line_into(line: &[u8], fields: &mut Vec<(usize, usize)>) 
             b'"' => {
                 let start = pos;
                 pos += 1;
-                while pos < len && line[pos] != b'"' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
+                if let Some(offset) = memchr::memchr(b'"', &line[pos..]) {
+                    pos += offset + 1;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
             b'\'' => {
                 let start = pos;
                 pos += 1;
-                while pos < len && line[pos] != b'\'' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
+                if let Some(offset) = memchr::memchr(b'\'', &line[pos..]) {
+                    pos += offset + 1;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
             b'[' => {
                 let start = pos;
                 pos += 1;
-                while pos < len && line[pos] != b']' {
-                    pos += 1;
-                }
-                if pos < len {
-                    pos += 1;
+                if let Some(offset) = memchr::memchr(b']', &line[pos..]) {
+                    pos += offset + 1;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
             _ => {
                 let start = pos;
-                while pos < len {
-                    match line[pos] {
-                        b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'[' | b']' => break,
-                        _ => pos += 1,
-                    }
+                if let Some(offset) = memchr::memchr3(b' ', b'\t', b'"', &line[pos..]) {
+                    pos += offset;
+                } else {
+                    pos = len;
                 }
                 fields.push((start, pos));
             }
