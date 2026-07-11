@@ -211,6 +211,12 @@ Add `clf` and `combined` as built-in formats implemented *as* predefined regex-f
 
 **Done when:** `cargo install logq` gets 0.2.0 and a GitHub Release carries binaries for the three platforms.
 
+**Local preparation status (2026-07-11):** version 0.2.0 and its user-facing changelog are committed;
+`cargo publish --dry-run`, the Rust 1.85 gate, Clippy, tests, `cargo audit`, and `cargo deny` pass. dist
+0.32.0 plans four requested targets and successfully built/smoke-tested the Apple Silicon archive.
+The WS9 checkbox remains open because publishing to crates.io and pushing tag `v0.2.0` (which triggers
+the GitHub Release workflow) are external maintainer actions and were not performed locally.
+
 ---
 
 ## Out of scope (do not implement, even if adjacent)
