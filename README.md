@@ -36,9 +36,22 @@ versions, memory measurements, limitations, and known optimization gaps.
 
 ## Installation
 
-Building from source requires Rust 1.85 or newer.
+Prebuilt archives for Apple Silicon and Intel macOS, x86-64 musl Linux, and x86-64 Windows are
+attached to each [GitHub Release](https://github.com/MnO2/logq/releases). The generated installers
+select the matching archive automatically:
 
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/MnO2/logq/releases/latest/download/logq-installer.sh | sh
 ```
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/MnO2/logq/releases/latest/download/logq-installer.ps1 | iex"
+```
+
+Building from crates.io requires Rust 1.85 or newer:
+
+```bash
 cargo install logq
 ```
 

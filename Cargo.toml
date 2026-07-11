@@ -73,3 +73,8 @@ harness = false
 name = "bench_sort"
 harness = false
 required-features = ["bench-internals"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
