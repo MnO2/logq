@@ -32,11 +32,33 @@ Peak RSS is a separate single warm-cache run measured with `/usr/bin/time`.
 | Full-file count | 7.7 MiB | 148.5 MiB | 303.9 MiB | 8.1 MiB |
 | Selective status filter | 7.8 MiB | 152.8 MiB | 406.7 MiB | 8.0 MiB |
 | Group by status | 7.8 MiB | 156.8 MiB | 412.6 MiB | 8.2 MiB |
-| Top-10 latency | 233.3 MiB | 153.8 MiB | 409.7 MiB | — |
+| Top-10 latency | 7.8 MiB | 153.8 MiB | 409.7 MiB | — |
 | User-agent substring | 9.0 MiB | 150.3 MiB | 408.4 MiB | 8.0 MiB |
 
-logq's streaming paths are notably memory-efficient. The exception is
-`ORDER BY ... LIMIT`, which currently materializes and sorts the full input.
+logq's streaming paths are notably memory-efficient. The original top-10 run
+used 233.3 MiB; after WS8's bounded-heap implementation, a repeat peak-RSS run
+used 7.8 MiB while still considering the complete input.
+
+## 1 GiB materialization ceilings
+
+These single-process runs use the deterministic `jsonl-1gb.jsonl` corpus
+(1,073,741,862 bytes, 4,680,190 rows) on the same host. Output was streamed to
+`/dev/null`; peak RSS is `/usr/bin/time -l`'s maximum resident set size. The
+queries deliberately stress high-cardinality state rather than the small
+grouping keys in the comparison suite.
+
+| Operation | Query shape | Peak RSS | Wall time |
+| --- | --- | ---: | ---: |
+| High-cardinality GROUP BY | `GROUP BY request_id` | 1,318.6 MiB | 14.75 s |
+| Full ORDER BY | `ORDER BY latency DESC` (no limit) | 2,140.6 MiB | 10.28 s |
+| DISTINCT | `SELECT DISTINCT request_id` | 1,485.4 MiB | 11.00 s |
+
+The input SHA-256 was
+`cc87df3720c3e5b7703874bd2181f34600a928d33bdd73cb223b2531385e4801`.
+These measurements motivate the soft memory budget shipped later in WS8: full
+sort is the highest observed ceiling, while high-cardinality grouping and
+deduplication also exceed the input size once hash-table and record overhead is
+included.
 
 ## Reproduce
 
@@ -81,9 +103,15 @@ These results define the performance work for WS8:
 3. **Low-cardinality grouping:** grouping only nine status values is 18.6×
    slower than DuckDB despite using 7.8 MiB RSS. Determine whether parsing,
    hashing, or a batch-to-row boundary dominates before optimizing it.
-4. **Bounded top-N:** `ORDER BY latency DESC LIMIT 10` uses 233.3 MiB—more than
-   twice the input size—and is 14.4× slower than DuckDB. Replace the full sort
-   with an O(N log K) bounded heap when a limit is present.
+4. **Bounded top-N:** resolved in WS8 with an O(N log K) heap. Peak RSS for the
+   100 MiB top-10 query fell from 233.3 MiB to 7.8 MiB.
+
+Pipeline-aware `explain` reports the same fallback for all five shared queries:
+the dynamic `jsonl` datasource. There is no isolated filter, grouping, or sort
+node to add to the batch pipeline—the fixed-schema versions of those operators
+already run in batch mode. Dynamic JSON batching would first require schema
+inference and typed JSON column construction, so WS8 does not add a speculative
+operator-specific fast path.
 
 ## Limitations
 
