@@ -119,6 +119,8 @@ WS1 and WS2 are independent and can run in parallel. Everything else should land
 
 **Done when:** fuzzer runs clean for 1 CPU-hour, ≥4 property tests merged, conformance harness runs in `cargo test` with an explicit skip list.
 
+**Execution note (2026-07-11):** Unbounded fuzzing found and fixed two numeric-overflow panics, then reached the recursive grammar's stack limit using a 2,886-byte adversarial parenthesis nest. Per owner direction, the maintained target is bounded to 512 bytes (versus 184 bytes for the largest seed), the depth limitation is documented, and work proceeds without rewriting the nom parser.
+
 ---
 
 ## WS5 — Competitor benchmark suite
@@ -223,7 +225,7 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 - [x] WS1 Clippy + CI
 - [x] WS2 Gzip + globs
 - [x] WS3 Dependency modernization
-- [ ] WS4 Fuzzing + conformance
+- [x] WS4 Fuzzing + conformance
 - [ ] WS5 Competitor benchmarks
 - [ ] WS6 Error messages
 - [ ] WS7a INNER JOIN
