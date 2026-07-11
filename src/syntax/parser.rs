@@ -8,7 +8,7 @@ use nom::{
     bytes::complete::{escaped, tag, tag_no_case},
     character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
     combinator::{cut, map, map_res, not, opt},
-    error::context,
+    error::{Error, ErrorKind, context},
     multi::{many0, many1, separated_list0},
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
@@ -700,7 +700,7 @@ fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, nom::error::
 }
 
 fn parse_expression_op(i: &str) -> IResult<&str, &str, nom::error::Error<&str>> {
-    alt((
+    let symbolic: IResult<&str, &str, Error<&str>> = alt((
         tag("||"),
         tag("+"),
         tag("-"),
@@ -708,13 +708,24 @@ fn parse_expression_op(i: &str) -> IResult<&str, &str, nom::error::Error<&str>> 
         tag("/"),
         tag("="),
         tag("!="),
-        tag(">"),
-        tag("<"),
         tag(">="),
         tag("<="),
-        tag_no_case("and"),
-        tag_no_case("or"),
-    ))(i)
+        tag(">"),
+        tag("<"),
+    ))(i);
+    if let Ok(result) = symbolic {
+        return Ok(result);
+    }
+
+    for keyword in ["and", "or"] {
+        if let Ok((remaining, operator)) = tag_no_case::<&str, &str, Error<&str>>(keyword)(i)
+            && !remaining.starts_with(|ch: char| ch.is_alphanumeric() || ch == '_')
+        {
+            return Ok((remaining, operator));
+        }
+    }
+
+    Err(nom::Err::Error(Error::new(i, ErrorKind::Tag)))
 }
 
 fn parse_postfix_is(input: &str, expr: ast::Expression) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
@@ -2128,6 +2139,21 @@ mod test {
         // LIKE should work with AND/OR
         let result = select_query("select a from it where a like \"%foo%\" and b = 1");
         assert!(result.is_ok(), "LIKE with AND should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_comparison_operators_prefer_longest_token() {
+        for query in ["select a from it where a >= 1", "select a from it where a <= 1"] {
+            let (remaining, _) = select_query(query).unwrap();
+            assert_eq!(remaining, "", "query was only partially parsed: {query}");
+        }
+    }
+
+    #[test]
+    fn test_logical_operator_does_not_consume_order_keyword_prefix() {
+        let query = "select a from it where a > 0 order by a asc";
+        let (remaining, _) = select_query(query).unwrap();
+        assert_eq!(remaining, "");
     }
 
     #[test]

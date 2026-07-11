@@ -1,0 +1,1 @@
+select a from it where a > 0 order by a asc
