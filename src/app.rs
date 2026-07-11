@@ -373,6 +373,13 @@ pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry)
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
 
+    match physical_plan.execution_pipeline() {
+        execution::types::ExecutionPipeline::Batch => println!("Execution pipeline: batch"),
+        execution::types::ExecutionPipeline::Row(fallback) => {
+            println!("Execution pipeline: row");
+            println!("Batch fallback: {} ({})", fallback.node, fallback.reason);
+        }
+    }
     println!("Query Plan:");
     println!("{:?}", physical_plan);
     Ok(())

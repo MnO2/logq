@@ -16,6 +16,7 @@ Phase 4 complete. All phases done.
 - **WS7c:** Added `clf` and `combined` formats for standard Apache/nginx logs as predefined definitions on the regex-format engine, including typed timestamps, status codes, byte counts, and null handling for `-` numeric placeholders.
 - **WS7d:** Completed `time_bucket` with compact `s`/`m`/`h`/`d` intervals and offset-preserving calendar-day buckets, including grouped coverage through both batch and row execution pipelines.
 - **WS7e:** Added streaming `--output ndjson`, emitting one JSON object per row without buffering the complete result set.
+- **WS8 (observability):** Extended `explain` with the selected batch/row execution pipeline and a specific plan-node reason whenever batch execution falls back.
 
 ## Completed Tasks
 

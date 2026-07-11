@@ -361,6 +361,9 @@ Print the query plan without executing:
 logq explain 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t'
 ```
 
+`explain` reports whether the query uses the batch or row pipeline. When a query falls back to row
+execution, it also names the first unsupported plan node and the reason.
+
 ### Schema
 
 Show field names and types for a log format:

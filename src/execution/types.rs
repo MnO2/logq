@@ -734,7 +734,122 @@ pub enum Node {
     Except(Box<Node>, Box<Node>, bool),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchFallback {
+    pub node: &'static str,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionPipeline {
+    Batch,
+    Row(BatchFallback),
+}
+
 impl Node {
+    pub fn execution_pipeline(&self) -> ExecutionPipeline {
+        if matches!(self, Node::DataSource(..)) {
+            return ExecutionPipeline::Row(BatchFallback {
+                node: "DataSource",
+                reason: "bare scans use the row reader".to_string(),
+            });
+        }
+
+        match self.batch_support() {
+            Ok(()) => ExecutionPipeline::Batch,
+            Err(fallback) => ExecutionPipeline::Row(fallback),
+        }
+    }
+
+    fn batch_support(&self) -> Result<(), BatchFallback> {
+        match self {
+            Node::DataSource(data_source, bindings) => {
+                if !bindings.is_empty() {
+                    return Err(BatchFallback {
+                        node: "DataSource",
+                        reason: "table bindings require row projection".to_string(),
+                    });
+                }
+                let format = match data_source {
+                    DataSource::File(_, format, _) | DataSource::Files(_, format, _) => format,
+                    DataSource::Stdin(_, _) => {
+                        return Err(BatchFallback {
+                            node: "DataSource",
+                            reason: "stdin uses the row reader".to_string(),
+                        });
+                    }
+                };
+                if crate::execution::datasource::is_dynamic_format(format) {
+                    return Err(BatchFallback {
+                        node: "DataSource",
+                        reason: format!("dynamic format `{format}`"),
+                    });
+                }
+                if matches!(data_source, DataSource::Files(paths, _, _) if paths.is_empty()) {
+                    return Err(BatchFallback {
+                        node: "DataSource",
+                        reason: "empty file list".to_string(),
+                    });
+                }
+                Ok(())
+            }
+            Node::Filter(source, _) | Node::Limit(_, source) | Node::OrderBy(_, _, source) | Node::Distinct(source) => {
+                source.batch_support()
+            }
+            Node::Map(named_list, source) => {
+                let is_simple = named_list
+                    .iter()
+                    .all(|named| matches!(named, Named::Expression(Expression::Variable(_), _) | Named::Star));
+                if !is_simple {
+                    return Err(BatchFallback {
+                        node: "Map",
+                        reason: "complex projection expression".to_string(),
+                    });
+                }
+                if named_list.iter().any(|named| matches!(named, Named::Star))
+                    && matches!(source.as_ref(), Node::DataSource(..))
+                {
+                    return Err(BatchFallback {
+                        node: "Map",
+                        reason: "bare SELECT * avoids a column-to-row round trip".to_string(),
+                    });
+                }
+                source.batch_support()
+            }
+            Node::GroupBy(keys, _, source) => {
+                if let Some(params) = Self::detect_streaming_groupby(keys, source) {
+                    params.map_source.batch_support()
+                } else {
+                    source.batch_support()
+                }
+            }
+            Node::CrossJoin(..) => Err(BatchFallback {
+                node: "CrossJoin",
+                reason: "join execution is row-based".to_string(),
+            }),
+            Node::LeftJoin(..) => Err(BatchFallback {
+                node: "LeftJoin",
+                reason: "join execution is row-based".to_string(),
+            }),
+            Node::HashJoin { .. } => Err(BatchFallback {
+                node: "HashJoin",
+                reason: "join execution is row-based".to_string(),
+            }),
+            Node::Union(..) => Err(BatchFallback {
+                node: "Union",
+                reason: "set operation is row-based".to_string(),
+            }),
+            Node::Intersect(..) => Err(BatchFallback {
+                node: "Intersect",
+                reason: "set operation is row-based".to_string(),
+            }),
+            Node::Except(..) => Err(BatchFallback {
+                node: "Except",
+                reason: "set operation is row-based".to_string(),
+            }),
+        }
+    }
+
     /// Walk down the plan tree to find the datasource format and path.
     fn find_datasource_format(&self) -> Option<(String, std::path::PathBuf)> {
         match self {

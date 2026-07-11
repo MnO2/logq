@@ -27,3 +27,39 @@ fn explain_help_preserves_table_option() {
     assert!(stdout.contains("--table"));
     assert!(stdout.contains("--format-file"));
 }
+
+#[test]
+fn explain_reports_batch_pipeline() {
+    let stdout = output(&[
+        "explain",
+        "select elb_status_code from it where sent_bytes > 0",
+        "--table",
+        "it:elb=data/AWSELB.log",
+    ]);
+    assert!(stdout.contains("Execution pipeline: batch"), "{stdout}");
+}
+
+#[test]
+fn explain_names_complex_projection_row_fallback() {
+    let stdout = output(&[
+        "explain",
+        "select upper(elb_status_code) from it",
+        "--table",
+        "it:elb=data/AWSELB.log",
+    ]);
+    assert!(stdout.contains("Execution pipeline: row"), "{stdout}");
+    assert!(
+        stdout.contains("Batch fallback: Map (complex projection expression)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn explain_names_dynamic_source_row_fallback() {
+    let stdout = output(&["explain", "select a from it", "--table", "it:jsonl=data/structured.log"]);
+    assert!(stdout.contains("Execution pipeline: row"), "{stdout}");
+    assert!(
+        stdout.contains("Batch fallback: DataSource (dynamic format `jsonl`)"),
+        "{stdout}"
+    );
+}
