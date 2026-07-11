@@ -2,12 +2,59 @@ use logq::app::{self, AppError, OutputMode};
 use logq::common;
 use logq::execution;
 
-use clap::load_yaml;
-use clap::App;
+use clap::{CommandFactory, Parser, Subcommand};
 use prettytable::{Cell, Row, Table};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+#[derive(Parser)]
+#[command(author, version, about = env!("CARGO_PKG_DESCRIPTION"))]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Select data using a query string.
+    Query {
+        /// Output format.
+        #[arg(long)]
+        output: Option<String>,
+        /// Table-to-file mapping. May be provided more than once.
+        #[arg(long = "table")]
+        tables: Vec<String>,
+        /// Number of threads for parallel scanning (0 = auto, 1 = sequential).
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Query string.
+        query: Option<String>,
+    },
+    /// Dump the query plan graph.
+    Explain {
+        /// Table-to-file mapping. May be provided more than once.
+        #[arg(long = "table")]
+        tables: Vec<String>,
+        /// Query string.
+        query: Option<String>,
+    },
+    /// Show the schema for a log file format.
+    Schema {
+        /// Log format.
+        r#type: Option<String>,
+    },
+}
+
+fn print_help(command: Option<&str>) {
+    let mut cli = Cli::command();
+    if let Some(command) = command {
+        cli.find_subcommand_mut(command).unwrap().print_help().unwrap();
+    } else {
+        cli.print_help().unwrap();
+    }
+    println!();
+}
 
 fn parse_table_specs<'a, I>(values: I) -> Result<common::types::DataSourceRegistry, AppError>
 where
@@ -71,14 +118,16 @@ where
 }
 
 fn main() {
-    let yaml = load_yaml!("cli.yml");
-    let app_m = App::from_yaml(yaml).get_matches();
-
-    match app_m.subcommand() {
-        ("query", Some(sub_m)) => {
-            if let Some(query_str) = sub_m.value_of("query") {
-                let output_mode = if let Some(output_format) = sub_m.value_of("output") {
-                    match OutputMode::from_str(output_format) {
+    match Cli::parse().command {
+        Some(Commands::Query {
+            output,
+            tables,
+            threads,
+            query,
+        }) => {
+            if let Some(query_str) = query {
+                let output_mode = if let Some(output_format) = output {
+                    match OutputMode::from_str(&output_format) {
                         Ok(output_mode) => output_mode,
                         Err(e) => {
                             eprintln!("{}", e);
@@ -89,53 +138,53 @@ fn main() {
                     OutputMode::Table
                 };
 
-                let threads: usize = sub_m.value_of("threads").and_then(|s| s.parse().ok()).unwrap_or(0);
+                let threads = threads.unwrap_or(0);
 
-                let result = if let Some(table_specs) = sub_m.values_of("table") {
-                    match parse_table_specs(table_specs) {
-                        Ok(data_sources) => app::run(query_str, data_sources, output_mode, threads),
+                let result = if tables.is_empty() {
+                    Err(AppError::InvalidTableSpecString)
+                } else {
+                    match parse_table_specs(tables.iter().map(String::as_str)) {
+                        Ok(data_sources) => app::run(&query_str, data_sources, output_mode, threads),
                         Err(e) => Err(e),
                     }
-                } else {
-                    Err(AppError::InvalidTableSpecString)
                 };
 
                 if let Err(e) = result {
                     println!("{}", e);
                 }
             } else {
-                println!("{}", sub_m.usage());
+                print_help(Some("query"));
             }
         }
-        ("explain", Some(sub_m)) => {
-            if let Some(query_str) = sub_m.value_of("query") {
-                let data_sources = if let Some(table_specs) = sub_m.values_of("table") {
-                    match parse_table_specs(table_specs) {
-                        Ok(ds) => ds,
-                        Err(e) => {
-                            println!("{}", e);
-                            return;
-                        }
-                    }
-                } else {
+        Some(Commands::Explain { tables, query }) => {
+            if let Some(query_str) = query {
+                let data_sources = if tables.is_empty() {
                     let mut ds = common::types::DataSourceRegistry::new();
                     ds.insert(
                         "it".to_string(),
                         common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
                     );
                     ds
+                } else {
+                    match parse_table_specs(tables.iter().map(String::as_str)) {
+                        Ok(ds) => ds,
+                        Err(e) => {
+                            println!("{}", e);
+                            return;
+                        }
+                    }
                 };
-                let result = app::explain(query_str, data_sources);
+                let result = app::explain(&query_str, data_sources);
 
                 if let Err(e) = result {
                     println!("{}", e);
                 }
             } else {
-                println!("{}", sub_m.usage());
+                print_help(Some("explain"));
             }
         }
-        ("schema", Some(sub_m)) => {
-            if let Some(type_str) = sub_m.value_of("type") {
+        Some(Commands::Schema { r#type }) => {
+            if let Some(type_str) = r#type {
                 if type_str == "elb" {
                     let schema = execution::datasource::ClassicLoadBalancerLogField::schema();
                     let mut table = Table::new();
@@ -187,9 +236,7 @@ fn main() {
                 println!("* s3");
             }
         }
-        _ => {
-            println!("{}", app_m.usage());
-        }
+        None => print_help(None),
     }
 }
 

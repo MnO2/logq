@@ -19,9 +19,8 @@ This document describes how logq processes a query from input to output. logq fo
 
 ```
 src/
-  main.rs                   CLI entry point (clap argument dispatch)
+  main.rs                   CLI entry point and clap derive definition
   app.rs                    Orchestrates the pipeline: parse → plan → execute → output
-  cli.yml                   clap CLI definition (YAML)
   common/
     types.rs                Value enum, DataSource, path resolution, type helpers
   syntax/
@@ -252,7 +251,7 @@ trait RecordRead {
 | Crate | Purpose |
 | --- | --- |
 | `nom` | Parser combinators |
-| `clap` | CLI argument parsing (YAML-based) |
+| `clap` | CLI argument parsing (derive API) |
 | `chrono` | DateTime handling |
 | `ordered-float` | Hashable/comparable floats |
 | `linked-hash-map` | Order-preserving maps for records |

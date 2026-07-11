@@ -7,6 +7,7 @@ Phase 4 complete. All phases done.
 
 - **WS1:** Cleared all compiler and Clippy warnings, restored all-target benchmark compilation, and modernized CI with current GitHub Actions, strict formatting/Clippy gates, an all-features check, and Linux/macOS/Windows tests.
 - **WS2:** Added transparent gzip input plus deterministic glob and comma-list expansion for tables. Mixed compressed/plain shards are supported, while eligible plain files retain per-file mmap scanning.
+- **WS3 (CLI):** Migrated from clap 2's YAML configuration to clap 4's derive API, with version metadata sourced directly from `Cargo.toml` and regression tests for the public command surface.
 
 ## Completed Tasks
 
