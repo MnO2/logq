@@ -163,14 +163,19 @@ Each operator wraps one or more child streams and transforms records on demand. 
 | `FilterStream` | Select | Evaluates predicate, passes matching records |
 | `LimitStream` | Limit | Passes first N records, then stops |
 | `GroupByStream` | GroupBy | Materializes all input, groups, computes aggregates |
-| `ProjectionStream` | OrderBy | Materializes all input, sorts, emits in order |
 | `DistinctStream` | Distinct | Tracks seen rows with HashSet, deduplicates |
 | `CrossJoinStream` | Cross Join | Nested-loop: for each left row, scans all right rows |
 | `LeftJoinStream` | Left Join | Nested-loop with NULL padding for non-matches |
 | `UnionStream` | Union | Drains left stream, then right stream |
 | `IntersectStream` | Intersect | Materializes right into multiset, filters left |
 | `ExceptStream` | Except | Materializes right into multiset, excludes from left |
-| `InMemoryStream` | Subquery | Materializes a subquery result for repeated access |
+| `InMemoryStream` | OrderBy / Top-N / Subquery | Emits materialized or bounded-heap results |
+
+`ORDER BY ... LIMIT k` retains at most `k` records in `BoundedTopN`; an unbounded ORDER BY still
+materializes the full input. When `--max-memory` is present, `Node::get_with_memory_limit` selects
+the budget-aware row path and passes a soft estimator through all materializing operators. The
+estimator counts owned keys, values, records, hash state, and join inputs, returning
+`MemoryBudgetExceeded` before the configured ceiling is crossed.
 
 ### Expression Evaluation
 

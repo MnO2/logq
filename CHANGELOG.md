@@ -19,6 +19,7 @@ Phase 4 complete. All phases done.
 - **WS8 (observability):** Extended `explain` with the selected batch/row execution pipeline and a specific plan-node reason whenever batch execution falls back.
 - **WS8 (top-N):** Added bounded-heap execution for `ORDER BY ... LIMIT` in both batch and row pipelines, with tests that cap retained candidates at `k`. Corrected parallel batch planning so LIMIT never truncates the input before sorting, grouping, filtering, or deduplication.
 - **WS8 (ceilings):** Measured the deterministic 1 GiB JSONL corpus: high-cardinality GROUP BY peaked at 1,318.6 MiB RSS, full ORDER BY at 2,140.6 MiB, and DISTINCT at 1,485.4 MiB. The WS5 query set consistently falls back at the dynamic JSONL datasource rather than at an unsupported batch operator.
+- **WS8 (memory budget):** Added `--max-memory` with byte and `KiB`/`MiB`/`GiB` values. Budget-aware execution now aborts sorting, top-N, grouping, deduplication, set operations, and materialized joins with a clear error before estimated state crosses the ceiling.
 
 ## Completed Tasks
 

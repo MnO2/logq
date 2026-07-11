@@ -391,6 +391,16 @@ pub fn run(
     output_mode: OutputMode,
     threads: usize,
 ) -> AppResult<()> {
+    run_with_memory_limit(query_str, data_sources, output_mode, threads, None)
+}
+
+pub fn run_with_memory_limit(
+    query_str: &str,
+    data_sources: common::types::DataSourceRegistry,
+    output_mode: OutputMode,
+    threads: usize,
+    max_memory: Option<usize>,
+) -> AppResult<()> {
     let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
@@ -398,7 +408,7 @@ pub fn run(
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    let mut stream = physical_plan.get(variables, registry, threads)?;
+    let mut stream = physical_plan.get_with_memory_limit(variables, registry, threads, max_memory)?;
 
     match output_mode {
         OutputMode::Table => {

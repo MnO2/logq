@@ -28,6 +28,9 @@ enum Commands {
         /// Number of threads for parallel scanning (0 = auto, 1 = sequential).
         #[arg(long)]
         threads: Option<usize>,
+        /// Soft memory ceiling in bytes or with KiB/MiB/GiB suffixes.
+        #[arg(long = "max-memory")]
+        max_memory: Option<String>,
         /// TOML definition for tables using the regex format.
         #[arg(long = "format-file")]
         format_file: Option<PathBuf>,
@@ -138,6 +141,7 @@ fn main() {
             output,
             tables,
             threads,
+            max_memory,
             format_file,
             query,
         }) => {
@@ -155,12 +159,21 @@ fn main() {
                 };
 
                 let threads = threads.unwrap_or(0);
+                let max_memory = match max_memory.as_deref().map(parse_memory_size).transpose() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                };
 
                 let result = if tables.is_empty() {
                     Err(AppError::InvalidTableSpecString)
                 } else {
                     match parse_table_specs(tables.iter().map(String::as_str), format_file.as_deref()) {
-                        Ok(data_sources) => app::run(&query_str, data_sources, output_mode, threads),
+                        Ok(data_sources) => {
+                            app::run_with_memory_limit(&query_str, data_sources, output_mode, threads, max_memory)
+                        }
                         Err(e) => Err(e),
                     }
                 };
@@ -260,10 +273,45 @@ fn main() {
     }
 }
 
+fn parse_memory_size(input: &str) -> Result<usize, String> {
+    let input = input.trim();
+    let split = input
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(input.len());
+    if split == 0 {
+        return Err(format!("invalid memory size `{input}`"));
+    }
+    let value = input[..split]
+        .parse::<usize>()
+        .map_err(|_| format!("invalid memory size `{input}`"))?;
+    let multiplier = match input[split..].to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "kb" => 1_000,
+        "mb" => 1_000_000,
+        "gb" => 1_000_000_000,
+        "kib" => 1024,
+        "mib" => 1024 * 1024,
+        "gib" => 1024 * 1024 * 1024,
+        _ => return Err(format!("invalid memory size `{input}`")),
+    };
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("memory size `{input}` is too large"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn parses_human_readable_memory_sizes() {
+        assert_eq!(parse_memory_size("512").unwrap(), 512);
+        assert_eq!(parse_memory_size("1KiB").unwrap(), 1024);
+        assert_eq!(parse_memory_size("2MiB").unwrap(), 2 * 1024 * 1024);
+        assert_eq!(parse_memory_size("3GB").unwrap(), 3_000_000_000);
+        assert!(parse_memory_size("lots").is_err());
+    }
 
     #[test]
     fn parse_table_specs_expands_globs_in_sorted_order() {

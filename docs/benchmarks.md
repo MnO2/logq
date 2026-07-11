@@ -55,7 +55,7 @@ grouping keys in the comparison suite.
 
 The input SHA-256 was
 `cc87df3720c3e5b7703874bd2181f34600a928d33bdd73cb223b2531385e4801`.
-These measurements motivate the soft memory budget shipped later in WS8: full
+These measurements motivate the soft memory budget shipped in WS8: full
 sort is the highest observed ceiling, while high-cardinality grouping and
 deduplication also exceed the input size once hash-table and record overhead is
 included.

@@ -18,6 +18,7 @@ fn query_help_preserves_public_options() {
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("--table"));
     assert!(stdout.contains("--threads"));
+    assert!(stdout.contains("--max-memory"));
     assert!(stdout.contains("--format-file"));
 }
 
@@ -62,4 +63,45 @@ fn explain_names_dynamic_source_row_fallback() {
         stdout.contains("Batch fallback: DataSource (dynamic format `jsonl`)"),
         "{stdout}"
     );
+}
+
+#[test]
+fn max_memory_stops_materializing_queries_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("unique.jsonl");
+    let rows: String = (0..200)
+        .map(|value| format!("{{\"x\":\"value-{value:04}-{}\"}}\n", "x".repeat(64)))
+        .collect();
+    std::fs::write(&path, rows).unwrap();
+    let table = format!("it:jsonl={}", path.display());
+
+    for query in [
+        "select x from it order by x asc",
+        "select x from it order by x asc limit 200",
+        "select x, count(*) as n from it group by x",
+        "select distinct x from it",
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_logq"))
+            .args([
+                "query",
+                query,
+                "--table",
+                &table,
+                "--output",
+                "ndjson",
+                "--max-memory",
+                "1KiB",
+            ])
+            .output()
+            .unwrap();
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            combined.contains("query exceeded memory budget (--max-memory)"),
+            "query: {query}\noutput: {combined}"
+        );
+    }
 }

@@ -342,6 +342,21 @@ logq supports four output modes via `--output`:
 - **`json`** -- JSON array of objects
 - **`ndjson`** -- one JSON object per line, streamed as rows are produced
 
+## Memory ceiling
+
+Materializing queries can use substantial RAM on high-cardinality or multi-gigabyte inputs. Set a
+soft query ceiling with a byte count or a `KiB`/`MiB`/`GiB` suffix:
+
+```bash
+logq query 'select request_id, count(*) from it group by request_id' \
+  --table it:jsonl=large.jsonl --max-memory 512MiB --output ndjson
+```
+
+The ceiling covers sorting (including top-N candidates), grouping, deduplication, set operations,
+and materialized join inputs. logq stops with `query exceeded memory budget (--max-memory)` when
+its conservative estimate crosses the limit. It is a soft application-level budget rather than a
+hard operating-system allocation cap.
+
 ### Piping to Visualization Tools
 
 ```bash

@@ -539,6 +539,7 @@ pub struct GroupByStream {
     source: Box<dyn RecordStream>,
     group_iterator: Option<hashbrown::hash_map::IntoIter<Option<Tuple>, GroupState>>,
     registry: Arc<FunctionRegistry>,
+    max_memory: Option<usize>,
 }
 
 impl GroupByStream {
@@ -548,6 +549,7 @@ impl GroupByStream {
         aggregates: Vec<NamedAggregate>,
         source: Box<dyn RecordStream>,
         registry: Arc<FunctionRegistry>,
+        max_memory: Option<usize>,
     ) -> Self {
         let aggregate_defs: Vec<AggregateDef> = aggregates.iter().map(AggregateDef::from_named_aggregate).collect();
         GroupByStream {
@@ -557,6 +559,7 @@ impl GroupByStream {
             source,
             group_iterator: None,
             registry,
+            max_memory,
         }
     }
 }
@@ -565,6 +568,7 @@ impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if self.group_iterator.is_none() {
             let mut groups: HashMap<Option<Tuple>, GroupState> = HashMap::new();
+            let mut memory = crate::execution::memory::MemoryTracker::new(self.max_memory);
             let has_scope = !self.variables.is_empty();
             while let Some(record) = self.source.next()? {
                 let variables = record.to_variables();
@@ -575,6 +579,18 @@ impl RecordStream for GroupByStream {
                 } else {
                     Some(record.get_many(&self.keys))
                 };
+
+                if !groups.contains_key(&key) {
+                    let key_size = key
+                        .as_deref()
+                        .map(crate::execution::memory::estimate_values)
+                        .unwrap_or(0);
+                    memory.add(
+                        128usize
+                            .saturating_add(key_size)
+                            .saturating_add(self.aggregate_defs.len().saturating_mul(64)),
+                    )?;
+                }
 
                 let missing = Value::Missing;
                 let state = groups
@@ -825,6 +841,7 @@ pub(crate) struct CrossJoinStream {
     right_index: usize,
     registry: Arc<FunctionRegistry>,
     threads: usize,
+    max_memory: Option<usize>,
 }
 
 impl CrossJoinStream {
@@ -834,6 +851,7 @@ impl CrossJoinStream {
         right_variables: Variables,
         registry: Arc<FunctionRegistry>,
         threads: usize,
+        max_memory: Option<usize>,
     ) -> Self {
         CrossJoinStream {
             left,
@@ -844,16 +862,24 @@ impl CrossJoinStream {
             right_index: 0,
             registry,
             threads,
+            max_memory,
         }
     }
 
     fn materialize_right(&mut self) -> StreamResult<()> {
         let mut right_stream = self
             .right_node
-            .get(self.right_variables.clone(), self.registry.clone(), self.threads)
+            .get_with_memory_limit(
+                self.right_variables.clone(),
+                self.registry.clone(),
+                self.threads,
+                self.max_memory,
+            )
             .map_err(super::types::StreamError::Get)?;
         let mut rows = Vec::new();
+        let mut memory = crate::execution::memory::MemoryTracker::new(self.max_memory);
         while let Some(record) = right_stream.next()? {
+            memory.add(crate::execution::memory::estimate_record(&record))?;
             rows.push(record);
         }
         self.right_rows = Some(rows);
@@ -909,6 +935,7 @@ pub(crate) struct LeftJoinStream {
     right_field_names: Option<Vec<String>>,
     registry: Arc<FunctionRegistry>,
     threads: usize,
+    max_memory: Option<usize>,
 }
 
 impl LeftJoinStream {
@@ -919,6 +946,7 @@ impl LeftJoinStream {
         condition: Formula,
         registry: Arc<FunctionRegistry>,
         threads: usize,
+        max_memory: Option<usize>,
     ) -> Self {
         LeftJoinStream {
             left,
@@ -932,16 +960,24 @@ impl LeftJoinStream {
             right_field_names: None,
             registry,
             threads,
+            max_memory,
         }
     }
 
     fn materialize_right(&mut self) -> StreamResult<()> {
         let mut right_stream = self
             .right_node
-            .get(self.right_variables.clone(), self.registry.clone(), self.threads)
+            .get_with_memory_limit(
+                self.right_variables.clone(),
+                self.registry.clone(),
+                self.threads,
+                self.max_memory,
+            )
             .map_err(super::types::StreamError::Get)?;
         let mut rows = Vec::new();
+        let mut memory = crate::execution::memory::MemoryTracker::new(self.max_memory);
         while let Some(record) = right_stream.next()? {
+            memory.add(crate::execution::memory::estimate_record(&record))?;
             rows.push(record);
         }
         // Populate right_field_names from first record if available
@@ -1116,11 +1152,7 @@ impl HashJoinStream {
             approx_bytes += record_size + 80; // 80 for LinkedHashMap per-entry overhead
 
             if approx_bytes > self.memory_limit {
-                return Err(super::types::StreamError::General(format!(
-                    "Hash join build side exceeded memory limit of {} MB. \
-                     Consider using a smaller table on the build side of the join.",
-                    self.memory_limit / (1024 * 1024)
-                )));
+                return Err(super::types::StreamError::MemoryBudgetExceeded);
             }
 
             let key = extract_key(&record, &self.right_key_fields);
@@ -1285,10 +1317,19 @@ pub(crate) struct IntersectStream {
 }
 
 impl IntersectStream {
-    pub(crate) fn new(left: Box<dyn RecordStream>, mut right: Box<dyn RecordStream>, all: bool) -> StreamResult<Self> {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        mut right: Box<dyn RecordStream>,
+        all: bool,
+        max_memory: Option<usize>,
+    ) -> StreamResult<Self> {
         let mut right_set = std::collections::HashMap::new();
+        let mut memory = crate::execution::memory::MemoryTracker::new(max_memory);
         while let Some(record) = right.next()? {
             let key = record.to_tuples();
+            if !right_set.contains_key(&key) {
+                memory.add(crate::execution::memory::estimate_record(&record).saturating_add(32))?;
+            }
             *right_set.entry(key).or_insert(0) += 1;
         }
         Ok(IntersectStream { left, right_set, all })
@@ -1325,10 +1366,19 @@ pub(crate) struct ExceptStream {
 }
 
 impl ExceptStream {
-    pub(crate) fn new(left: Box<dyn RecordStream>, mut right: Box<dyn RecordStream>, all: bool) -> StreamResult<Self> {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        mut right: Box<dyn RecordStream>,
+        all: bool,
+        max_memory: Option<usize>,
+    ) -> StreamResult<Self> {
         let mut right_set = std::collections::HashMap::new();
+        let mut memory = crate::execution::memory::MemoryTracker::new(max_memory);
         while let Some(record) = right.next()? {
             let key = record.to_tuples();
+            if !right_set.contains_key(&key) {
+                memory.add(crate::execution::memory::estimate_record(&record).saturating_add(32))?;
+            }
             *right_set.entry(key).or_insert(0) += 1;
         }
         Ok(ExceptStream { left, right_set, all })
@@ -1364,13 +1414,15 @@ impl RecordStream for ExceptStream {
 pub(crate) struct DistinctStream {
     source: Box<dyn RecordStream>,
     seen: std::collections::HashSet<Vec<(VariableName, Value)>>,
+    memory: crate::execution::memory::MemoryTracker,
 }
 
 impl DistinctStream {
-    pub(crate) fn new(source: Box<dyn RecordStream>) -> Self {
+    pub(crate) fn new(source: Box<dyn RecordStream>, max_memory: Option<usize>) -> Self {
         DistinctStream {
             source,
             seen: std::collections::HashSet::new(),
+            memory: crate::execution::memory::MemoryTracker::new(max_memory),
         }
     }
 }
@@ -1380,6 +1432,8 @@ impl RecordStream for DistinctStream {
         while let Some(record) = self.source.next()? {
             let key = record.to_tuples();
             if self.seen.insert(key) {
+                self.memory
+                    .add(crate::execution::memory::estimate_record(&record).saturating_add(32))?;
                 return Ok(Some(record));
             }
         }
@@ -1590,7 +1644,7 @@ mod tests {
         ));
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut distinct_stream = DistinctStream::new(stream);
+        let mut distinct_stream = DistinctStream::new(stream, None);
 
         let mut result = Vec::new();
         while let Some(n) = distinct_stream.next().unwrap() {
@@ -1619,7 +1673,7 @@ mod tests {
         records.push_back(Record::new(&["a".to_string()], vec![Value::Int(3)]));
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut distinct_stream = DistinctStream::new(stream);
+        let mut distinct_stream = DistinctStream::new(stream, None);
 
         let mut result = Vec::new();
         while let Some(n) = distinct_stream.next().unwrap() {
@@ -1634,7 +1688,7 @@ mod tests {
         let records = VecDeque::new();
         let stream = Box::new(InMemoryStream::new(records));
 
-        let mut distinct_stream = DistinctStream::new(stream);
+        let mut distinct_stream = DistinctStream::new(stream, None);
 
         let result = distinct_stream.next().unwrap();
         assert_eq!(None, result);
@@ -1685,7 +1739,7 @@ mod tests {
             Some("cnt".to_string()),
         )];
 
-        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
+        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry, None);
 
         let record = stream.next().unwrap().unwrap();
         assert_eq!(record.to_variables()["cnt"], Value::Int(2));
@@ -1706,7 +1760,7 @@ mod tests {
             Some("cnt".to_string()),
         )];
 
-        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
+        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry, None);
 
         let record = stream.next().unwrap().unwrap();
         assert_eq!(record.to_variables()["cnt"], Value::Int(3));
@@ -1750,7 +1804,7 @@ mod tests {
             ),
         ];
 
-        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
+        let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry, None);
 
         let record = stream.next().unwrap().unwrap();
         assert_eq!(record.to_variables()["cnt"], Value::Int(0));

@@ -235,5 +235,5 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 - [x] WS7c nginx/apache formats
 - [x] WS7d time_bucket
 - [x] WS7e ndjson output
-- [ ] WS8 Memory + batch coverage
+- [x] WS8 Memory + batch coverage
 - [ ] WS9 Release 0.2.0

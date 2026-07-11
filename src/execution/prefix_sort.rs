@@ -144,6 +144,7 @@ fn direct_sort(records: &mut [Record], sort_keys: &[PathExpr], orderings: &[Orde
 struct RankedRecord {
     record: Record,
     ordinal: usize,
+    estimated_bytes: usize,
 }
 
 fn compare_ranked(
@@ -163,10 +164,20 @@ pub(crate) struct BoundedTopN {
     orderings: Vec<Ordering>,
     next_ordinal: usize,
     peak_retained: usize,
+    memory: crate::execution::memory::MemoryTracker,
 }
 
 impl BoundedTopN {
     pub(crate) fn new(capacity: usize, sort_keys: Vec<PathExpr>, orderings: Vec<Ordering>) -> Self {
+        Self::new_with_memory_limit(capacity, sort_keys, orderings, None)
+    }
+
+    pub(crate) fn new_with_memory_limit(
+        capacity: usize,
+        sort_keys: Vec<PathExpr>,
+        orderings: Vec<Ordering>,
+        max_memory: Option<usize>,
+    ) -> Self {
         Self {
             heap: Vec::with_capacity(capacity),
             capacity,
@@ -174,27 +185,38 @@ impl BoundedTopN {
             orderings,
             next_ordinal: 0,
             peak_retained: 0,
+            memory: crate::execution::memory::MemoryTracker::new(max_memory),
         }
     }
 
     pub(crate) fn push(&mut self, record: Record) {
+        self.try_push(record)
+            .expect("unlimited top-N memory tracker cannot fail");
+    }
+
+    pub(crate) fn try_push(&mut self, record: Record) -> crate::execution::types::StreamResult<()> {
+        let estimated_bytes = crate::execution::memory::estimate_record(&record);
         let ranked = RankedRecord {
             record,
             ordinal: self.next_ordinal,
+            estimated_bytes,
         };
         self.next_ordinal += 1;
         if self.capacity == 0 {
-            return;
+            return Ok(());
         }
 
         if self.heap.len() < self.capacity {
+            self.memory.add(estimated_bytes)?;
             self.heap.push(ranked);
             self.sift_up(self.heap.len() - 1);
             self.peak_retained = self.peak_retained.max(self.heap.len());
         } else if compare_ranked(&ranked, &self.heap[0], &self.sort_keys, &self.orderings).is_lt() {
+            self.memory.replace(self.heap[0].estimated_bytes, estimated_bytes)?;
             self.heap[0] = ranked;
             self.sift_down(0);
         }
+        Ok(())
     }
 
     fn sift_up(&mut self, mut index: usize) {
