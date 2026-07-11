@@ -1,6 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
     // Concat: binary string concatenation operator
@@ -24,7 +24,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.to_uppercase().into())),
+            Value::String(s) => Ok(Value::String(s.to_uppercase())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -35,7 +35,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::String(s.to_lowercase().into())),
+            Value::String(s) => Ok(Value::String(s.to_lowercase())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -138,7 +138,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::Int(n)) => {
                 let count = (*n).max(0) as usize;
-                Ok(Value::String(s.repeat(count).into()))
+                Ok(Value::String(s.repeat(count)))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -272,15 +272,13 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(sub)) => {
-                match s.find(sub.as_str()) {
-                    Some(byte_pos) => {
-                        let char_pos = s[..byte_pos].chars().count() + 1;
-                        Ok(Value::Int(char_pos as i32))
-                    }
-                    None => Ok(Value::Int(0)),
+            (Value::String(s), Value::String(sub)) => match s.find(sub.as_str()) {
+                Some(byte_pos) => {
+                    let char_pos = s[..byte_pos].chars().count() + 1;
+                    Ok(Value::Int(char_pos as i32))
                 }
-            }
+                None => Ok(Value::Int(0)),
+            },
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -291,9 +289,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(prefix)) => {
-                Ok(Value::Boolean(s.starts_with(prefix.as_str())))
-            }
+            (Value::String(s), Value::String(prefix)) => Ok(Value::Boolean(s.starts_with(prefix.as_str()))),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -304,9 +300,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(suffix)) => {
-                Ok(Value::Boolean(s.ends_with(suffix.as_str())))
-            }
+            (Value::String(s), Value::String(suffix)) => Ok(Value::Boolean(s.ends_with(suffix.as_str()))),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -318,9 +312,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::String(delim)) => {
-                let parts: Vec<Value> = s.split(delim.as_str())
-                    .map(|part| Value::String(part.into()))
-                    .collect();
+                let parts: Vec<Value> = s.split(delim.as_str()).map(|part| Value::String(part.into())).collect();
                 Ok(Value::Array(parts))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -381,12 +373,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::Int(cp) => {
-                match char::from_u32(*cp as u32) {
-                    Some(c) => Ok(Value::String(c.to_string().into())),
-                    None => Err(ExpressionError::InvalidArguments),
-                }
-            }
+            Value::Int(cp) => match char::from_u32(*cp as u32) {
+                Some(c) => Ok(Value::String(c.to_string().into())),
+                None => Err(ExpressionError::InvalidArguments),
+            },
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -420,18 +410,16 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 let m = a.len();
                 let n = b.len();
                 let mut dp = vec![vec![0usize; n + 1]; m + 1];
-                for i in 0..=m {
-                    dp[i][0] = i;
+                for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+                    row[0] = i;
                 }
-                for j in 0..=n {
-                    dp[0][j] = j;
+                for (j, cell) in dp[0].iter_mut().enumerate().take(n + 1) {
+                    *cell = j;
                 }
                 for i in 1..=m {
                     for j in 1..=n {
                         let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-                        dp[i][j] = (dp[i - 1][j] + 1)
-                            .min(dp[i][j - 1] + 1)
-                            .min(dp[i - 1][j - 1] + cost);
+                        dp[i][j] = (dp[i - 1][j] + 1).min(dp[i][j - 1] + 1).min(dp[i - 1][j - 1] + cost);
                     }
                 }
                 Ok(Value::Int(dp[m][n] as i32))
@@ -477,25 +465,37 @@ mod tests {
     #[test]
     fn test_upper() {
         let r = make_registry();
-        assert_eq!(r.call("upper", &[Value::String("hello".to_string().into())]), Ok(Value::String("HELLO".to_string().into())));
+        assert_eq!(
+            r.call("upper", &[Value::String("hello".to_string().into())]),
+            Ok(Value::String("HELLO".to_string().into()))
+        );
     }
 
     #[test]
     fn test_lower() {
         let r = make_registry();
-        assert_eq!(r.call("lower", &[Value::String("HELLO".to_string().into())]), Ok(Value::String("hello".to_string().into())));
+        assert_eq!(
+            r.call("lower", &[Value::String("HELLO".to_string().into())]),
+            Ok(Value::String("hello".to_string().into()))
+        );
     }
 
     #[test]
     fn test_char_length() {
         let r = make_registry();
-        assert_eq!(r.call("char_length", &[Value::String("hello".to_string().into())]), Ok(Value::Int(5)));
+        assert_eq!(
+            r.call("char_length", &[Value::String("hello".to_string().into())]),
+            Ok(Value::Int(5))
+        );
     }
 
     #[test]
     fn test_character_length_alias() {
         let r = make_registry();
-        assert_eq!(r.call("character_length", &[Value::String("hello".to_string().into())]), Ok(Value::Int(5)));
+        assert_eq!(
+            r.call("character_length", &[Value::String("hello".to_string().into())]),
+            Ok(Value::Int(5))
+        );
     }
 
     #[test]
@@ -511,7 +511,10 @@ mod tests {
     fn test_substring_three_args() {
         let r = make_registry();
         assert_eq!(
-            r.call("substring", &[Value::String("hello".to_string().into()), Value::Int(2), Value::Int(3)]),
+            r.call(
+                "substring",
+                &[Value::String("hello".to_string().into()), Value::Int(2), Value::Int(3)]
+            ),
             Ok(Value::String("ell".to_string().into()))
         );
     }
@@ -519,14 +522,23 @@ mod tests {
     #[test]
     fn test_trim() {
         let r = make_registry();
-        assert_eq!(r.call("trim", &[Value::String("  hello  ".to_string().into())]), Ok(Value::String("hello".to_string().into())));
+        assert_eq!(
+            r.call("trim", &[Value::String("  hello  ".to_string().into())]),
+            Ok(Value::String("hello".to_string().into()))
+        );
     }
 
     #[test]
     fn test_concat_operator() {
         let r = make_registry();
         assert_eq!(
-            r.call("Concat", &[Value::String("hello".to_string().into()), Value::String(" world".to_string().into())]),
+            r.call(
+                "Concat",
+                &[
+                    Value::String("hello".to_string().into()),
+                    Value::String(" world".to_string().into())
+                ]
+            ),
             Ok(Value::String("hello world".to_string().into()))
         );
     }
@@ -535,8 +547,14 @@ mod tests {
     fn test_concat_null_propagation_behavioral_change() {
         let r = make_registry();
         // BEHAVIORAL CHANGE: Missing > Null precedence (previously Null > Missing for Concat)
-        assert_eq!(r.call("Concat", &[Value::Missing, Value::String("x".to_string().into())]), Ok(Value::Missing));
-        assert_eq!(r.call("Concat", &[Value::Null, Value::String("x".to_string().into())]), Ok(Value::Null));
+        assert_eq!(
+            r.call("Concat", &[Value::Missing, Value::String("x".to_string().into())]),
+            Ok(Value::Missing)
+        );
+        assert_eq!(
+            r.call("Concat", &[Value::Null, Value::String("x".to_string().into())]),
+            Ok(Value::Null)
+        );
         assert_eq!(r.call("Concat", &[Value::Null, Value::Missing]), Ok(Value::Missing));
     }
 
@@ -544,7 +562,14 @@ mod tests {
     fn test_replace() {
         let r = make_registry();
         assert_eq!(
-            r.call("replace", &[Value::String("hello world".into()), Value::String("world".into()), Value::String("rust".into())]),
+            r.call(
+                "replace",
+                &[
+                    Value::String("hello world".into()),
+                    Value::String("world".into()),
+                    Value::String("rust".into())
+                ]
+            ),
             Ok(Value::String("hello rust".into()))
         );
     }
@@ -552,14 +577,20 @@ mod tests {
     #[test]
     fn test_reverse() {
         let r = make_registry();
-        assert_eq!(r.call("reverse", &[Value::String("hello".into())]), Ok(Value::String("olleh".into())));
+        assert_eq!(
+            r.call("reverse", &[Value::String("hello".into())]),
+            Ok(Value::String("olleh".into()))
+        );
     }
 
     #[test]
     fn test_reverse_array() {
         let r = make_registry();
         assert_eq!(
-            r.call("reverse", &[Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)])]),
+            r.call(
+                "reverse",
+                &[Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)])]
+            ),
             Ok(Value::Array(vec![Value::Int(3), Value::Int(2), Value::Int(1)]))
         );
     }
@@ -567,15 +598,24 @@ mod tests {
     #[test]
     fn test_repeat() {
         let r = make_registry();
-        assert_eq!(r.call("repeat", &[Value::String("ab".into()), Value::Int(3)]), Ok(Value::String("ababab".into())));
+        assert_eq!(
+            r.call("repeat", &[Value::String("ab".into()), Value::Int(3)]),
+            Ok(Value::String("ababab".into()))
+        );
     }
 
     #[test]
     fn test_lpad() {
         let r = make_registry();
-        assert_eq!(r.call("lpad", &[Value::String("hi".into()), Value::Int(5)]), Ok(Value::String("   hi".into())));
         assert_eq!(
-            r.call("lpad", &[Value::String("hi".into()), Value::Int(5), Value::String("xy".into())]),
+            r.call("lpad", &[Value::String("hi".into()), Value::Int(5)]),
+            Ok(Value::String("   hi".into()))
+        );
+        assert_eq!(
+            r.call(
+                "lpad",
+                &[Value::String("hi".into()), Value::Int(5), Value::String("xy".into())]
+            ),
             Ok(Value::String("xyxhi".into()))
         );
     }
@@ -583,58 +623,115 @@ mod tests {
     #[test]
     fn test_lpad_truncate() {
         let r = make_registry();
-        assert_eq!(r.call("lpad", &[Value::String("hello".into()), Value::Int(3)]), Ok(Value::String("hel".into())));
+        assert_eq!(
+            r.call("lpad", &[Value::String("hello".into()), Value::Int(3)]),
+            Ok(Value::String("hel".into()))
+        );
     }
 
     #[test]
     fn test_rpad() {
         let r = make_registry();
-        assert_eq!(r.call("rpad", &[Value::String("hi".into()), Value::Int(5)]), Ok(Value::String("hi   ".into())));
+        assert_eq!(
+            r.call("rpad", &[Value::String("hi".into()), Value::Int(5)]),
+            Ok(Value::String("hi   ".into()))
+        );
     }
 
     #[test]
     fn test_rpad_truncate() {
         let r = make_registry();
-        assert_eq!(r.call("rpad", &[Value::String("hello".into()), Value::Int(3)]), Ok(Value::String("hel".into())));
+        assert_eq!(
+            r.call("rpad", &[Value::String("hello".into()), Value::Int(3)]),
+            Ok(Value::String("hel".into()))
+        );
     }
 
     #[test]
     fn test_ltrim() {
         let r = make_registry();
-        assert_eq!(r.call("ltrim", &[Value::String("  hello  ".into())]), Ok(Value::String("hello  ".into())));
+        assert_eq!(
+            r.call("ltrim", &[Value::String("  hello  ".into())]),
+            Ok(Value::String("hello  ".into()))
+        );
     }
 
     #[test]
     fn test_rtrim() {
         let r = make_registry();
-        assert_eq!(r.call("rtrim", &[Value::String("  hello  ".into())]), Ok(Value::String("  hello".into())));
+        assert_eq!(
+            r.call("rtrim", &[Value::String("  hello  ".into())]),
+            Ok(Value::String("  hello".into()))
+        );
     }
 
     #[test]
     fn test_position() {
         let r = make_registry();
-        assert_eq!(r.call("position", &[Value::String("hello world".into()), Value::String("world".into())]), Ok(Value::Int(7)));
-        assert_eq!(r.call("position", &[Value::String("hello".into()), Value::String("xyz".into())]), Ok(Value::Int(0)));
+        assert_eq!(
+            r.call(
+                "position",
+                &[Value::String("hello world".into()), Value::String("world".into())]
+            ),
+            Ok(Value::Int(7))
+        );
+        assert_eq!(
+            r.call(
+                "position",
+                &[Value::String("hello".into()), Value::String("xyz".into())]
+            ),
+            Ok(Value::Int(0))
+        );
     }
 
     #[test]
     fn test_strpos() {
         let r = make_registry();
-        assert_eq!(r.call("strpos", &[Value::String("hello world".into()), Value::String("world".into())]), Ok(Value::Int(7)));
+        assert_eq!(
+            r.call(
+                "strpos",
+                &[Value::String("hello world".into()), Value::String("world".into())]
+            ),
+            Ok(Value::Int(7))
+        );
     }
 
     #[test]
     fn test_starts_with() {
         let r = make_registry();
-        assert_eq!(r.call("starts_with", &[Value::String("hello".into()), Value::String("hel".into())]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("starts_with", &[Value::String("hello".into()), Value::String("xyz".into())]), Ok(Value::Boolean(false)));
+        assert_eq!(
+            r.call(
+                "starts_with",
+                &[Value::String("hello".into()), Value::String("hel".into())]
+            ),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call(
+                "starts_with",
+                &[Value::String("hello".into()), Value::String("xyz".into())]
+            ),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]
     fn test_ends_with() {
         let r = make_registry();
-        assert_eq!(r.call("ends_with", &[Value::String("hello".into()), Value::String("llo".into())]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("ends_with", &[Value::String("hello".into()), Value::String("xyz".into())]), Ok(Value::Boolean(false)));
+        assert_eq!(
+            r.call(
+                "ends_with",
+                &[Value::String("hello".into()), Value::String("llo".into())]
+            ),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call(
+                "ends_with",
+                &[Value::String("hello".into()), Value::String("xyz".into())]
+            ),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]
@@ -642,7 +739,11 @@ mod tests {
         let r = make_registry();
         assert_eq!(
             r.call("split", &[Value::String("a,b,c".into()), Value::String(",".into())]),
-            Ok(Value::Array(vec![Value::String("a".into()), Value::String("b".into()), Value::String("c".into())]))
+            Ok(Value::Array(vec![
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into())
+            ]))
         );
     }
 
@@ -650,7 +751,10 @@ mod tests {
     fn test_split_part() {
         let r = make_registry();
         assert_eq!(
-            r.call("split_part", &[Value::String("a,b,c".into()), Value::String(",".into()), Value::Int(2)]),
+            r.call(
+                "split_part",
+                &[Value::String("a,b,c".into()), Value::String(",".into()), Value::Int(2)]
+            ),
             Ok(Value::String("b".into()))
         );
     }
@@ -659,7 +763,10 @@ mod tests {
     fn test_split_part_out_of_bounds() {
         let r = make_registry();
         assert_eq!(
-            r.call("split_part", &[Value::String("a,b,c".into()), Value::String(",".into()), Value::Int(10)]),
+            r.call(
+                "split_part",
+                &[Value::String("a,b,c".into()), Value::String(",".into()), Value::Int(10)]
+            ),
             Ok(Value::String("".into()))
         );
     }
@@ -668,7 +775,15 @@ mod tests {
     fn test_concat_ws() {
         let r = make_registry();
         assert_eq!(
-            r.call("concat_ws", &[Value::String(",".into()), Value::String("a".into()), Value::String("b".into()), Value::String("c".into())]),
+            r.call(
+                "concat_ws",
+                &[
+                    Value::String(",".into()),
+                    Value::String("a".into()),
+                    Value::String("b".into()),
+                    Value::String("c".into())
+                ]
+            ),
             Ok(Value::String("a,b,c".into()))
         );
     }
@@ -677,7 +792,15 @@ mod tests {
     fn test_concat_ws_skip_nulls() {
         let r = make_registry();
         assert_eq!(
-            r.call("concat_ws", &[Value::String(",".into()), Value::String("a".into()), Value::Null, Value::String("c".into())]),
+            r.call(
+                "concat_ws",
+                &[
+                    Value::String(",".into()),
+                    Value::String("a".into()),
+                    Value::Null,
+                    Value::String("c".into())
+                ]
+            ),
             Ok(Value::String("a,c".into()))
         );
     }
@@ -686,7 +809,10 @@ mod tests {
     fn test_concat_ws_null_separator() {
         let r = make_registry();
         assert_eq!(
-            r.call("concat_ws", &[Value::Null, Value::String("a".into()), Value::String("b".into())]),
+            r.call(
+                "concat_ws",
+                &[Value::Null, Value::String("a".into()), Value::String("b".into())]
+            ),
             Ok(Value::Null)
         );
     }
@@ -712,24 +838,47 @@ mod tests {
     #[test]
     fn test_levenshtein_distance() {
         let r = make_registry();
-        assert_eq!(r.call("levenshtein_distance", &[Value::String("kitten".into()), Value::String("sitting".into())]), Ok(Value::Int(3)));
+        assert_eq!(
+            r.call(
+                "levenshtein_distance",
+                &[Value::String("kitten".into()), Value::String("sitting".into())]
+            ),
+            Ok(Value::Int(3))
+        );
     }
 
     #[test]
     fn test_levenshtein_distance_same() {
         let r = make_registry();
-        assert_eq!(r.call("levenshtein_distance", &[Value::String("abc".into()), Value::String("abc".into())]), Ok(Value::Int(0)));
+        assert_eq!(
+            r.call(
+                "levenshtein_distance",
+                &[Value::String("abc".into()), Value::String("abc".into())]
+            ),
+            Ok(Value::Int(0))
+        );
     }
 
     #[test]
     fn test_hamming_distance() {
         let r = make_registry();
-        assert_eq!(r.call("hamming_distance", &[Value::String("abc".into()), Value::String("axc".into())]), Ok(Value::Int(1)));
+        assert_eq!(
+            r.call(
+                "hamming_distance",
+                &[Value::String("abc".into()), Value::String("axc".into())]
+            ),
+            Ok(Value::Int(1))
+        );
     }
 
     #[test]
     fn test_hamming_distance_different_lengths() {
         let r = make_registry();
-        assert!(r.call("hamming_distance", &[Value::String("abc".into()), Value::String("ab".into())]).is_err());
+        assert!(r
+            .call(
+                "hamming_distance",
+                &[Value::String("abc".into()), Value::String("ab".into())]
+            )
+            .is_err());
     }
 }

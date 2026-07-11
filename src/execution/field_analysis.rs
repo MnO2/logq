@@ -145,7 +145,13 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
             collect_node_fields(left, out);
             collect_node_fields(right, out);
         }
-        Node::HashJoin { left, right, equi_keys, residual, .. } => {
+        Node::HashJoin {
+            left,
+            right,
+            equi_keys,
+            residual,
+            ..
+        } => {
             collect_node_fields(left, out);
             collect_node_fields(right, out);
             for (lk, rk) in equi_keys {
@@ -178,8 +184,7 @@ fn collect_aggregate_fields(aggregates: &[NamedAggregate], out: &mut HashSet<Str
             | Aggregate::GroupAs(_, named) => {
                 collect_named_fields(named, out);
             }
-            Aggregate::PercentileDisc(_, col_name)
-            | Aggregate::ApproxPercentile(_, col_name) => {
+            Aggregate::PercentileDisc(_, col_name) | Aggregate::ApproxPercentile(_, col_name) => {
                 out.insert(col_name.clone());
             }
         }
@@ -192,10 +197,7 @@ fn resolve_field_names(names: &HashSet<String>, schema: &LogSchema) -> Vec<usize
     if names.contains("*") {
         return (0..schema.field_count()).collect();
     }
-    let mut indices: Vec<usize> = names
-        .iter()
-        .filter_map(|name| schema.field_index(name))
-        .collect();
+    let mut indices: Vec<usize> = names.iter().filter_map(|name| schema.field_index(name)).collect();
     indices.sort_unstable();
     indices.dedup();
     indices
@@ -335,10 +337,7 @@ mod tests {
 
     #[test]
     fn test_like_extracts_field() {
-        let formula = Formula::Like(
-            Box::new(var("request")),
-            Box::new(str_const("%GET%")),
-        );
+        let formula = Formula::Like(Box::new(var("request")), Box::new(str_const("%GET%")));
         let schema = elb_schema();
         let fields = extract_fields_from_formula(&formula, &schema);
         assert_eq!(fields.len(), 1);

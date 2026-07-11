@@ -1,10 +1,10 @@
 use crate::common;
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
-use chrono::Timelike;
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 use chrono::Datelike;
 use chrono::Duration;
+use chrono::Timelike;
 use ordered_float::OrderedFloat;
 
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
@@ -132,7 +132,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::DateTime(dt) => Ok(Value::Int(dt.year() as i32)),
+            Value::DateTime(dt) => Ok(Value::Int(dt.year())),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -299,11 +299,13 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 let new_dt = match unit.as_str() {
                     "second" => dt.with_nanosecond(0).unwrap(),
                     "minute" => dt.with_nanosecond(0).and_then(|d| d.with_second(0)).unwrap(),
-                    "hour" => dt.with_nanosecond(0)
+                    "hour" => dt
+                        .with_nanosecond(0)
                         .and_then(|d| d.with_second(0))
                         .and_then(|d| d.with_minute(0))
                         .unwrap(),
-                    "day" => dt.with_nanosecond(0)
+                    "day" => dt
+                        .with_nanosecond(0)
                         .and_then(|d| d.with_second(0))
                         .and_then(|d| d.with_minute(0))
                         .and_then(|d| d.with_hour(0))
@@ -325,10 +327,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             Value::Int(epoch) => {
                 let naive = chrono::NaiveDateTime::from_timestamp_opt(*epoch as i64, 0)
                     .ok_or(ExpressionError::InvalidArguments)?;
-                let fixed = chrono::DateTime::<chrono::FixedOffset>::from_utc(
-                    naive,
-                    chrono::FixedOffset::east(0),
-                );
+                let fixed = chrono::DateTime::<chrono::FixedOffset>::from_utc(naive, chrono::FixedOffset::east(0));
                 Ok(Value::DateTime(fixed))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -507,11 +506,17 @@ mod tests {
     fn test_time_bucket_null_propagation() {
         let r = make_registry();
         assert_eq!(
-            r.call("time_bucket", &[Value::String("5 minutes".to_string().into()), Value::Null]),
+            r.call(
+                "time_bucket",
+                &[Value::String("5 minutes".to_string().into()), Value::Null]
+            ),
             Ok(Value::Null)
         );
         assert_eq!(
-            r.call("time_bucket", &[Value::String("5 minutes".to_string().into()), Value::Missing]),
+            r.call(
+                "time_bucket",
+                &[Value::String("5 minutes".to_string().into()), Value::Missing]
+            ),
             Ok(Value::Missing)
         );
     }
@@ -579,7 +584,7 @@ mod tests {
         let result = r.call("week", &[dt]);
         assert!(result.is_ok());
         if let Ok(Value::Int(w)) = result {
-            assert!(w >= 1 && w <= 53);
+            assert!((1..=53).contains(&w));
         }
     }
 
@@ -597,7 +602,7 @@ mod tests {
         let result = r.call("day_of_year", &[dt]);
         assert!(result.is_ok());
         if let Ok(Value::Int(d)) = result {
-            assert!(d >= 1 && d <= 366);
+            assert!((1..=366).contains(&d));
         }
     }
 
@@ -614,7 +619,10 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2023-06-15T10:30:45Z");
         let expected = make_datetime("2023-06-15T10:30:00Z");
-        assert_eq!(r.call("date_trunc", &[Value::String("minute".into()), dt]), Ok(expected));
+        assert_eq!(
+            r.call("date_trunc", &[Value::String("minute".into()), dt]),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -630,7 +638,10 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2023-06-15T10:30:45.123Z");
         let expected = make_datetime("2023-06-15T10:30:45Z");
-        assert_eq!(r.call("date_trunc", &[Value::String("second".into()), dt]), Ok(expected));
+        assert_eq!(
+            r.call("date_trunc", &[Value::String("second".into()), dt]),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -638,7 +649,10 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2023-06-15T10:30:45Z");
         let expected = make_datetime("2023-06-17T10:30:45Z");
-        assert_eq!(r.call("date_add", &[Value::String("day".into()), Value::Int(2), dt]), Ok(expected));
+        assert_eq!(
+            r.call("date_add", &[Value::String("day".into()), Value::Int(2), dt]),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -646,7 +660,10 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2023-06-15T10:30:45Z");
         let expected = make_datetime("2023-06-15T13:30:45Z");
-        assert_eq!(r.call("date_add", &[Value::String("hour".into()), Value::Int(3), dt]), Ok(expected));
+        assert_eq!(
+            r.call("date_add", &[Value::String("hour".into()), Value::Int(3), dt]),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -654,7 +671,10 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2023-06-15T10:30:45Z");
         let expected = make_datetime("2023-06-15T10:45:45Z");
-        assert_eq!(r.call("date_add", &[Value::String("minute".into()), Value::Int(15), dt]), Ok(expected));
+        assert_eq!(
+            r.call("date_add", &[Value::String("minute".into()), Value::Int(15), dt]),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -662,7 +682,10 @@ mod tests {
         let r = make_registry();
         let dt = make_datetime("2023-06-15T10:30:45Z");
         let expected = make_datetime("2023-06-15T10:31:15Z");
-        assert_eq!(r.call("date_add", &[Value::String("second".into()), Value::Int(30), dt]), Ok(expected));
+        assert_eq!(
+            r.call("date_add", &[Value::String("second".into()), Value::Int(30), dt]),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -670,7 +693,10 @@ mod tests {
         let r = make_registry();
         let start = make_datetime("2023-06-15T10:30:45Z");
         let end = make_datetime("2023-06-20T10:30:45Z");
-        assert_eq!(r.call("date_diff", &[Value::String("day".into()), start, end]), Ok(Value::Int(5)));
+        assert_eq!(
+            r.call("date_diff", &[Value::String("day".into()), start, end]),
+            Ok(Value::Int(5))
+        );
     }
 
     #[test]
@@ -678,7 +704,10 @@ mod tests {
         let r = make_registry();
         let start = make_datetime("2023-06-15T10:30:45Z");
         let end = make_datetime("2023-06-15T13:30:45Z");
-        assert_eq!(r.call("date_diff", &[Value::String("hour".into()), start, end]), Ok(Value::Int(3)));
+        assert_eq!(
+            r.call("date_diff", &[Value::String("hour".into()), start, end]),
+            Ok(Value::Int(3))
+        );
     }
 
     #[test]
@@ -686,7 +715,10 @@ mod tests {
         let r = make_registry();
         let start = make_datetime("2023-06-15T10:30:45Z");
         let end = make_datetime("2023-06-15T10:45:45Z");
-        assert_eq!(r.call("date_diff", &[Value::String("minute".into()), start, end]), Ok(Value::Int(15)));
+        assert_eq!(
+            r.call("date_diff", &[Value::String("minute".into()), start, end]),
+            Ok(Value::Int(15))
+        );
     }
 
     #[test]
@@ -694,7 +726,10 @@ mod tests {
         let r = make_registry();
         let start = make_datetime("2023-06-15T10:30:45Z");
         let end = make_datetime("2023-06-15T10:31:15Z");
-        assert_eq!(r.call("date_diff", &[Value::String("second".into()), start, end]), Ok(Value::Int(30)));
+        assert_eq!(
+            r.call("date_diff", &[Value::String("second".into()), start, end]),
+            Ok(Value::Int(30))
+        );
     }
 
     #[test]
@@ -713,7 +748,7 @@ mod tests {
         let r = make_registry();
         // First get the unix timestamp for a known datetime
         let dt = make_datetime("2023-06-15T10:30:45Z");
-        let ts = if let Ok(Value::Int(ts)) = r.call("to_unixtime", &[dt.clone()]) {
+        let ts = if let Ok(Value::Int(ts)) = r.call("to_unixtime", std::slice::from_ref(&dt)) {
             ts
         } else {
             panic!("to_unixtime failed");

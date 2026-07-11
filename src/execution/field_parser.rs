@@ -1,9 +1,9 @@
+use crate::common::types::Value;
 use crate::execution::batch::TypedColumn;
 use crate::execution::datasource::DataType;
 use crate::simd::bitmap::Bitmap;
 use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
 use crate::simd::selection::SelectionVector;
-use crate::common::types::Value;
 use hashbrown::HashMap;
 
 /// Fast i32 parsing from ASCII bytes without UTF-8 validation or allocator.
@@ -12,17 +12,13 @@ fn parse_i32_fast(bytes: &[u8]) -> Option<i32> {
     if bytes.is_empty() {
         return None;
     }
-    let (neg, start) = if bytes[0] == b'-' {
-        (true, 1)
-    } else {
-        (false, 0)
-    };
+    let (neg, start) = if bytes[0] == b'-' { (true, 1) } else { (false, 0) };
     if start >= bytes.len() {
         return None;
     }
     let mut n: i32 = 0;
     for &b in &bytes[start..] {
-        if b < b'0' || b > b'9' {
+        if !b.is_ascii_digit() {
             return None;
         }
         n = n.checked_mul(10)?.checked_add((b - b'0') as i32)?;
@@ -77,7 +73,10 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_i32_fast(bytes) {
                         Some(v) => data.push(v),
-                        None => { data.push(0); null_bm.unset(row); }
+                        None => {
+                            data.push(0);
+                            null_bm.unset(row);
+                        }
                     }
                 } else {
                     data.push(0);
@@ -100,7 +99,10 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_f32_fast(bytes) {
                         Some(v) => data.push(v),
-                        None => { data.push(0.0); null_bm.unset(row); }
+                        None => {
+                            data.push(0.0);
+                            null_bm.unset(row);
+                        }
                     }
                 } else {
                     data.push(0.0);
@@ -131,7 +133,11 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                 }
             }
-            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+            TypedColumn::Mixed {
+                data,
+                null: null_bm,
+                missing: missing_bm,
+            }
         }
         DataType::Host => {
             let mut data = Vec::with_capacity(len);
@@ -153,7 +159,11 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                 }
             }
-            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+            TypedColumn::Mixed {
+                data,
+                null: null_bm,
+                missing: missing_bm,
+            }
         }
         DataType::HttpRequest => {
             let mut data = Vec::with_capacity(len);
@@ -172,7 +182,11 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                 }
             }
-            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+            TypedColumn::Mixed {
+                data,
+                null: null_bm,
+                missing: missing_bm,
+            }
         }
     }
 }
@@ -224,7 +238,10 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_i32_fast(bytes) {
                         Some(v) => data.push(v),
-                        None => { data.push(0); null_bm.unset(row); }
+                        None => {
+                            data.push(0);
+                            null_bm.unset(row);
+                        }
                     }
                 } else {
                     data.push(0);
@@ -252,7 +269,10 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_f32_fast(bytes) {
                         Some(v) => data.push(v),
-                        None => { data.push(0.0); null_bm.unset(row); }
+                        None => {
+                            data.push(0.0);
+                            null_bm.unset(row);
+                        }
                     }
                 } else {
                     data.push(0.0);
@@ -286,7 +306,11 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                 }
             }
-            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+            TypedColumn::Mixed {
+                data,
+                null: null_bm,
+                missing: missing_bm,
+            }
         }
         DataType::Host => {
             let mut data = Vec::with_capacity(len);
@@ -312,7 +336,11 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                 }
             }
-            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+            TypedColumn::Mixed {
+                data,
+                null: null_bm,
+                missing: missing_bm,
+            }
         }
         DataType::HttpRequest => {
             let mut data = Vec::with_capacity(len);
@@ -335,7 +363,11 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                 }
             }
-            TypedColumn::Mixed { data, null: null_bm, missing: missing_bm }
+            TypedColumn::Mixed {
+                data,
+                null: null_bm,
+                missing: missing_bm,
+            }
         }
     }
 }
@@ -345,12 +377,22 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
 /// returns a DictUtf8 column; otherwise returns the original Utf8 unchanged.
 fn try_dict_encode(col: TypedColumn) -> TypedColumn {
     let (data, offsets, null, missing) = match col {
-        TypedColumn::Utf8 { data, offsets, null, missing } => (data, offsets, null, missing),
+        TypedColumn::Utf8 {
+            data,
+            offsets,
+            null,
+            missing,
+        } => (data, offsets, null, missing),
         other => return other,
     };
     let len = offsets.len() - 1;
     if len == 0 {
-        return TypedColumn::Utf8 { data, offsets, null, missing };
+        return TypedColumn::Utf8 {
+            data,
+            offsets,
+            null,
+            missing,
+        };
     }
 
     // Phase 1: determine unique strings and assign codes.
@@ -386,7 +428,12 @@ fn try_dict_encode(col: TypedColumn) -> TypedColumn {
     }; // dict (with borrows into data) is dropped here
 
     match result {
-        None => TypedColumn::Utf8 { data, offsets, null, missing },
+        None => TypedColumn::Utf8 {
+            data,
+            offsets,
+            null,
+            missing,
+        },
         Some((dict_spans, codes)) => {
             let mut dict_data_builder = PaddedVecBuilder::<u8>::new();
             let mut dict_offsets_builder = PaddedVecBuilder::<u32>::with_capacity(dict_spans.len() + 1);
@@ -424,20 +471,14 @@ mod tests {
 
     #[test]
     fn test_parse_string_field() {
-        let lines: Vec<Vec<u8>> = vec![
-            b"hello world foo".to_vec(),
-            b"bar baz qux".to_vec(),
-        ];
-        let fields = vec![
-            vec![(0, 5), (6, 11), (12, 15)],
-            vec![(0, 3), (4, 7), (8, 11)],
-        ];
+        let lines: Vec<Vec<u8>> = vec![b"hello world foo".to_vec(), b"bar baz qux".to_vec()];
+        let fields = vec![vec![(0, 5), (6, 11), (12, 15)], vec![(0, 3), (4, 7), (8, 11)]];
         let col = parse_field_column(&lines, &fields, 0, &DataType::String);
         match col {
             TypedColumn::Utf8 { offsets, .. } => {
                 assert_eq!(offsets[0], 0);
-                assert_eq!(offsets[1], 5);  // "hello"
-                assert_eq!(offsets[2], 8);  // "hello" + "bar"
+                assert_eq!(offsets[1], 5); // "hello"
+                assert_eq!(offsets[2], 8); // "hello" + "bar"
             }
             _ => panic!("expected Utf8"),
         }
@@ -445,14 +486,8 @@ mod tests {
 
     #[test]
     fn test_parse_int_field() {
-        let lines: Vec<Vec<u8>> = vec![
-            b"100 hello".to_vec(),
-            b"200 world".to_vec(),
-        ];
-        let fields = vec![
-            vec![(0, 3), (4, 9)],
-            vec![(0, 3), (4, 9)],
-        ];
+        let lines: Vec<Vec<u8>> = vec![b"100 hello".to_vec(), b"200 world".to_vec()];
+        let fields = vec![vec![(0, 3), (4, 9)], vec![(0, 3), (4, 9)]];
         let col = parse_field_column(&lines, &fields, 0, &DataType::Integral);
         match col {
             TypedColumn::Int32 { data, .. } => {
@@ -465,16 +500,8 @@ mod tests {
 
     #[test]
     fn test_parse_selected_skips_inactive() {
-        let lines: Vec<Vec<u8>> = vec![
-            b"aaa".to_vec(),
-            b"bbb".to_vec(),
-            b"ccc".to_vec(),
-        ];
-        let fields = vec![
-            vec![(0, 3)],
-            vec![(0, 3)],
-            vec![(0, 3)],
-        ];
+        let lines: Vec<Vec<u8>> = vec![b"aaa".to_vec(), b"bbb".to_vec(), b"ccc".to_vec()];
+        let fields = vec![vec![(0, 3)], vec![(0, 3)], vec![(0, 3)]];
         let mut sel_bm = Bitmap::all_unset(3);
         sel_bm.set(0);
         sel_bm.set(2);
@@ -495,16 +522,8 @@ mod tests {
 
     #[test]
     fn test_parse_int_selected_skips_inactive() {
-        let lines: Vec<Vec<u8>> = vec![
-            b"100".to_vec(),
-            b"200".to_vec(),
-            b"300".to_vec(),
-        ];
-        let fields = vec![
-            vec![(0, 3)],
-            vec![(0, 3)],
-            vec![(0, 3)],
-        ];
+        let lines: Vec<Vec<u8>> = vec![b"100".to_vec(), b"200".to_vec(), b"300".to_vec()];
+        let fields = vec![vec![(0, 3)], vec![(0, 3)], vec![(0, 3)]];
         let mut sel_bm = Bitmap::all_unset(3);
         sel_bm.set(0);
         sel_bm.set(2);
@@ -513,11 +532,11 @@ mod tests {
         match col {
             TypedColumn::Int32 { data, null, .. } => {
                 assert_eq!(data[0], 100);
-                assert_eq!(data[1], 0);   // inactive row gets default 0
+                assert_eq!(data[1], 0); // inactive row gets default 0
                 assert_eq!(data[2], 300);
-                assert!(null.is_set(0));   // active, parsed ok
-                assert!(!null.is_set(1));  // inactive, null unset
-                assert!(null.is_set(2));   // active, parsed ok
+                assert!(null.is_set(0)); // active, parsed ok
+                assert!(!null.is_set(1)); // inactive, null unset
+                assert!(null.is_set(2)); // active, parsed ok
             }
             _ => panic!("expected Int32"),
         }
@@ -525,16 +544,8 @@ mod tests {
 
     #[test]
     fn test_parse_float_selected_skips_inactive() {
-        let lines: Vec<Vec<u8>> = vec![
-            b"1.5".to_vec(),
-            b"2.5".to_vec(),
-            b"3.5".to_vec(),
-        ];
-        let fields = vec![
-            vec![(0, 3)],
-            vec![(0, 3)],
-            vec![(0, 3)],
-        ];
+        let lines: Vec<Vec<u8>> = vec![b"1.5".to_vec(), b"2.5".to_vec(), b"3.5".to_vec()];
+        let fields = vec![vec![(0, 3)], vec![(0, 3)], vec![(0, 3)]];
         let mut sel_bm = Bitmap::all_unset(3);
         sel_bm.set(0);
         let sel = SelectionVector::Bitmap(sel_bm);
@@ -542,11 +553,11 @@ mod tests {
         match col {
             TypedColumn::Float32 { data, null, .. } => {
                 assert_eq!(data[0], 1.5);
-                assert_eq!(data[1], 0.0);  // inactive row gets default 0.0
-                assert_eq!(data[2], 0.0);  // inactive row gets default 0.0
-                assert!(null.is_set(0));    // active, parsed ok
-                assert!(!null.is_set(1));   // inactive, null unset
-                assert!(!null.is_set(2));   // inactive, null unset
+                assert_eq!(data[1], 0.0); // inactive row gets default 0.0
+                assert_eq!(data[2], 0.0); // inactive row gets default 0.0
+                assert!(null.is_set(0)); // active, parsed ok
+                assert!(!null.is_set(1)); // inactive, null unset
+                assert!(!null.is_set(2)); // inactive, null unset
             }
             _ => panic!("expected Float32"),
         }
@@ -565,16 +576,13 @@ mod tests {
     #[test]
     fn test_parse_string_field_with_slices() {
         let lines: Vec<&[u8]> = vec![b"hello world foo" as &[u8], b"bar baz qux" as &[u8]];
-        let fields = vec![
-            vec![(0, 5), (6, 11), (12, 15)],
-            vec![(0, 3), (4, 7), (8, 11)],
-        ];
+        let fields = vec![vec![(0, 5), (6, 11), (12, 15)], vec![(0, 3), (4, 7), (8, 11)]];
         let col = parse_field_column(&lines, &fields, 0, &DataType::String);
         match col {
             TypedColumn::Utf8 { offsets, .. } => {
                 assert_eq!(offsets[0], 0);
-                assert_eq!(offsets[1], 5);  // "hello"
-                assert_eq!(offsets[2], 8);  // "hello" + "bar"
+                assert_eq!(offsets[1], 5); // "hello"
+                assert_eq!(offsets[2], 8); // "hello" + "bar"
             }
             _ => panic!("expected Utf8"),
         }
@@ -584,13 +592,24 @@ mod tests {
     fn test_dict_encode_low_cardinality() {
         // 8 rows with only 2 unique values → should dict-encode
         let lines: Vec<Vec<u8>> = vec![
-            b"200".to_vec(), b"404".to_vec(), b"200".to_vec(), b"200".to_vec(),
-            b"404".to_vec(), b"200".to_vec(), b"404".to_vec(), b"200".to_vec(),
+            b"200".to_vec(),
+            b"404".to_vec(),
+            b"200".to_vec(),
+            b"200".to_vec(),
+            b"404".to_vec(),
+            b"200".to_vec(),
+            b"404".to_vec(),
+            b"200".to_vec(),
         ];
         let fields: Vec<Vec<(usize, usize)>> = lines.iter().map(|l| vec![(0, l.len())]).collect();
         let col = parse_field_column(&lines, &fields, 0, &DataType::String);
         match &col {
-            TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, .. } => {
+            TypedColumn::DictUtf8 {
+                dict_data,
+                dict_offsets,
+                codes,
+                ..
+            } => {
                 // 2 unique dictionary entries
                 assert_eq!(dict_offsets.len() - 1, 2);
                 // Verify codes map correctly
@@ -599,7 +618,7 @@ mod tests {
                 assert_ne!(code_200, code_404);
                 assert_eq!(codes[2], code_200); // "200"
                 assert_eq!(codes[4], code_404); // "404"
-                // Verify dictionary entries
+                                                // Verify dictionary entries
                 for c in 0..2 {
                     let s = dict_offsets[c] as usize;
                     let e = dict_offsets[c + 1] as usize;
@@ -612,10 +631,13 @@ mod tests {
 
         // Verify extract_value round-trips correctly
         use crate::execution::batch::BatchToRowAdapter;
-        for (i, expected) in ["200","404","200","200","404","200","404","200"].iter().enumerate() {
+        for (i, expected) in ["200", "404", "200", "200", "404", "200", "404", "200"]
+            .iter()
+            .enumerate()
+        {
             match BatchToRowAdapter::extract_value(&col, i) {
                 Value::String(s) => assert_eq!(s, *expected, "row {i}"),
-                other => panic!("row {i}: expected String, got {other:?}"),
+                _other => panic!("{}", "row {i}: expected String, got {other:?}"),
             }
         }
     }
@@ -626,6 +648,9 @@ mod tests {
         let lines: Vec<Vec<u8>> = (0..10).map(|i| format!("val_{i}").into_bytes()).collect();
         let fields: Vec<Vec<(usize, usize)>> = lines.iter().map(|l| vec![(0, l.len())]).collect();
         let col = parse_field_column(&lines, &fields, 0, &DataType::String);
-        assert!(matches!(col, TypedColumn::Utf8 { .. }), "high cardinality should stay Utf8");
+        assert!(
+            matches!(col, TypedColumn::Utf8 { .. }),
+            "high cardinality should stay Utf8"
+        );
     }
 }

@@ -13,7 +13,7 @@ pub(crate) enum SetOperator {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Query {
-    Select(SelectStatement),
+    Select(Box<SelectStatement>),
     SetOp {
         op: SetOperator,
         all: bool,
@@ -24,7 +24,6 @@ pub(crate) enum Query {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum JoinType {
-    Cross,
     Left,
     Inner,
     Right,
@@ -70,6 +69,8 @@ pub(crate) struct SelectStatement {
 }
 
 impl SelectStatement {
+    // AST construction naturally supplies each optional SQL clause separately.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         distinct: bool,
         select_clause: SelectClause,
@@ -209,10 +210,10 @@ pub(crate) enum Expression {
     NotLike(Box<Expression>, Box<Expression>),
     In(Box<Expression>, Vec<Expression>),
     NotIn(Box<Expression>, Vec<Expression>),
-    Between(Box<Expression>, Box<Expression>, Box<Expression>),      // expr BETWEEN lo AND hi
-    NotBetween(Box<Expression>, Box<Expression>, Box<Expression>),   // expr NOT BETWEEN lo AND hi
+    Between(Box<Expression>, Box<Expression>, Box<Expression>), // expr BETWEEN lo AND hi
+    NotBetween(Box<Expression>, Box<Expression>, Box<Expression>), // expr NOT BETWEEN lo AND hi
     Cast(Box<Expression>, CastType),
-    Subquery(Box<SelectStatement>),  // A parenthesized SELECT statement used as a scalar expression
+    Subquery(Box<SelectStatement>), // A parenthesized SELECT statement used as a scalar expression
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -382,12 +383,6 @@ impl OrderByExpression {
     pub(crate) fn new(ordering_terms: Vec<OrderingTerm>) -> Self {
         OrderByExpression { ordering_terms }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FuncCallExpression {
-    pub(crate) func_name: String,
-    pub(crate) arguments: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

@@ -40,9 +40,9 @@ pub(crate) enum Node {
         residual: Option<Box<Formula>>,
         join_type: LogicalJoinType,
     },
-    Union(Box<Node>, Box<Node>),                   // Concatenate two result sets
-    Intersect(Box<Node>, Box<Node>, bool),          // Rows in both (bool = ALL)
-    Except(Box<Node>, Box<Node>, bool),             // Rows in left not in right (bool = ALL)
+    Union(Box<Node>, Box<Node>),           // Concatenate two result sets
+    Intersect(Box<Node>, Box<Node>, bool), // Rows in both (bool = ALL)
+    Except(Box<Node>, Box<Node>, bool),    // Rows in left not in right (bool = ALL)
 }
 
 impl Node {
@@ -135,11 +135,18 @@ impl Node {
                 let (left_child, left_variables) = left.physical(physical_plan_creator)?;
                 let (right_child, right_variables) = right.physical(physical_plan_creator)?;
                 let (physical_condition, condition_variables) = condition.physical(physical_plan_creator)?;
-                let return_variables = common::merge(&left_variables, &common::merge(&right_variables, &condition_variables));
+                let return_variables =
+                    common::merge(&left_variables, &common::merge(&right_variables, &condition_variables));
                 let node = execution::Node::LeftJoin(left_child, right_child, physical_condition);
                 Ok((Box::new(node), return_variables))
             }
-            Node::HashJoin { left, right, equi_keys, residual, join_type } => {
+            Node::HashJoin {
+                left,
+                right,
+                equi_keys,
+                residual,
+                join_type,
+            } => {
                 let (left_child, left_variables) = left.physical(physical_plan_creator)?;
                 let (right_child, right_variables) = right.physical(physical_plan_creator)?;
                 let mut return_variables = common::merge(&left_variables, &right_variables);
@@ -222,7 +229,7 @@ pub(crate) enum Expression {
     Function(String, Vec<Named>),
     Branch(Vec<(Box<Formula>, Box<Expression>)>, Option<Box<Expression>>),
     Cast(Box<Expression>, ast::CastType),
-    Subquery(Box<Node>),  // Non-correlated subquery, materialized to a single value
+    Subquery(Box<Node>), // Non-correlated subquery, materialized to a single value
 }
 
 impl Expression {
@@ -261,7 +268,10 @@ impl Expression {
                 }
 
                 Ok((
-                    Box::new(execution::Expression::Function(name.to_ascii_lowercase(), physical_args)),
+                    Box::new(execution::Expression::Function(
+                        name.to_ascii_lowercase(),
+                        physical_args,
+                    )),
                     variables,
                 ))
             }
@@ -393,19 +403,28 @@ impl Formula {
             }
             Formula::ExpressionPredicate(expr) => {
                 let (physical_expr, variables) = expr.physical(physical_plan_creator)?;
-                Ok((Box::new(execution::Formula::ExpressionPredicate(physical_expr)), variables))
+                Ok((
+                    Box::new(execution::Formula::ExpressionPredicate(physical_expr)),
+                    variables,
+                ))
             }
             Formula::Like(expr, pattern) => {
                 let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
                 let (physical_pattern, pattern_variables) = pattern.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&expr_variables, &pattern_variables);
-                Ok((Box::new(execution::Formula::Like(physical_expr, physical_pattern)), return_variables))
+                Ok((
+                    Box::new(execution::Formula::Like(physical_expr, physical_pattern)),
+                    return_variables,
+                ))
             }
             Formula::NotLike(expr, pattern) => {
                 let (physical_expr, expr_variables) = expr.physical(physical_plan_creator)?;
                 let (physical_pattern, pattern_variables) = pattern.physical(physical_plan_creator)?;
                 let return_variables = common::merge(&expr_variables, &pattern_variables);
-                Ok((Box::new(execution::Formula::NotLike(physical_expr, physical_pattern)), return_variables))
+                Ok((
+                    Box::new(execution::Formula::NotLike(physical_expr, physical_pattern)),
+                    return_variables,
+                ))
             }
             Formula::In(expr, list) => {
                 let (physical_expr, mut variables) = expr.physical(physical_plan_creator)?;
@@ -415,7 +434,10 @@ impl Formula {
                     variables = common::merge(&variables, &item_variables);
                     physical_list.push(*physical_item);
                 }
-                Ok((Box::new(execution::Formula::In(physical_expr, physical_list)), variables))
+                Ok((
+                    Box::new(execution::Formula::In(physical_expr, physical_list)),
+                    variables,
+                ))
             }
             Formula::NotIn(expr, list) => {
                 let (physical_expr, mut variables) = expr.physical(physical_plan_creator)?;
@@ -425,7 +447,10 @@ impl Formula {
                     variables = common::merge(&variables, &item_variables);
                     physical_list.push(*physical_item);
                 }
-                Ok((Box::new(execution::Formula::NotIn(physical_expr, physical_list)), variables))
+                Ok((
+                    Box::new(execution::Formula::NotIn(physical_expr, physical_list)),
+                    variables,
+                ))
             }
         }
     }
@@ -438,9 +463,7 @@ pub(crate) struct PhysicalPlanCreator {
 
 impl PhysicalPlanCreator {
     pub(crate) fn new() -> Self {
-        PhysicalPlanCreator {
-            counter: 0,
-        }
+        PhysicalPlanCreator { counter: 0 }
     }
 
     pub(crate) fn new_constant_name(&mut self) -> VariableName {
@@ -485,7 +508,7 @@ pub(crate) enum Aggregate {
     ApproxCountDistinct(Named),
     PercentileDisc(OrderedFloat<f32>, ast::PathExpr, Ordering),
     ApproxPercentile(OrderedFloat<f32>, ast::PathExpr, Ordering),
-    GroupAsAggregate(Named),
+    GroupAs(Named),
 }
 
 impl Aggregate {
@@ -494,7 +517,7 @@ impl Aggregate {
         physical_plan_creator: &mut PhysicalPlanCreator,
     ) -> PhysicalResult<(execution::Aggregate, common::Variables)> {
         match self {
-            Aggregate::GroupAsAggregate(named) => {
+            Aggregate::GroupAs(named) => {
                 let mut variables = common::empty_variables();
 
                 let physical_named = match named {
@@ -723,8 +746,7 @@ mod test {
             Box::new(Formula::Constant(true)),
             Box::new(Formula::Constant(false)),
         );
-        let mut physical_plan_creator =
-            PhysicalPlanCreator::new();
+        let mut physical_plan_creator = PhysicalPlanCreator::new();
         let (physical_formula, variables) = formula.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Formula::And(
             Box::new(execution::Formula::Constant(true)),
@@ -742,8 +764,7 @@ mod test {
         let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
 
         let expr = Expression::Constant(common::Value::Int(1));
-        let mut physical_plan_creator =
-            PhysicalPlanCreator::new();
+        let mut physical_plan_creator = PhysicalPlanCreator::new();
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
         let expected_formula = execution::Expression::Variable(path_expr_const.clone());
 
@@ -786,8 +807,7 @@ mod test {
             )),
         );
 
-        let mut physical_plan_creator =
-            PhysicalPlanCreator::new();
+        let mut physical_plan_creator = PhysicalPlanCreator::new();
         let (physical_formula, variables) = filter.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -880,8 +900,7 @@ mod test {
         let fields = vec![path_expr_b.clone()];
         let group_by = Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
-        let mut physical_plan_creator =
-            PhysicalPlanCreator::new();
+        let mut physical_plan_creator = PhysicalPlanCreator::new();
         let (physical_formula, variables) = group_by.physical(&mut physical_plan_creator).unwrap();
 
         let expected_filtered_formula = execution::Formula::Predicate(
@@ -954,14 +973,8 @@ mod test {
         let path_a = PathExpr::new(vec![PathSegment::AttrName("a_id".to_string())]);
         let path_b = PathExpr::new(vec![PathSegment::AttrName("b_id".to_string())]);
 
-        let left = Node::DataSource(
-            common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
-            vec![],
-        );
-        let right = Node::DataSource(
-            common::DataSource::Stdin("jsonl".to_string(), "b".to_string()),
-            vec![],
-        );
+        let left = Node::DataSource(common::DataSource::Stdin("jsonl".to_string(), "a".to_string()), vec![]);
+        let right = Node::DataSource(common::DataSource::Stdin("jsonl".to_string(), "b".to_string()), vec![]);
 
         let hash_join = Node::HashJoin {
             left: Box::new(left),

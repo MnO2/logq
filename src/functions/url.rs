@@ -1,6 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
     // url_host: extract hostname from HttpRequest
@@ -108,25 +108,23 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
-            Value::HttpRequest(r) => {
-                match &args[1] {
-                    Value::Int(idx) => {
-                        let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
-                        if let Some(url_path_segments) = url.path_segments() {
-                            let idx = *idx as usize;
-                            for (i, segment) in url_path_segments.enumerate() {
-                                if i == idx {
-                                    return Ok(Value::String(segment.into()));
-                                }
+            Value::HttpRequest(r) => match &args[1] {
+                Value::Int(idx) => {
+                    let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                    if let Some(url_path_segments) = url.path_segments() {
+                        let idx = *idx as usize;
+                        for (i, segment) in url_path_segments.enumerate() {
+                            if i == idx {
+                                return Ok(Value::String(segment.into()));
                             }
-                            Ok(Value::Null)
-                        } else {
-                            Ok(Value::Null)
                         }
+                        Ok(Value::Null)
+                    } else {
+                        Ok(Value::Null)
                     }
-                    _ => Err(ExpressionError::InvalidArguments),
                 }
-            }
+                _ => Err(ExpressionError::InvalidArguments),
+            },
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -139,30 +137,28 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::Null => Ok(Value::Null),
             Value::Missing => Ok(Value::Missing),
-            Value::HttpRequest(r) => {
-                match (&args[1], &args[2]) {
-                    (Value::Int(idx), Value::String(target)) => {
-                        let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
-                        if let Some(url_path_segments) = url.path_segments() {
-                            let idx = *idx as usize;
-                            let mut res = String::new();
-                            for (i, segment) in url_path_segments.enumerate() {
-                                if i == idx {
-                                    res.push('/');
-                                    res.push_str(target);
-                                } else {
-                                    res.push('/');
-                                    res.push_str(segment);
-                                }
+            Value::HttpRequest(r) => match (&args[1], &args[2]) {
+                (Value::Int(idx), Value::String(target)) => {
+                    let url = r.parsed_url().map_err(|_| ExpressionError::InvalidArguments)?;
+                    if let Some(url_path_segments) = url.path_segments() {
+                        let idx = *idx as usize;
+                        let mut res = String::new();
+                        for (i, segment) in url_path_segments.enumerate() {
+                            if i == idx {
+                                res.push('/');
+                                res.push_str(target);
+                            } else {
+                                res.push('/');
+                                res.push_str(segment);
                             }
-                            Ok(Value::String(res.into()))
-                        } else {
-                            Ok(Value::Null)
                         }
+                        Ok(Value::String(res.into()))
+                    } else {
+                        Ok(Value::Null)
                     }
-                    _ => Err(ExpressionError::InvalidArguments),
                 }
-            }
+                _ => Err(ExpressionError::InvalidArguments),
+            },
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -173,7 +169,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::types::{Value, HttpRequest};
+    use crate::common::types::{HttpRequest, Value};
 
     fn make_registry() -> FunctionRegistry {
         let mut r = FunctionRegistry::new();
@@ -193,7 +189,10 @@ mod tests {
     fn test_url_host() {
         let r = make_registry();
         let req = make_request("http://example.com/path");
-        assert_eq!(r.call("url_host", &[req]), Ok(Value::String("example.com".to_string().into())));
+        assert_eq!(
+            r.call("url_host", &[req]),
+            Ok(Value::String("example.com".to_string().into()))
+        );
     }
 
     #[test]
@@ -221,14 +220,20 @@ mod tests {
     fn test_url_path() {
         let r = make_registry();
         let req = make_request("http://example.com/foo/bar");
-        assert_eq!(r.call("url_path", &[req]), Ok(Value::String("/foo/bar".to_string().into())));
+        assert_eq!(
+            r.call("url_path", &[req]),
+            Ok(Value::String("/foo/bar".to_string().into()))
+        );
     }
 
     #[test]
     fn test_url_fragment() {
         let r = make_registry();
         let req = make_request("http://example.com/path#section1");
-        assert_eq!(r.call("url_fragment", &[req]), Ok(Value::String("section1".to_string().into())));
+        assert_eq!(
+            r.call("url_fragment", &[req]),
+            Ok(Value::String("section1".to_string().into()))
+        );
     }
 
     #[test]
@@ -242,7 +247,10 @@ mod tests {
     fn test_url_query() {
         let r = make_registry();
         let req = make_request("http://example.com/path?key=value&a=b");
-        assert_eq!(r.call("url_query", &[req]), Ok(Value::String("key=value&a=b".to_string().into())));
+        assert_eq!(
+            r.call("url_query", &[req]),
+            Ok(Value::String("key=value&a=b".to_string().into()))
+        );
     }
 
     #[test]
@@ -256,17 +264,32 @@ mod tests {
     fn test_url_path_segments() {
         let r = make_registry();
         let req = make_request("http://example.com/foo/bar/baz");
-        assert_eq!(r.call("url_path_segments", &[req.clone(), Value::Int(0)]), Ok(Value::String("foo".to_string().into())));
-        assert_eq!(r.call("url_path_segments", &[req.clone(), Value::Int(1)]), Ok(Value::String("bar".to_string().into())));
-        assert_eq!(r.call("url_path_segments", &[req.clone(), Value::Int(2)]), Ok(Value::String("baz".to_string().into())));
+        assert_eq!(
+            r.call("url_path_segments", &[req.clone(), Value::Int(0)]),
+            Ok(Value::String("foo".to_string().into()))
+        );
+        assert_eq!(
+            r.call("url_path_segments", &[req.clone(), Value::Int(1)]),
+            Ok(Value::String("bar".to_string().into()))
+        );
+        assert_eq!(
+            r.call("url_path_segments", &[req.clone(), Value::Int(2)]),
+            Ok(Value::String("baz".to_string().into()))
+        );
         assert_eq!(r.call("url_path_segments", &[req, Value::Int(5)]), Ok(Value::Null));
     }
 
     #[test]
     fn test_url_path_segments_null_missing() {
         let r = make_registry();
-        assert_eq!(r.call("url_path_segments", &[Value::Null, Value::Int(0)]), Ok(Value::Null));
-        assert_eq!(r.call("url_path_segments", &[Value::Missing, Value::Int(0)]), Ok(Value::Missing));
+        assert_eq!(
+            r.call("url_path_segments", &[Value::Null, Value::Int(0)]),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            r.call("url_path_segments", &[Value::Missing, Value::Int(0)]),
+            Ok(Value::Missing)
+        );
     }
 
     #[test]
@@ -274,7 +297,10 @@ mod tests {
         let r = make_registry();
         let req = make_request("http://example.com/foo/bar/baz");
         assert_eq!(
-            r.call("url_path_bucket", &[req, Value::Int(1), Value::String("*".to_string().into())]),
+            r.call(
+                "url_path_bucket",
+                &[req, Value::Int(1), Value::String("*".to_string().into())]
+            ),
             Ok(Value::String("/foo/*/baz".to_string().into()))
         );
     }
@@ -283,11 +309,17 @@ mod tests {
     fn test_url_path_bucket_null_missing() {
         let r = make_registry();
         assert_eq!(
-            r.call("url_path_bucket", &[Value::Null, Value::Int(0), Value::String("*".to_string().into())]),
+            r.call(
+                "url_path_bucket",
+                &[Value::Null, Value::Int(0), Value::String("*".to_string().into())]
+            ),
             Ok(Value::Null)
         );
         assert_eq!(
-            r.call("url_path_bucket", &[Value::Missing, Value::Int(0), Value::String("*".to_string().into())]),
+            r.call(
+                "url_path_bucket",
+                &[Value::Missing, Value::Int(0), Value::String("*".to_string().into())]
+            ),
             Ok(Value::Missing)
         );
     }

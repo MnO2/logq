@@ -67,7 +67,9 @@ mod tests {
     #[test]
     fn test_bitmap_count_active() {
         let mut bm = Bitmap::all_unset(64);
-        bm.set(0); bm.set(10); bm.set(63);
+        bm.set(0);
+        bm.set(10);
+        bm.set(63);
         let sv = SelectionVector::Bitmap(bm);
         assert_eq!(sv.count_active(64), 3);
     }

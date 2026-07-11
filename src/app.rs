@@ -41,20 +41,20 @@ pub enum AppError {
 
 impl PartialEq for AppError {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (AppError::Syntax(_), AppError::Syntax(_)) => true,
-            (AppError::InputNotAllConsumed(_), AppError::InputNotAllConsumed(_)) => true,
-            (AppError::Parse(_), AppError::Parse(_)) => true,
-            (AppError::PhysicalPlan(_), AppError::PhysicalPlan(_)) => true,
-            (AppError::CreateStream(_), AppError::CreateStream(_)) => true,
-            (AppError::Stream(_), AppError::Stream(_)) => true,
-            (AppError::InvalidLogFileFormat, AppError::InvalidLogFileFormat) => true,
-            (AppError::InvalidTableSpecString, AppError::InvalidTableSpecString) => true,
-            (AppError::WriteCsv(_), AppError::WriteCsv(_)) => true,
-            (AppError::WriteJson(_), AppError::WriteJson(_)) => true,
-            (AppError::Registry(_), AppError::Registry(_)) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (AppError::Syntax(_), AppError::Syntax(_))
+                | (AppError::InputNotAllConsumed(_), AppError::InputNotAllConsumed(_))
+                | (AppError::Parse(_), AppError::Parse(_))
+                | (AppError::PhysicalPlan(_), AppError::PhysicalPlan(_))
+                | (AppError::CreateStream(_), AppError::CreateStream(_))
+                | (AppError::Stream(_), AppError::Stream(_))
+                | (AppError::InvalidLogFileFormat, AppError::InvalidLogFileFormat)
+                | (AppError::InvalidTableSpecString, AppError::InvalidTableSpecString)
+                | (AppError::WriteCsv(_), AppError::WriteCsv(_))
+                | (AppError::WriteJson(_), AppError::WriteJson(_))
+                | (AppError::Registry(_), AppError::Registry(_))
+        )
     }
 }
 
@@ -63,17 +63,12 @@ impl Eq for AppError {}
 impl From<nom::Err<error::Error<&str>>> for AppError {
     fn from(e: nom::Err<error::Error<&str>>) -> AppError {
         match e {
-            nom::Err::Failure(v) => {
-                AppError::Syntax(v.input.to_string())
-            }
-            nom::Err::Error(v) => {
-                AppError::Syntax(v.input.to_string())
-            }
+            nom::Err::Failure(v) => AppError::Syntax(v.input.to_string()),
+            nom::Err::Error(v) => AppError::Syntax(v.input.to_string()),
             _ => AppError::Syntax(String::new()),
         }
     }
 }
-
 
 pub enum OutputMode {
     Table,
@@ -95,7 +90,7 @@ impl FromStr for OutputMode {
 }
 
 pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry) -> AppResult<()> {
-    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
+    let (rest_of_str, q) = syntax::parser::query(query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
@@ -111,8 +106,13 @@ pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry)
     Ok(())
 }
 
-pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, output_mode: OutputMode, threads: usize) -> AppResult<()> {
-    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
+pub fn run(
+    query_str: &str,
+    data_sources: common::types::DataSourceRegistry,
+    output_mode: OutputMode,
+    threads: usize,
+) -> AppResult<()> {
+    let (rest_of_str, q) = syntax::parser::query(query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
@@ -174,10 +174,10 @@ pub fn run(query_str: &str, data_sources: common::types::DataSourceRegistry, out
                         common::types::Value::Missing => obj[key] = json::Null,
                         common::types::Value::Object(_) => {
                             //
-                            obj[key] = json::JsonValue::String("{ ... }".to_string().into());
+                            obj[key] = json::JsonValue::String("{ ... }".to_string());
                         }
                         common::types::Value::Array(_) => {
-                            obj[key] = json::JsonValue::String("[ ... ]".to_string().into());
+                            obj[key] = json::JsonValue::String("[ ... ]".to_string());
                         }
                     }
                 }
@@ -198,7 +198,7 @@ pub(crate) fn run_to_vec(
     data_sources: common::types::DataSourceRegistry,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
+    let (rest_of_str, q) = syntax::parser::query(query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
@@ -290,9 +290,9 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
 
-        let data_source =
-            common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_source = common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
         let result = run(query, data_sources, OutputMode::Csv, 1);
         dir.close().unwrap();
         result
@@ -312,9 +312,9 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
 
-        let data_source =
-            common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_source = common::types::DataSource::File(file_path, format.to_string(), "it".to_string());
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
         let result = run_to_vec(query, data_sources, 1);
         dir.close().unwrap();
         result
@@ -333,8 +333,9 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
-        let result = run(&*query_str, data_sources, OutputMode::Csv, 1);
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
+        let result = run(query_str, data_sources, OutputMode::Csv, 1);
 
         assert_eq!(result, Ok(()));
 
@@ -353,7 +354,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
         let result = run(
             r#"select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t order by t asc limit 1"#,
             data_sources.clone(),
@@ -405,7 +407,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
         let result = run(
             r#"select b, e.f.g as x from it limit 1"#,
             data_sources.clone(),
@@ -446,7 +449,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Self cross join: FROM it AS a CROSS JOIN it AS b
         let result = run(
@@ -473,7 +477,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Comma-separated FROM items (implicit cross join)
         let result = run(
@@ -501,7 +506,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Cross join with filter
         let result = run(
@@ -529,7 +535,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LEFT JOIN with matching condition - all rows match themselves
         let result = run(
@@ -556,7 +563,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LEFT JOIN where nothing matches - all right sides should be NULL
         let result = run(
@@ -583,7 +591,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LEFT OUTER JOIN - should work identically to LEFT JOIN
         let result = run(
@@ -611,7 +620,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Subquery: select rows where x equals the max x
         let result = run(
@@ -638,7 +648,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Scalar subquery in SELECT
         let result = run(
@@ -666,7 +677,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // UNION (deduplicates)
         let result = run(
@@ -703,7 +715,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         let result = run(
             r#"select x from it where x < 3 intersect select x from it where x > 1"#,
@@ -730,7 +743,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format.clone(), table_name.clone());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         let result = run(
             r#"select x from it except select x from it where x > 2"#,
@@ -759,7 +773,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Mixed case: SELECT, FROM, WHERE, AND, LIMIT
         let result = run(
@@ -805,7 +820,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // IS NULL
         let result = run(
@@ -851,7 +867,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Multi-branch CASE WHEN with ELSE
         let result = run(
@@ -879,7 +896,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // LIKE
         let result = run(
@@ -933,7 +951,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // CAST to int
         let result = run(
@@ -968,7 +987,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // UPPER, LOWER, CHAR_LENGTH
         let result = run(
@@ -998,7 +1018,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // SELECT DISTINCT with ORDER BY
         let result = run(
@@ -1026,7 +1047,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // CROSS JOIN
         let result = run(
@@ -1063,7 +1085,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Subquery in WHERE
         let result = run(
@@ -1117,7 +1140,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // NULLIF returns NULL when equal, value when not
         let result = run(
@@ -1144,24 +1168,15 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // JSON output mode
-        let result = run(
-            r#"select x, y from it"#,
-            data_sources.clone(),
-            OutputMode::Json,
-            1,
-        );
+        let result = run(r#"select x, y from it"#, data_sources.clone(), OutputMode::Json, 1);
         assert_eq!(result, Ok(()));
 
         // CSV output mode (Table mode omitted: prettytable may SIGSEGV without a TTY)
-        let result = run(
-            r#"select x, y from it"#,
-            data_sources.clone(),
-            OutputMode::Csv,
-            1,
-        );
+        let result = run(r#"select x, y from it"#, data_sources.clone(), OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1179,7 +1194,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, file_format, table_name);
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         // Nested path access
         let result = run(
@@ -1209,7 +1225,12 @@ mod tests {
             r#"2019-06-07T18:45:34.559871Z elb1 78.168.134.93:4587 10.0.0.216:80 0.000040 0.002000 0.000030 500 500 0 1024 "GET https://example.com:443/error HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg1/1234 "Root=1-002""#,
             r#"2019-06-07T18:45:35.559871Z elb1 78.168.134.94:4588 10.0.0.217:80 0.000050 0.003000 0.000035 200 200 0 8192 "GET https://example.com:443/ok HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg1/1234 "Root=1-003""#,
         ];
-        let results = run_format_query_to_vec("elb", lines, r#"SELECT elb_status_code, sent_bytes FROM it WHERE elb_status_code = "200""#).unwrap();
+        let results = run_format_query_to_vec(
+            "elb",
+            lines,
+            r#"SELECT elb_status_code, sent_bytes FROM it WHERE elb_status_code = "200""#,
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
         for row in &results {
             let status = &row.iter().find(|(k, _)| k == "elb_status_code").unwrap().1;
@@ -1226,7 +1247,11 @@ mod tests {
             r#"2019-06-07T18:45:36.559871Z elb1 78.168.134.95:4589 10.0.0.218:80 0.000060 0.004000 0.000040 500 500 0 2048 "GET https://example.com:443/d HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg1/1234 "Root=1-004""#,
             r#"2019-06-07T18:45:37.559871Z elb1 78.168.134.96:4590 10.0.0.219:80 0.000070 0.005000 0.000045 200 200 0 512 "GET https://example.com:443/e HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg1/1234 "Root=1-005""#,
         ];
-        let result = run_format_query("elb", lines, r#"SELECT elb_status_code, sum(backend_processing_time) as total_bpt, sum(sent_bytes) as total_bytes FROM it GROUP BY elb_status_code"#);
+        let result = run_format_query(
+            "elb",
+            lines,
+            r#"SELECT elb_status_code, sum(backend_processing_time) as total_bpt, sum(sent_bytes) as total_bytes FROM it GROUP BY elb_status_code"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1251,7 +1276,11 @@ mod tests {
             r#"2019-06-07T18:45:36.559871Z elb1 78.168.134.95:4589 10.0.0.218:80 0.000060 0.004000 0.000040 200 200 0 900 "GET https://example.com:443/d HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg1/1234 "Root=1-004""#,
             r#"2019-06-07T18:45:37.559871Z elb1 78.168.134.96:4590 10.0.0.219:80 0.000070 0.005000 0.000045 200 200 0 200 "GET https://example.com:443/e HTTP/1.1" "Mozilla/5.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/tg1/1234 "Root=1-005""#,
         ];
-        let result = run_format_query("elb", lines, r#"SELECT sent_bytes FROM it ORDER BY sent_bytes DESC LIMIT 2"#);
+        let result = run_format_query(
+            "elb",
+            lines,
+            r#"SELECT sent_bytes FROM it ORDER BY sent_bytes DESC LIMIT 2"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1262,7 +1291,12 @@ mod tests {
             r#"https 2018-07-02T22:23:01.186641Z app/my-loadbalancer/50dc6c495c0c9188 192.168.131.40:2818 10.0.0.2:80 0.001 0.002 0.001 200 200 50 512 "GET https://www.example.com:443/ HTTP/1.1" "curl/7.46.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-002" "www.example.com" "arn:aws:acm:cert/123" 1 2018-07-02T22:22:49.364000Z "forward" "-" "-""#,
             r#"h2 2018-07-02T22:23:02.186641Z app/my-loadbalancer/50dc6c495c0c9188 192.168.131.41:2819 10.0.0.3:80 0.002 0.003 0.002 301 301 0 128 "GET https://www.example.com:443/redirect HTTP/1.1" "curl/7.46.0" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-003" "www.example.com" "arn:aws:acm:cert/456" 2 2018-07-02T22:22:50.364000Z "forward" "-" "-""#,
         ];
-        let results = run_format_query_to_vec("alb", lines, r#"SELECT type, elb_status_code FROM it WHERE type = "https""#).unwrap();
+        let results = run_format_query_to_vec(
+            "alb",
+            lines,
+            r#"SELECT type, elb_status_code FROM it WHERE type = "https""#,
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         let type_val = &results[0].iter().find(|(k, _)| k == "type").unwrap().1;
         assert_eq!(type_val, &common::types::Value::String("https".to_string().into()));
@@ -1277,7 +1311,11 @@ mod tests {
             r#"http 2018-07-02T22:23:03.186641Z app/lb/1 192.168.1.4:1003 10.0.0.4:80 0.004 0.040 0.004 500 500 400 4000 "GET http://www.example.com:80/d HTTP/1.1" "curl/7.46.0" - - arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/tg/1 "Root=1-004" "-" "-" 0 2018-07-02T22:22:51.364000Z "forward" "-" "-""#,
             r#"http 2018-07-02T22:23:04.186641Z app/lb/1 192.168.1.5:1004 10.0.0.5:80 0.005 0.050 0.005 200 200 500 5000 "GET http://www.example.com:80/e HTTP/1.1" "curl/7.46.0" - - arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/tg/1 "Root=1-005" "-" "-" 0 2018-07-02T22:22:52.364000Z "forward" "-" "-""#,
         ];
-        let result = run_format_query("alb", lines, r#"SELECT elb_status_code, sum(request_processing_time) as total_rpt FROM it GROUP BY elb_status_code"#);
+        let result = run_format_query(
+            "alb",
+            lines,
+            r#"SELECT elb_status_code, sum(request_processing_time) as total_rpt FROM it GROUP BY elb_status_code"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1290,7 +1328,11 @@ mod tests {
             r#"http 2018-07-02T22:23:03.186641Z app/lb/1 192.168.1.4:1003 10.0.0.4:80 0.004 0.040 0.004 200 200 50 4000 "GET http://www.example.com:80/d HTTP/1.1" "curl/7.46.0" - - arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/tg/1 "Root=1-004" "-" "-" 0 2018-07-02T22:22:51.364000Z "forward" "-" "-""#,
             r#"http 2018-07-02T22:23:04.186641Z app/lb/1 192.168.1.5:1004 10.0.0.5:80 0.005 0.050 0.005 200 200 800 5000 "GET http://www.example.com:80/e HTTP/1.1" "curl/7.46.0" - - arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/tg/1 "Root=1-005" "-" "-" 0 2018-07-02T22:22:52.364000Z "forward" "-" "-""#,
         ];
-        let result = run_format_query("alb", lines, r#"SELECT received_bytes FROM it ORDER BY received_bytes DESC LIMIT 3"#);
+        let result = run_format_query(
+            "alb",
+            lines,
+            r#"SELECT received_bytes FROM it ORDER BY received_bytes DESC LIMIT 3"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1303,7 +1345,12 @@ mod tests {
             r#"owner1 mybucket [06/Feb/2019:00:03:00 +0000] 192.0.2.6 owner1 REQ004 REST.DELETE.OBJECT old/file.tmp "DELETE /mybucket/old/file.tmp HTTP/1.1" 204 - - - 40 15 "-" "aws-sdk/1.0" - abc4= SigV4 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader mybucket.s3.amazonaws.com TLSv1.2"#,
             r#"owner1 mybucket [06/Feb/2019:00:04:00 +0000] 192.0.2.7 owner1 REQ005 REST.GET.OBJECT images/logo.png "GET /mybucket/images/logo.png HTTP/1.1" 200 - 512 512 30 5 "-" "aws-sdk/1.0" - abc5= SigV4 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader mybucket.s3.amazonaws.com TLSv1.2"#,
         ];
-        let results = run_format_query_to_vec("s3", lines, r#"SELECT operation, http_status FROM it WHERE operation = "REST.GET.OBJECT""#).unwrap();
+        let results = run_format_query_to_vec(
+            "s3",
+            lines,
+            r#"SELECT operation, http_status FROM it WHERE operation = "REST.GET.OBJECT""#,
+        )
+        .unwrap();
         assert_eq!(results.len(), 3);
         for row in &results {
             let op = &row.iter().find(|(k, _)| k == "operation").unwrap().1;
@@ -1318,7 +1365,11 @@ mod tests {
             r#"owner1 mybucket [06/Feb/2019:00:01:00 +0000] 192.0.2.4 owner1 REQ002 REST.GET.OBJECT key2 "GET /mybucket/key2 HTTP/1.1" 403 AccessDenied 0 0 10 5 "-" "aws-sdk/1.0" - abc2= SigV4 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader mybucket.s3.amazonaws.com TLSv1.2"#,
             r#"owner1 mybucket [06/Feb/2019:00:02:00 +0000] 192.0.2.5 owner1 REQ003 REST.GET.OBJECT key3 "GET /mybucket/key3 HTTP/1.1" 200 - 2048 2048 60 20 "-" "aws-sdk/1.0" - abc3= SigV4 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader mybucket.s3.amazonaws.com TLSv1.2"#,
         ];
-        let result = run_format_query("s3", lines, r#"SELECT error_code, refererr FROM it WHERE error_code = "-""#);
+        let result = run_format_query(
+            "s3",
+            lines,
+            r#"SELECT error_code, refererr FROM it WHERE error_code = "-""#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1334,7 +1385,11 @@ mod tests {
             r#"owner1 bkt [01/Jan/2020:00:06:00 +0000] 10.0.0.7 owner1 R7 REST.GET.OBJECT k7 "GET /bkt/k7 HTTP/1.1" 200 - 400 400 40 20 "-" "sdk/1" - g= SigV4 AES AuthHeader bkt.s3.amazonaws.com TLSv1.2"#,
             r#"owner1 bkt [01/Jan/2020:00:07:00 +0000] 10.0.0.8 owner1 R8 REST.GET.OBJECT k8 "GET /bkt/k8 HTTP/1.1" 404 NoSuchKey 0 0 9 4 "-" "sdk/1" - h= SigV4 AES AuthHeader bkt.s3.amazonaws.com TLSv1.2"#,
         ];
-        let result = run_format_query("s3", lines, r#"SELECT http_status, count(*) as cnt FROM it GROUP BY http_status ORDER BY http_status ASC"#);
+        let result = run_format_query(
+            "s3",
+            lines,
+            r#"SELECT http_status, count(*) as cnt FROM it GROUP BY http_status ORDER BY http_status ASC"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1345,7 +1400,11 @@ mod tests {
             r#"owner1 AnotherBucket [06/Feb/2019:00:01:00 +0000] 192.0.2.4 owner1 REQ002 REST.PUT.OBJECT key2 "PUT /AnotherBucket/key2 HTTP/1.1" 200 - 2048 2048 60 20 "-" "aws-sdk/1.0" - abc2= SigV4 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader AnotherBucket.s3.amazonaws.com TLSv1.2"#,
             r#"owner1 ThirdBucket [06/Feb/2019:00:02:00 +0000] 192.0.2.5 owner1 REQ003 REST.GET.VERSIONING key3 "GET /ThirdBucket/key3 HTTP/1.1" 200 - 512 512 30 5 "-" "aws-sdk/1.0" - abc3= SigV4 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader ThirdBucket.s3.amazonaws.com TLSv1.2"#,
         ];
-        let result = run_format_query("s3", lines, r#"SELECT upper(operation) as op_upper, lower(bucket) as bucket_lower FROM it"#);
+        let result = run_format_query(
+            "s3",
+            lines,
+            r#"SELECT upper(operation) as op_upper, lower(bucket) as bucket_lower FROM it"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1358,7 +1417,8 @@ mod tests {
             r#"1515734743.300      2 [192.168.1.4] TCP_HIT/200 12045 GET http://www.github.com/ - HIER_DIRECT/140.82.121.3 text/html"#,
             r#"1515734744.400      3 [192.168.1.5] TCP_DENIED/403 2100 CONNECT slack.com:443 - HIER_NONE/- text/html"#,
         ];
-        let results = run_format_query_to_vec("squid", lines, r#"SELECT method, url FROM it WHERE method = "GET""#).unwrap();
+        let results =
+            run_format_query_to_vec("squid", lines, r#"SELECT method, url FROM it WHERE method = "GET""#).unwrap();
         assert_eq!(results.len(), 2);
         for row in &results {
             let method = &row.iter().find(|(k, _)| k == "method").unwrap().1;
@@ -1381,11 +1441,7 @@ mod tests {
 
     #[test]
     fn test_unknown_function_error_at_planning() {
-        let result = run_format_query(
-            "jsonl",
-            &[r#"{"a": 1}"#],
-            "SELECT nonexistent_func(a) FROM it",
-        );
+        let result = run_format_query("jsonl", &[r#"{"a": 1}"#], "SELECT nonexistent_func(a) FROM it");
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
@@ -1418,10 +1474,21 @@ mod tests {
         drop(file_b);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
-        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
+        data_sources.insert(
+            "b".to_string(),
+            common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()),
+        );
 
-        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv, 1);
+        let result = run(
+            r#"SELECT a.x, b.y FROM a CROSS JOIN b"#,
+            data_sources,
+            OutputMode::Csv,
+            1,
+        );
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1449,10 +1516,21 @@ mod tests {
         drop(file_b);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
-        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
+        data_sources.insert(
+            "b".to_string(),
+            common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()),
+        );
 
-        let result = run(r#"SELECT a.x, b.y FROM a LEFT JOIN b ON a.id = b.id"#, data_sources, OutputMode::Csv, 1);
+        let result = run(
+            r#"SELECT a.x, b.y FROM a LEFT JOIN b ON a.id = b.id"#,
+            data_sources,
+            OutputMode::Csv,
+            1,
+        );
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1479,8 +1557,14 @@ mod tests {
         drop(file_b);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
-        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
+        data_sources.insert(
+            "b".to_string(),
+            common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()),
+        );
 
         let result = run(r#"SELECT a.x, b.y FROM a, b"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
@@ -1499,7 +1583,10 @@ mod tests {
         drop(file_a);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
 
         let result = run(r#"SELECT * FROM unknown_table"#, data_sources, OutputMode::Csv, 1);
         assert!(result.is_err(), "Expected error for unknown table, got Ok");
@@ -1519,7 +1606,8 @@ mod tests {
         drop(file);
 
         let data_source = common::types::DataSource::File(file_path, "jsonl".to_string(), "it".to_string());
-        let data_sources: common::types::DataSourceRegistry = vec![("it".to_string(), data_source)].into_iter().collect();
+        let data_sources: common::types::DataSourceRegistry =
+            vec![("it".to_string(), data_source)].into_iter().collect();
 
         let result = run(r#"SELECT * FROM it LIMIT 1"#, data_sources, OutputMode::Csv, 1);
         assert_eq!(result, Ok(()));
@@ -1538,12 +1626,26 @@ mod tests {
         drop(file_a);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
-        data_sources.insert("b".to_string(), common::types::DataSource::Stdin("jsonl".to_string(), "b".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
+        data_sources.insert(
+            "b".to_string(),
+            common::types::DataSource::Stdin("jsonl".to_string(), "b".to_string()),
+        );
 
         // "b" is stdin and used as the right side of a join — should produce an error
-        let result = run(r#"SELECT a.x, b.y FROM a CROSS JOIN b"#, data_sources, OutputMode::Csv, 1);
-        assert!(result.is_err(), "Expected error when stdin is on the right side of a join");
+        let result = run(
+            r#"SELECT a.x, b.y FROM a CROSS JOIN b"#,
+            data_sources,
+            OutputMode::Csv,
+            1,
+        );
+        assert!(
+            result.is_err(),
+            "Expected error when stdin is on the right side of a join"
+        );
 
         dir.close().unwrap();
     }
@@ -1571,10 +1673,21 @@ mod tests {
         drop(file_b);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
-        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
+        data_sources.insert(
+            "b".to_string(),
+            common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()),
+        );
 
-        let result = run(r#"SELECT a.x, b.y FROM a, b WHERE a.x = b.y"#, data_sources, OutputMode::Csv, 1);
+        let result = run(
+            r#"SELECT a.x, b.y FROM a, b WHERE a.x = b.y"#,
+            data_sources,
+            OutputMode::Csv,
+            1,
+        );
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
@@ -1591,7 +1704,10 @@ mod tests {
         drop(file);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("MyTable".to_string(), common::types::DataSource::File(file_path, "jsonl".to_string(), "MyTable".to_string()));
+        data_sources.insert(
+            "MyTable".to_string(),
+            common::types::DataSource::File(file_path, "jsonl".to_string(), "MyTable".to_string()),
+        );
 
         // Query uses lowercase "mytable" but registry has "MyTable" — should fail
         let result = run(r#"SELECT * FROM mytable"#, data_sources, OutputMode::Csv, 1);
@@ -1612,7 +1728,11 @@ mod tests {
             r#"1515734746.000      7 [10.0.0.7] TCP_HIT/200 12000 GET http://g.com/ - HIER_DIRECT/1.2.3.7 text/html"#,
             r#"1515734747.000      8 [10.0.0.8] TCP_DENIED/403 1800 CONNECT h.com:443 - HIER_NONE/- text/html"#,
         ];
-        let result = run_format_query("squid", lines, r#"SELECT code_and_status, count(*) as cnt FROM it GROUP BY code_and_status"#);
+        let result = run_format_query(
+            "squid",
+            lines,
+            r#"SELECT code_and_status, count(*) as cnt FROM it GROUP BY code_and_status"#,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -1627,10 +1747,8 @@ mod tests {
             r#"1515734743.000      4 [10.0.0.4] TCP_DENIED/403 2100 CONNECT http://d.com/ - HIER_NONE/- text/html"#,
             r#"1515734744.000      5 [10.0.0.5] TCP_MISS/200 9200 GET http://e.com/ - HIER_DIRECT/1.2.3.6 text/html"#,
         ];
-        let result = run_format_query_to_vec(
-            "squid", lines,
-            r#"SELECT count(*) as cnt FROM it WHERE method = "GET""#,
-        ).unwrap();
+        let result =
+            run_format_query_to_vec("squid", lines, r#"SELECT count(*) as cnt FROM it WHERE method = "GET""#).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0][0].1, common::types::Value::Int(3));
     }
@@ -1643,10 +1761,7 @@ mod tests {
             r#"1515734741.000      2 [10.0.0.2] TCP_MISS/200 15234 POST http://b.com/ - HIER_DIRECT/1.2.3.4 text/html"#,
             r#"1515734742.000      3 [10.0.0.3] TCP_HIT/200 8432 GET http://c.com/ - HIER_DIRECT/1.2.3.5 text/html"#,
         ];
-        let result = run_format_query_to_vec(
-            "squid", lines,
-            r#"SELECT count(*) as cnt FROM it"#,
-        ).unwrap();
+        let result = run_format_query_to_vec("squid", lines, r#"SELECT count(*) as cnt FROM it"#).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0][0].1, common::types::Value::Int(3));
     }
@@ -1676,8 +1791,14 @@ mod tests {
         drop(file_b);
 
         let mut data_sources = common::types::DataSourceRegistry::new();
-        data_sources.insert("a".to_string(), common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()));
-        data_sources.insert("b".to_string(), common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()));
+        data_sources.insert(
+            "a".to_string(),
+            common::types::DataSource::File(file_path_a, "jsonl".to_string(), "a".to_string()),
+        );
+        data_sources.insert(
+            "b".to_string(),
+            common::types::DataSource::File(file_path_b, "jsonl".to_string(), "b".to_string()),
+        );
 
         let result = run_to_vec(query, data_sources, 1);
         dir.close().unwrap();
@@ -1692,17 +1813,23 @@ mod tests {
                 r#"{"id": 2, "x": "world"}"#,
                 r#"{"id": 3, "x": "foo"}"#,
             ],
-            &[
-                r#"{"id": 1, "y": "alpha"}"#,
-                r#"{"id": 3, "y": "beta"}"#,
-            ],
+            &[r#"{"id": 1, "y": "alpha"}"#, r#"{"id": 3, "y": "beta"}"#],
             r#"SELECT x, y FROM a INNER JOIN b ON a.id = b.id"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 2, "results: {:?}", result);
         let xs: Vec<&common::types::Value> = result.iter().map(|r| &r[0].1).collect();
-        assert!(xs.contains(&&common::types::Value::String("hello".into())), "xs: {:?}", xs);
-        assert!(xs.contains(&&common::types::Value::String("foo".into())), "xs: {:?}", xs);
+        assert!(
+            xs.contains(&&common::types::Value::String("hello".into())),
+            "xs: {:?}",
+            xs
+        );
+        assert!(
+            xs.contains(&&common::types::Value::String("foo".into())),
+            "xs: {:?}",
+            xs
+        );
     }
 
     #[test]
@@ -1713,16 +1840,17 @@ mod tests {
                 r#"{"id": 2, "x": "world"}"#,
                 r#"{"id": 3, "x": "foo"}"#,
             ],
-            &[
-                r#"{"id": 1, "y": "alpha"}"#,
-                r#"{"id": 3, "y": "beta"}"#,
-            ],
+            &[r#"{"id": 1, "y": "alpha"}"#, r#"{"id": 3, "y": "beta"}"#],
             r#"SELECT x, y FROM a LEFT JOIN b ON a.id = b.id"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 3);
         // id=2 row should have NULL for y
-        let world_row = result.iter().find(|r| r[0].1 == common::types::Value::String("world".into())).unwrap();
+        let world_row = result
+            .iter()
+            .find(|r| r[0].1 == common::types::Value::String("world".into()))
+            .unwrap();
         assert_eq!(world_row[1].1, common::types::Value::Null);
     }
 
@@ -1730,16 +1858,11 @@ mod tests {
     fn test_e2e_cross_join_with_where_becomes_hash() {
         // FROM a, b WHERE a.id = b.id → internally becomes hash join
         let result = run_two_table_query(
-            &[
-                r#"{"id": 1, "x": "hello"}"#,
-                r#"{"id": 2, "x": "world"}"#,
-            ],
-            &[
-                r#"{"id": 1, "y": "alpha"}"#,
-                r#"{"id": 3, "y": "gamma"}"#,
-            ],
+            &[r#"{"id": 1, "x": "hello"}"#, r#"{"id": 2, "x": "world"}"#],
+            &[r#"{"id": 1, "y": "alpha"}"#, r#"{"id": 3, "y": "gamma"}"#],
             r#"SELECT x, y FROM a, b WHERE a.id = b.id"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0][0].1, common::types::Value::String("hello".into()));
@@ -1754,12 +1877,10 @@ mod tests {
                 r#"{"id": 2, "x": "world"}"#,
                 r#"{"id": 1, "x": "hi"}"#,
             ],
-            &[
-                r#"{"id": 1, "y": "alpha"}"#,
-                r#"{"id": 3, "y": "beta"}"#,
-            ],
+            &[r#"{"id": 1, "y": "alpha"}"#, r#"{"id": 3, "y": "beta"}"#],
             r#"SELECT y, count(*) as cnt FROM a INNER JOIN b ON a.id = b.id GROUP BY y"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0][0].1, common::types::Value::String("alpha".into()));
@@ -1769,16 +1890,11 @@ mod tests {
     #[test]
     fn test_e2e_join_null_keys_dont_match() {
         let result = run_two_table_query(
-            &[
-                r#"{"id": 1, "x": "a"}"#,
-                r#"{"x": "b"}"#,
-            ],
-            &[
-                r#"{"id": 1, "y": "c"}"#,
-                r#"{"y": "d"}"#,
-            ],
+            &[r#"{"id": 1, "x": "a"}"#, r#"{"x": "b"}"#],
+            &[r#"{"id": 1, "y": "c"}"#, r#"{"y": "d"}"#],
             r#"SELECT x, y FROM a INNER JOIN b ON a.id = b.id"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Only id=1 matches; missing id rows should not match each other
         assert_eq!(result.len(), 1);
@@ -1789,15 +1905,11 @@ mod tests {
     fn test_e2e_right_join() {
         // RIGHT JOIN: unmatched right-side rows get NULL-padded left columns
         let result = run_two_table_query(
-            &[
-                r#"{"id": 1, "x": "hello"}"#,
-            ],
-            &[
-                r#"{"id": 1, "y": "alpha"}"#,
-                r#"{"id": 2, "y": "beta"}"#,
-            ],
+            &[r#"{"id": 1, "x": "hello"}"#],
+            &[r#"{"id": 1, "y": "alpha"}"#, r#"{"id": 2, "y": "beta"}"#],
             r#"SELECT x, y FROM a RIGHT JOIN b ON a.id = b.id"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 2, "results: {:?}", result);
         // After swap: column order is y (probe/b), x (build/a)

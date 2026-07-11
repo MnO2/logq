@@ -54,9 +54,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::Object(map), Value::String(key)) => {
-                Ok(map.get(key.as_str()).cloned().unwrap_or(Value::Null))
-            }
+            (Value::Object(map), Value::String(key)) => Ok(map.get(key.as_str()).cloned().unwrap_or(Value::Null)),
             (Value::Array(arr), Value::Int(idx)) => {
                 let idx = (*idx - 1) as usize; // 1-based to 0-based
                 Ok(arr.get(idx).cloned().unwrap_or(Value::Null))
@@ -137,10 +135,7 @@ mod tests {
         let obj = make_object(&[("a", Value::Int(1)), ("b", Value::Int(2))]);
         assert_eq!(
             r.call("map_keys", &[obj]),
-            Ok(Value::Array(vec![
-                Value::String("a".into()),
-                Value::String("b".into())
-            ]))
+            Ok(Value::Array(vec![Value::String("a".into()), Value::String("b".into())]))
         );
     }
 
@@ -172,17 +167,11 @@ mod tests {
         let r = make_registry();
         let obj = make_object(&[("name", Value::String("Alice".into()))]);
         assert_eq!(
-            r.call(
-                "element_at",
-                &[obj.clone(), Value::String("name".into())]
-            ),
+            r.call("element_at", &[obj.clone(), Value::String("name".into())]),
             Ok(Value::String("Alice".into()))
         );
         assert_eq!(
-            r.call(
-                "element_at",
-                &[obj, Value::String("missing_key".into())]
-            ),
+            r.call("element_at", &[obj, Value::String("missing_key".into())]),
             Ok(Value::Null)
         );
     }
@@ -191,14 +180,8 @@ mod tests {
     fn test_element_at_array() {
         let r = make_registry();
         let arr = Value::Array(vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
-        assert_eq!(
-            r.call("element_at", &[arr.clone(), Value::Int(2)]),
-            Ok(Value::Int(20))
-        );
-        assert_eq!(
-            r.call("element_at", &[arr, Value::Int(10)]),
-            Ok(Value::Null)
-        );
+        assert_eq!(r.call("element_at", &[arr.clone(), Value::Int(2)]), Ok(Value::Int(20)));
+        assert_eq!(r.call("element_at", &[arr, Value::Int(10)]), Ok(Value::Null));
     }
 
     #[test]

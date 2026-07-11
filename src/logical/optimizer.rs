@@ -1,6 +1,6 @@
 // src/logical/optimizer.rs
 
-use crate::logical::types::{Formula, LogicInfixOp, Expression};
+use crate::logical::types::{Expression, Formula, LogicInfixOp};
 
 /// Extract AND conjuncts from a nested InfixOperator(And, ...) tree into a flat list.
 pub(crate) fn extract_conjuncts(formula: Formula) -> Vec<Formula> {
@@ -36,8 +36,7 @@ pub(crate) fn rebuild_conjunction(mut conjuncts: Vec<Formula>) -> Formula {
 /// Estimated cost of evaluating a predicate. Lower = evaluate first.
 pub(crate) fn predicate_cost(formula: &Formula) -> u32 {
     match formula {
-        Formula::IsNull(_) | Formula::IsNotNull(_)
-        | Formula::IsMissing(_) | Formula::IsNotMissing(_) => 1,
+        Formula::IsNull(_) | Formula::IsNotNull(_) | Formula::IsMissing(_) | Formula::IsNotMissing(_) => 1,
 
         Formula::Constant(_) => 0,
 
@@ -55,9 +54,7 @@ pub(crate) fn predicate_cost(formula: &Formula) -> u32 {
 
         Formula::PrefixOperator(_, inner) => predicate_cost(inner),
 
-        Formula::InfixOperator(_, left, right) => {
-            predicate_cost(left).max(predicate_cost(right))
-        }
+        Formula::InfixOperator(_, left, right) => predicate_cost(left).max(predicate_cost(right)),
 
         Formula::ExpressionPredicate(_) => 60,
     }
@@ -72,7 +69,7 @@ pub(crate) fn reorder_and_conjuncts(formula: Formula) -> Formula {
     match &formula {
         Formula::InfixOperator(LogicInfixOp::And, _, _) => {
             let mut conjuncts = extract_conjuncts(formula);
-            conjuncts.sort_by_key(|f| predicate_cost(f));
+            conjuncts.sort_by_key(predicate_cost);
             rebuild_conjunction(conjuncts)
         }
         _ => formula,
@@ -82,14 +79,14 @@ pub(crate) fn reorder_and_conjuncts(formula: Formula) -> Formula {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical::types::{Formula, Expression, LogicInfixOp, Relation};
     use crate::common::types::Value;
+    use crate::logical::types::{Expression, Formula, LogicInfixOp, Relation};
     use crate::syntax::ast::{PathExpr, PathSegment};
 
     fn var(name: &str) -> Box<Expression> {
-        Box::new(Expression::Variable(PathExpr::new(vec![
-            PathSegment::AttrName(name.to_string()),
-        ])))
+        Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+            name.to_string(),
+        )])))
     }
 
     fn int_const(v: i32) -> Box<Expression> {
@@ -143,11 +140,7 @@ mod tests {
     fn test_reorder_puts_isnull_before_predicate() {
         let expensive = Formula::Like(var("user_agent"), str_const("%bot%"));
         let cheap = Formula::IsNull(var("a"));
-        let and_expr = Formula::InfixOperator(
-            LogicInfixOp::And,
-            Box::new(expensive),
-            Box::new(cheap),
-        );
+        let and_expr = Formula::InfixOperator(LogicInfixOp::And, Box::new(expensive), Box::new(cheap));
         let reordered = reorder_and_conjuncts(and_expr);
         let conjuncts = extract_conjuncts(reordered);
         // IsNull (cost 1) should come before Like (cost 50)

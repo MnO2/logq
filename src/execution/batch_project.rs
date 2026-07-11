@@ -13,9 +13,13 @@ pub(crate) struct BatchProjectOperator {
 impl BatchProjectOperator {
     pub fn new(child: Box<dyn BatchStream>, output_columns: Vec<String>) -> Self {
         let child_schema = child.schema();
-        let types: Vec<ColumnType> = output_columns.iter()
+        let types: Vec<ColumnType> = output_columns
+            .iter()
             .filter_map(|name| {
-                child_schema.names.iter().position(|n| n == name)
+                child_schema
+                    .names
+                    .iter()
+                    .position(|n| n == name)
                     .map(|i| child_schema.types[i].clone())
             })
             .collect();
@@ -23,7 +27,11 @@ impl BatchProjectOperator {
             names: output_columns.clone(),
             types,
         };
-        Self { child, output_columns, schema }
+        Self {
+            child,
+            output_columns,
+            schema,
+        }
     }
 }
 
@@ -31,9 +39,13 @@ impl BatchStream for BatchProjectOperator {
     fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
         match self.child.next_batch()? {
             Some(batch) => {
-                let ColumnBatch { columns, names, selection, len } = batch;
-                let mut col_map: Vec<(String, TypedColumn)> = names.into_iter()
-                    .zip(columns.into_iter()).collect();
+                let ColumnBatch {
+                    columns,
+                    names,
+                    selection,
+                    len,
+                } = batch;
+                let mut col_map: Vec<(String, TypedColumn)> = names.into_iter().zip(columns).collect();
 
                 let mut new_columns = Vec::with_capacity(self.output_columns.len());
                 let mut new_names = Vec::with_capacity(self.output_columns.len());
@@ -92,12 +104,17 @@ mod tests {
             len: 3,
         };
 
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 Ok(self.batch.take())
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
@@ -106,7 +123,10 @@ mod tests {
             types: vec![ColumnType::Int32, ColumnType::Int32],
         };
         let mut proj = BatchProjectOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec!["b".to_string()],
         );
         let result = proj.next_batch().unwrap().unwrap();
@@ -130,7 +150,8 @@ mod tests {
             missing: Bitmap::all_set(3),
         };
         let mut sel = Bitmap::all_unset(3);
-        sel.set(0); sel.set(2);
+        sel.set(0);
+        sel.set(2);
         let batch = ColumnBatch {
             columns: vec![col],
             names: vec!["x".to_string()],
@@ -138,18 +159,29 @@ mod tests {
             len: 3,
         };
 
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 Ok(self.batch.take())
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
         let mut proj = BatchProjectOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec!["x".to_string()],
         );
         let result = proj.next_batch().unwrap().unwrap();

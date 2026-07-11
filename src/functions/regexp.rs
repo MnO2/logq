@@ -1,11 +1,11 @@
-use std::cell::RefCell;
-use std::num::NonZeroUsize;
 use lru::LruCache;
 use regex::Regex;
+use std::cell::RefCell;
+use std::num::NonZeroUsize;
 
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 
 thread_local! {
     static REGEX_CACHE: RefCell<LruCache<String, Regex>> = RefCell::new(
@@ -76,9 +76,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::String(pattern)) => {
                 let re = get_or_compile_regex(pattern)?;
-                let matches: Vec<Value> = re.find_iter(s)
-                    .map(|m| Value::String(m.as_str().into()))
-                    .collect();
+                let matches: Vec<Value> = re.find_iter(s).map(|m| Value::String(m.as_str().into())).collect();
                 Ok(Value::Array(matches))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -93,7 +91,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1], &args[2]) {
             (Value::String(s), Value::String(pattern), Value::String(replacement)) => {
                 let re = get_or_compile_regex(pattern)?;
-                Ok(Value::String(re.replace_all(s, replacement.as_str()).into_owned().into()))
+                Ok(Value::String(
+                    re.replace_all(s, replacement.as_str()).into_owned().into(),
+                ))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -107,9 +107,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::String(pattern)) => {
                 let re = get_or_compile_regex(pattern)?;
-                let parts: Vec<Value> = re.split(s)
-                    .map(|p| Value::String(p.into()))
-                    .collect();
+                let parts: Vec<Value> = re.split(s).map(|p| Value::String(p.into())).collect();
                 Ok(Value::Array(parts))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -149,11 +147,17 @@ mod tests {
     fn test_regexp_like() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_like", &[Value::String("hello123".into()), Value::String("\\d+".into())]),
+            r.call(
+                "regexp_like",
+                &[Value::String("hello123".into()), Value::String("\\d+".into())]
+            ),
             Ok(Value::Boolean(true))
         );
         assert_eq!(
-            r.call("regexp_like", &[Value::String("hello".into()), Value::String("\\d+".into())]),
+            r.call(
+                "regexp_like",
+                &[Value::String("hello".into()), Value::String("\\d+".into())]
+            ),
             Ok(Value::Boolean(false))
         );
     }
@@ -162,7 +166,10 @@ mod tests {
     fn test_regexp_extract() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_extract", &[Value::String("hello123world".into()), Value::String("(\\d+)".into())]),
+            r.call(
+                "regexp_extract",
+                &[Value::String("hello123world".into()), Value::String("(\\d+)".into())]
+            ),
             Ok(Value::String("123".into()))
         );
     }
@@ -171,7 +178,14 @@ mod tests {
     fn test_regexp_extract_with_group() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_extract", &[Value::String("2023-01-15".into()), Value::String("(\\d{4})-(\\d{2})-(\\d{2})".into()), Value::Int(2)]),
+            r.call(
+                "regexp_extract",
+                &[
+                    Value::String("2023-01-15".into()),
+                    Value::String("(\\d{4})-(\\d{2})-(\\d{2})".into()),
+                    Value::Int(2)
+                ]
+            ),
             Ok(Value::String("01".into()))
         );
     }
@@ -180,7 +194,10 @@ mod tests {
     fn test_regexp_extract_no_match() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_extract", &[Value::String("hello".into()), Value::String("\\d+".into())]),
+            r.call(
+                "regexp_extract",
+                &[Value::String("hello".into()), Value::String("\\d+".into())]
+            ),
             Ok(Value::Null)
         );
     }
@@ -189,8 +206,15 @@ mod tests {
     fn test_regexp_extract_all() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_extract_all", &[Value::String("a1b2c3".into()), Value::String("\\d".into())]),
-            Ok(Value::Array(vec![Value::String("1".into()), Value::String("2".into()), Value::String("3".into())]))
+            r.call(
+                "regexp_extract_all",
+                &[Value::String("a1b2c3".into()), Value::String("\\d".into())]
+            ),
+            Ok(Value::Array(vec![
+                Value::String("1".into()),
+                Value::String("2".into()),
+                Value::String("3".into())
+            ]))
         );
     }
 
@@ -198,7 +222,14 @@ mod tests {
     fn test_regexp_replace() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_replace", &[Value::String("hello 123 world 456".into()), Value::String("\\d+".into()), Value::String("NUM".into())]),
+            r.call(
+                "regexp_replace",
+                &[
+                    Value::String("hello 123 world 456".into()),
+                    Value::String("\\d+".into()),
+                    Value::String("NUM".into())
+                ]
+            ),
             Ok(Value::String("hello NUM world NUM".into()))
         );
     }
@@ -207,8 +238,16 @@ mod tests {
     fn test_regexp_split() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_split", &[Value::String("a1b2c3d".into()), Value::String("\\d".into())]),
-            Ok(Value::Array(vec![Value::String("a".into()), Value::String("b".into()), Value::String("c".into()), Value::String("d".into())]))
+            r.call(
+                "regexp_split",
+                &[Value::String("a1b2c3d".into()), Value::String("\\d".into())]
+            ),
+            Ok(Value::Array(vec![
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into()),
+                Value::String("d".into())
+            ]))
         );
     }
 
@@ -216,7 +255,10 @@ mod tests {
     fn test_regexp_count() {
         let r = make_registry();
         assert_eq!(
-            r.call("regexp_count", &[Value::String("a1b2c3".into()), Value::String("\\d".into())]),
+            r.call(
+                "regexp_count",
+                &[Value::String("a1b2c3".into()), Value::String("\\d".into())]
+            ),
             Ok(Value::Int(3))
         );
     }
@@ -224,7 +266,13 @@ mod tests {
     #[test]
     fn test_regexp_null_propagation() {
         let r = make_registry();
-        assert_eq!(r.call("regexp_like", &[Value::Null, Value::String("\\d".into())]), Ok(Value::Null));
-        assert_eq!(r.call("regexp_like", &[Value::Missing, Value::String("\\d".into())]), Ok(Value::Missing));
+        assert_eq!(
+            r.call("regexp_like", &[Value::Null, Value::String("\\d".into())]),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            r.call("regexp_like", &[Value::Missing, Value::String("\\d".into())]),
+            Ok(Value::Missing)
+        );
     }
 }

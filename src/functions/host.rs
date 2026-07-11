@@ -1,6 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
     // host_name: extract hostname from Host
@@ -35,7 +35,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::types::{Value, Host};
+    use crate::common::types::{Host, Value};
 
     fn make_registry() -> FunctionRegistry {
         let mut r = FunctionRegistry::new();
@@ -54,7 +54,10 @@ mod tests {
     fn test_host_name() {
         let r = make_registry();
         let host = make_host("example.com", 8080);
-        assert_eq!(r.call("host_name", &[host]), Ok(Value::String("example.com".to_string().into())));
+        assert_eq!(
+            r.call("host_name", &[host]),
+            Ok(Value::String("example.com".to_string().into()))
+        );
     }
 
     #[test]
@@ -88,6 +91,9 @@ mod tests {
     #[test]
     fn test_host_name_invalid_type() {
         let r = make_registry();
-        assert_eq!(r.call("host_name", &[Value::Int(42)]), Err(ExpressionError::InvalidArguments));
+        assert_eq!(
+            r.call("host_name", &[Value::Int(42)]),
+            Err(ExpressionError::InvalidArguments)
+        );
     }
 }

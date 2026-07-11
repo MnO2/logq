@@ -3,7 +3,7 @@ use super::ast::*;
 /// Desugar a top-level Query (which may be a set operation or a single SELECT).
 pub(crate) fn desugar_query(q: Query) -> Query {
     match q {
-        Query::Select(stmt) => Query::Select(desugar_statement(stmt)),
+        Query::Select(stmt) => Query::Select(Box::new(desugar_statement(*stmt))),
         Query::SetOp { op, all, left, right } => Query::SetOp {
             op,
             all,
@@ -34,14 +34,17 @@ pub(crate) fn desugar_statement(stmt: SelectStatement) -> SelectStatement {
 fn desugar_from_clause(from: FromClause) -> FromClause {
     match from {
         FromClause::Tables(_) => from,
-        FromClause::Join { left, right, join_type, condition } => {
-            FromClause::Join {
-                left: Box::new(desugar_from_clause(*left)),
-                right,
-                join_type,
-                condition: condition.map(desugar_expr),
-            }
-        }
+        FromClause::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => FromClause::Join {
+            left: Box::new(desugar_from_clause(*left)),
+            right,
+            join_type,
+            condition: condition.map(desugar_expr),
+        },
     }
 }
 
@@ -56,9 +59,7 @@ fn desugar_select_clause(clause: SelectClause) -> SelectClause {
 
 fn desugar_select_expr(se: SelectExpression) -> SelectExpression {
     match se {
-        SelectExpression::Expression(expr, alias) => {
-            SelectExpression::Expression(Box::new(desugar_expr(*expr)), alias)
-        }
+        SelectExpression::Expression(expr, alias) => SelectExpression::Expression(Box::new(desugar_expr(*expr)), alias),
         SelectExpression::Star => SelectExpression::Star,
     }
 }
@@ -70,9 +71,7 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
         Expression::BinaryOperator(op, l, r) => {
             Expression::BinaryOperator(op, Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r)))
         }
-        Expression::UnaryOperator(op, inner) => {
-            Expression::UnaryOperator(op, Box::new(desugar_expr(*inner)))
-        }
+        Expression::UnaryOperator(op, inner) => Expression::UnaryOperator(op, Box::new(desugar_expr(*inner))),
         Expression::CaseWhenExpression(cwe) => {
             let branches = cwe
                 .branches
@@ -80,17 +79,10 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
                 .map(|(cond, then_e)| (desugar_expr(cond), desugar_expr(then_e)))
                 .collect();
             let else_expr = cwe.else_expr.map(|e| Box::new(desugar_expr(*e)));
-            Expression::CaseWhenExpression(CaseWhenExpression {
-                branches,
-                else_expr,
-            })
+            Expression::CaseWhenExpression(CaseWhenExpression { branches, else_expr })
         }
-        Expression::FuncCall(ref name, ref args, _) if name.eq_ignore_ascii_case("coalesce") => {
-            desugar_coalesce(args)
-        }
-        Expression::FuncCall(ref name, ref args, _) if name.eq_ignore_ascii_case("nullif") => {
-            desugar_nullif(args)
-        }
+        Expression::FuncCall(ref name, ref args, _) if name.eq_ignore_ascii_case("coalesce") => desugar_coalesce(args),
+        Expression::FuncCall(ref name, ref args, _) if name.eq_ignore_ascii_case("nullif") => desugar_nullif(args),
         Expression::FuncCall(name, args, within) => {
             let args = args.into_iter().map(desugar_select_expr).collect();
             Expression::FuncCall(name, args, within)
@@ -98,17 +90,17 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
         Expression::IsNull(inner) => Expression::IsNull(Box::new(desugar_expr(*inner))),
         Expression::IsNotNull(inner) => Expression::IsNotNull(Box::new(desugar_expr(*inner))),
         Expression::IsMissing(inner) => Expression::IsMissing(Box::new(desugar_expr(*inner))),
-        Expression::IsNotMissing(inner) => {
-            Expression::IsNotMissing(Box::new(desugar_expr(*inner)))
-        }
+        Expression::IsNotMissing(inner) => Expression::IsNotMissing(Box::new(desugar_expr(*inner))),
         Expression::Like(l, r) => Expression::Like(Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r))),
         Expression::NotLike(l, r) => Expression::NotLike(Box::new(desugar_expr(*l)), Box::new(desugar_expr(*r))),
-        Expression::In(expr, list) => {
-            Expression::In(Box::new(desugar_expr(*expr)), list.into_iter().map(desugar_expr).collect())
-        }
-        Expression::NotIn(expr, list) => {
-            Expression::NotIn(Box::new(desugar_expr(*expr)), list.into_iter().map(desugar_expr).collect())
-        }
+        Expression::In(expr, list) => Expression::In(
+            Box::new(desugar_expr(*expr)),
+            list.into_iter().map(desugar_expr).collect(),
+        ),
+        Expression::NotIn(expr, list) => Expression::NotIn(
+            Box::new(desugar_expr(*expr)),
+            list.into_iter().map(desugar_expr).collect(),
+        ),
         Expression::Between(expr, lo, hi) => {
             // BETWEEN(x, lo, hi) → x >= lo AND x <= hi
             let x = desugar_expr(*expr);
@@ -116,8 +108,16 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
             let hi = desugar_expr(*hi);
             Expression::BinaryOperator(
                 BinaryOperator::And,
-                Box::new(Expression::BinaryOperator(BinaryOperator::GreaterEqual, Box::new(x.clone()), Box::new(lo))),
-                Box::new(Expression::BinaryOperator(BinaryOperator::LessEqual, Box::new(x), Box::new(hi))),
+                Box::new(Expression::BinaryOperator(
+                    BinaryOperator::GreaterEqual,
+                    Box::new(x.clone()),
+                    Box::new(lo),
+                )),
+                Box::new(Expression::BinaryOperator(
+                    BinaryOperator::LessEqual,
+                    Box::new(x),
+                    Box::new(hi),
+                )),
             )
         }
         Expression::NotBetween(expr, lo, hi) => {
@@ -127,8 +127,16 @@ pub(crate) fn desugar_expr(expr: Expression) -> Expression {
             let hi = desugar_expr(*hi);
             Expression::BinaryOperator(
                 BinaryOperator::Or,
-                Box::new(Expression::BinaryOperator(BinaryOperator::LessThan, Box::new(x.clone()), Box::new(lo))),
-                Box::new(Expression::BinaryOperator(BinaryOperator::MoreThan, Box::new(x), Box::new(hi))),
+                Box::new(Expression::BinaryOperator(
+                    BinaryOperator::LessThan,
+                    Box::new(x.clone()),
+                    Box::new(lo),
+                )),
+                Box::new(Expression::BinaryOperator(
+                    BinaryOperator::MoreThan,
+                    Box::new(x),
+                    Box::new(hi),
+                )),
             )
         }
         Expression::Cast(inner, cast_type) => Expression::Cast(Box::new(desugar_expr(*inner)), cast_type),
@@ -199,11 +207,7 @@ fn desugar_nullif(args: &[SelectExpression]) -> Expression {
 
     Expression::CaseWhenExpression(CaseWhenExpression {
         branches: vec![(
-            Expression::BinaryOperator(
-                BinaryOperator::Equal,
-                Box::new(a.clone()),
-                Box::new(b),
-            ),
+            Expression::BinaryOperator(BinaryOperator::Equal, Box::new(a.clone()), Box::new(b)),
             Expression::Value(Value::Null),
         )],
         else_expr: Some(Box::new(a)),
@@ -243,8 +247,16 @@ mod tests {
         let result = desugar_expr(between);
         let expected = Expression::BinaryOperator(
             BinaryOperator::And,
-            Box::new(Expression::BinaryOperator(BinaryOperator::GreaterEqual, Box::new(x.clone()), Box::new(lo))),
-            Box::new(Expression::BinaryOperator(BinaryOperator::LessEqual, Box::new(x), Box::new(hi))),
+            Box::new(Expression::BinaryOperator(
+                BinaryOperator::GreaterEqual,
+                Box::new(x.clone()),
+                Box::new(lo),
+            )),
+            Box::new(Expression::BinaryOperator(
+                BinaryOperator::LessEqual,
+                Box::new(x),
+                Box::new(hi),
+            )),
         );
         assert_eq!(result, expected);
     }
@@ -259,8 +271,16 @@ mod tests {
         let result = desugar_expr(not_between);
         let expected = Expression::BinaryOperator(
             BinaryOperator::Or,
-            Box::new(Expression::BinaryOperator(BinaryOperator::LessThan, Box::new(x.clone()), Box::new(lo))),
-            Box::new(Expression::BinaryOperator(BinaryOperator::MoreThan, Box::new(x), Box::new(hi))),
+            Box::new(Expression::BinaryOperator(
+                BinaryOperator::LessThan,
+                Box::new(x.clone()),
+                Box::new(lo),
+            )),
+            Box::new(Expression::BinaryOperator(
+                BinaryOperator::MoreThan,
+                Box::new(x),
+                Box::new(hi),
+            )),
         );
         assert_eq!(result, expected);
     }
@@ -394,11 +414,7 @@ mod tests {
         let result = desugar_expr(nullif);
         let expected = Expression::CaseWhenExpression(CaseWhenExpression {
             branches: vec![(
-                Expression::BinaryOperator(
-                    BinaryOperator::Equal,
-                    Box::new(a.clone()),
-                    Box::new(b),
-                ),
+                Expression::BinaryOperator(BinaryOperator::Equal, Box::new(a.clone()), Box::new(b)),
                 Expression::Value(Value::Null),
             )],
             else_expr: Some(Box::new(a)),

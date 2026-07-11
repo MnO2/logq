@@ -24,7 +24,7 @@ impl<T: Copy + Default> PaddedVec<T> {
             return 0;
         }
         // ceiling division: (SIMD_PADDING + elem - 1) / elem
-        (SIMD_PADDING + elem - 1) / elem
+        SIMD_PADDING.div_ceil(elem)
     }
 
     /// Creates a `PaddedVec` of `len` default-initialised elements with
@@ -139,10 +139,20 @@ impl<T: Copy + Default> PaddedVecBuilder<T> {
         self.inner.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     /// Consumes the builder and returns an immutable [`PaddedVec`] with
     /// zeroed tail padding.
     pub fn seal(self) -> PaddedVec<T> {
         PaddedVec::from_vec(self.inner)
+    }
+}
+
+impl<T: Copy + Default> Default for PaddedVecBuilder<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -186,7 +196,7 @@ mod tests {
     #[test]
     fn deref_returns_logical_slice() {
         let pv = PaddedVec::<u16>::with_len(10);
-        let slice: &[u16] = &*pv;
+        let slice: &[u16] = &pv;
         assert_eq!(slice.len(), 10);
     }
 
@@ -239,11 +249,7 @@ mod tests {
             let base = pv.inner.as_ptr().add(pv.len());
             for i in 0..pad {
                 let byte = *base.add(i);
-                assert_eq!(
-                    byte, 0,
-                    "padding byte at offset {} was {:#x}, expected 0x00",
-                    i, byte
-                );
+                assert_eq!(byte, 0, "padding byte at offset {} was {:#x}, expected 0x00", i, byte);
             }
         }
     }
@@ -270,11 +276,7 @@ mod tests {
             let byte_count = pad * mem::size_of::<u32>();
             for i in 0..byte_count {
                 let byte = *base.add(i);
-                assert_eq!(
-                    byte, 0,
-                    "padding byte at offset {} was {:#x}, expected 0x00",
-                    i, byte
-                );
+                assert_eq!(byte, 0, "padding byte at offset {} was {:#x}, expected 0x00", i, byte);
             }
         }
     }

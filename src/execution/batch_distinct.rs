@@ -104,19 +104,23 @@ impl BatchStream for BatchDistinctOperator {
             let mut active_count = 0;
             let mut sel_bytes = vec![0u8; batch.len];
 
-            for row in 0..batch.len {
+            for (row, selected) in sel_bytes.iter_mut().enumerate().take(batch.len) {
                 if !batch.selection.is_active(row, batch.len) {
                     continue;
                 }
                 // Build row key from all columns
-                let key_vals: Vec<KeyValue> = batch.columns.iter().map(|col| {
-                    let val = BatchToRowAdapter::extract_value(col, row);
-                    value_to_key(&val)
-                }).collect();
+                let key_vals: Vec<KeyValue> = batch
+                    .columns
+                    .iter()
+                    .map(|col| {
+                        let val = BatchToRowAdapter::extract_value(col, row);
+                        value_to_key(&val)
+                    })
+                    .collect();
                 let key = RowKey(key_vals);
 
                 if self.seen.insert(key) {
-                    sel_bytes[row] = 1;
+                    *selected = 1;
                     active_count += 1;
                 }
             }

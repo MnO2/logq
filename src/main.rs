@@ -75,9 +75,7 @@ fn main() {
                     OutputMode::Table
                 };
 
-                let threads: usize = sub_m.value_of("threads")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
+                let threads: usize = sub_m.value_of("threads").and_then(|s| s.parse().ok()).unwrap_or(0);
 
                 let result = if let Some(table_specs) = sub_m.values_of("table") {
                     match parse_table_specs(table_specs) {
@@ -107,7 +105,10 @@ fn main() {
                     }
                 } else {
                     let mut ds = common::types::DataSourceRegistry::new();
-                    ds.insert("it".to_string(), common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string()));
+                    ds.insert(
+                        "it".to_string(),
+                        common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+                    );
                     ds
                 };
                 let result = app::explain(query_str, data_sources);
@@ -126,8 +127,8 @@ fn main() {
                     let mut table = Table::new();
                     for (field, datatype) in schema.iter() {
                         table.add_row(Row::new(vec![
-                            Cell::new(&*field.to_string()),
-                            Cell::new(&*datatype.to_string()),
+                            Cell::new(&field.to_string()),
+                            Cell::new(&datatype.to_string()),
                         ]));
                     }
                     table.printstd();
@@ -136,8 +137,8 @@ fn main() {
                     let mut table = Table::new();
                     for (field, datatype) in schema.iter() {
                         table.add_row(Row::new(vec![
-                            Cell::new(&*field.to_string()),
-                            Cell::new(&*datatype.to_string()),
+                            Cell::new(&field.to_string()),
+                            Cell::new(&datatype.to_string()),
                         ]));
                     }
                     table.printstd();
@@ -146,8 +147,8 @@ fn main() {
                     let mut table = Table::new();
                     for (field, datatype) in schema.iter() {
                         table.add_row(Row::new(vec![
-                            Cell::new(&*field.to_string()),
-                            Cell::new(&*datatype.to_string()),
+                            Cell::new(&field.to_string()),
+                            Cell::new(&datatype.to_string()),
                         ]));
                     }
                     table.printstd();
@@ -156,8 +157,8 @@ fn main() {
                     let mut table = Table::new();
                     for (field, datatype) in schema.iter() {
                         table.add_row(Row::new(vec![
-                            Cell::new(&*field.to_string()),
-                            Cell::new(&*datatype.to_string()),
+                            Cell::new(&field.to_string()),
+                            Cell::new(&datatype.to_string()),
                         ]));
                     }
                     table.printstd();

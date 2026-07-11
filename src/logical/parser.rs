@@ -45,9 +45,7 @@ impl From<RegistryError> for ParseError {
         match e {
             RegistryError::UnknownFunction(name) => ParseError::UnknownFunction(name),
             RegistryError::ArityMismatch { name, expected, actual } => {
-                ParseError::InvalidArguments(
-                    format!("{} expects {} argument(s), got {}", name, expected, actual),
-                )
+                ParseError::InvalidArguments(format!("{} expects {} argument(s), got {}", name, expected, actual))
             }
             RegistryError::DuplicateFunction(name) => {
                 ParseError::InvalidArguments(format!("Duplicate function: {}", name))
@@ -160,9 +158,7 @@ fn parse_logic(ctx: &common::ParsingContext, expr: &ast::Expression) -> ParseRes
             let expr = parse_value_expression(ctx, expr)?;
             Ok(Box::new(types::Formula::ExpressionPredicate(expr)))
         }
-        ast::Expression::FuncCall(_, _, _)
-        | ast::Expression::CaseWhenExpression(_)
-        | ast::Expression::Column(_) => {
+        ast::Expression::FuncCall(_, _, _) | ast::Expression::CaseWhenExpression(_) | ast::Expression::Column(_) => {
             // Expression used in boolean context — treat as a condition
             // by wrapping in an ExpressionPredicate
             let expr = parse_value_expression(ctx, expr)?;
@@ -181,7 +177,9 @@ fn parse_value(value: &ast::Value) -> ParseResult<Box<types::Expression>> {
         ast::Value::Boolean(b) => Ok(Box::new(types::Expression::Constant(common::Value::Boolean(*b)))),
         ast::Value::Float(f) => Ok(Box::new(types::Expression::Constant(common::Value::Float(*f)))),
         ast::Value::Integral(i) => Ok(Box::new(types::Expression::Constant(common::Value::Int(*i)))),
-        ast::Value::StringLiteral(s) => Ok(Box::new(types::Expression::Constant(common::Value::String(s.clone().into())))),
+        ast::Value::StringLiteral(s) => Ok(Box::new(types::Expression::Constant(common::Value::String(
+            s.clone().into(),
+        )))),
         ast::Value::Null => Ok(Box::new(types::Expression::Constant(common::Value::Null))),
         ast::Value::Missing => Ok(Box::new(types::Expression::Constant(common::Value::Missing))),
     }
@@ -280,7 +278,8 @@ fn parse_value_expression(
             // Aggregate functions are handled by parse_aggregate() and should not
             // be validated as scalar functions.
             if !is_aggregate_name(func_name) {
-                ctx.registry.validate(func_name, select_exprs.len())
+                ctx.registry
+                    .validate(func_name, select_exprs.len())
                     .map_err(ParseError::from)?;
             }
 
@@ -449,43 +448,32 @@ fn parse_aggregate(ctx: &ParsingContext, select_expr: &ast::SelectExpression) ->
 
                 let aggregate = if let Some(within_group_clause) = within_group_opt {
                     match named {
-                        types::Named::Expression(expr, _) => match expr {
-                            types::Expression::Constant(val) => match val {
-                                common::Value::Float(f) => {
-                                    let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
+                        types::Named::Expression(types::Expression::Constant(common::Value::Float(f)), _) => {
+                            let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
 
-                                    if func_name == "percentile_disc" {
-                                        types::Aggregate::PercentileDisc(
-                                            f,
-                                            within_group_clause.ordering_term.column_name.clone(),
-                                            o,
-                                        )
-                                    } else if func_name == "approx_percentile" {
-                                        types::Aggregate::ApproxPercentile(
-                                            f,
-                                            within_group_clause.ordering_term.column_name.clone(),
-                                            o,
-                                        )
-                                    } else {
-                                        return Err(ParseError::UnknownFunction(func_name.to_string()));
-                                    }
-                                }
-                                _ => {
-                                    return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
-                                }
-                            },
-                            _ => {
-                                //FIXME: should be ok for a function returning Float as well
-                                return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
+                            if func_name == "percentile_disc" {
+                                types::Aggregate::PercentileDisc(
+                                    f,
+                                    within_group_clause.ordering_term.column_name.clone(),
+                                    o,
+                                )
+                            } else if func_name == "approx_percentile" {
+                                types::Aggregate::ApproxPercentile(
+                                    f,
+                                    within_group_clause.ordering_term.column_name.clone(),
+                                    o,
+                                )
+                            } else {
+                                return Err(ParseError::UnknownFunction(func_name.to_string()));
                             }
-                        },
+                        }
                         _ => {
-                            //Star should be disallowed.
+                            // The percentile argument must be a constant float.
                             return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
                         }
                     }
                 } else {
-                    from_str(&**func_name, named)?
+                    from_str(func_name, named)?
                 };
                 let named_aggregate = types::NamedAggregate::new(aggregate, name_opt.clone());
                 Ok(named_aggregate)
@@ -549,12 +537,21 @@ fn check_env(data_sources: &common::DataSourceRegistry, from_clause: &FromClause
     Ok(())
 }
 
-fn to_bindings_for_ref(data_sources: &common::DataSourceRegistry, table_reference: &TableReference) -> Vec<common::Binding> {
+fn to_bindings_for_ref(
+    data_sources: &common::DataSourceRegistry,
+    table_reference: &TableReference,
+) -> Vec<common::Binding> {
     let path_expr = match &table_reference.path_expr.path_segments[0] {
         PathSegment::AttrName(s) => {
             if data_sources.contains_key(s) {
                 PathExpr::new(
-                    table_reference.path_expr.path_segments.iter().skip(1).cloned().collect(),
+                    table_reference
+                        .path_expr
+                        .path_segments
+                        .iter()
+                        .skip(1)
+                        .cloned()
+                        .collect(),
                 )
             } else {
                 table_reference.path_expr.clone()
@@ -574,43 +571,28 @@ fn to_bindings_for_ref(data_sources: &common::DataSourceRegistry, table_referenc
     }
 }
 
-fn to_bindings(data_sources: &common::DataSourceRegistry, table_references: &Vec<TableReference>) -> Vec<common::Binding> {
-    table_references
-        .iter()
-        .flat_map(|table_reference| to_bindings_for_ref(data_sources, table_reference))
-        .collect()
-}
-
 fn check_group_by_vars(named: &Named, group_by_vars: &HashSet<String>) -> bool {
     match named {
         Named::Expression(expr, alias) => {
             match expr {
                 types::Expression::Variable(path_expr) => match path_expr.path_segments.last().unwrap() {
-                    PathSegment::AttrName(s) => {
-                        return group_by_vars.contains(s);
-                    }
-                    PathSegment::ArrayIndex(_, _)
-                    | PathSegment::Wildcard
-                    | PathSegment::WildcardAttr => {
-                        return false;
-                    }
+                    PathSegment::AttrName(s) => group_by_vars.contains(s),
+                    PathSegment::ArrayIndex(_, _) | PathSegment::Wildcard | PathSegment::WildcardAttr => false,
                 },
                 types::Expression::Function(_, _) => {
                     if let Some(a) = alias {
-                        return group_by_vars.contains(a);
+                        group_by_vars.contains(a)
                     } else {
-                        return false;
+                        false
                     }
                 }
                 _ => {
                     //TODO: branch furhter
-                    return false;
+                    false
                 }
             }
         }
-        _ => {
-            return false;
-        }
+        _ => false,
     }
 }
 
@@ -619,13 +601,11 @@ fn lookup_data_source(
     table_ref: &TableReference,
 ) -> ParseResult<common::DataSource> {
     match &table_ref.path_expr.path_segments[0] {
-        PathSegment::AttrName(name) => {
-            data_sources.get(name).cloned().ok_or_else(|| {
-                let mut available: Vec<_> = data_sources.keys().cloned().collect();
-                available.sort();
-                ParseError::UnknownTable(name.clone(), available.join(", "))
-            })
-        }
+        PathSegment::AttrName(name) => data_sources.get(name).cloned().ok_or_else(|| {
+            let mut available: Vec<_> = data_sources.keys().cloned().collect();
+            available.sort();
+            ParseError::UnknownTable(name.clone(), available.join(", "))
+        }),
         _ => Err(ParseError::FromClausePathInvalidTableReference),
     }
 }
@@ -640,18 +620,17 @@ fn extract_base_name(table_ref: &TableReference) -> ParseResult<String> {
 /// Collect table aliases (or base names) from a FromClause subtree.
 fn collect_aliases_from_clause(from_clause: &ast::FromClause) -> HashSet<String> {
     let refs = from_clause.collect_table_references();
-    refs.into_iter()
-        .map(|r| get_alias_for_ref(r))
-        .collect()
+    refs.into_iter().map(get_alias_for_ref).collect()
 }
 
 fn get_alias_for_ref(table_ref: &ast::TableReference) -> String {
-    table_ref.as_clause.clone().unwrap_or_else(|| {
-        match &table_ref.path_expr.path_segments[0] {
+    table_ref
+        .as_clause
+        .clone()
+        .unwrap_or_else(|| match &table_ref.path_expr.path_segments[0] {
             ast::PathSegment::AttrName(s) => s.clone(),
             _ => String::new(),
-        }
-    })
+        })
 }
 
 /// Extract equi-join predicates from an AST expression.
@@ -702,7 +681,9 @@ fn try_extract_equi_pair(
     right_alias: &str,
 ) -> Option<(ast::PathExpr, ast::PathExpr)> {
     if let ast::Expression::BinaryOperator(ast::BinaryOperator::Equal, left, right) = expr {
-        if let (ast::Expression::Column(left_path), ast::Expression::Column(right_path)) = (left.as_ref(), right.as_ref()) {
+        if let (ast::Expression::Column(left_path), ast::Expression::Column(right_path)) =
+            (left.as_ref(), right.as_ref())
+        {
             // Check first segment of each path against aliases
             if left_path.path_segments.len() >= 2 && right_path.path_segments.len() >= 2 {
                 let left_first = match &left_path.path_segments[0] {
@@ -740,10 +721,7 @@ fn rebuild_and_tree(conjuncts: Vec<ast::Expression>) -> Option<ast::Expression> 
     }
 }
 
-fn build_from_node(
-    ctx: &common::ParsingContext,
-    from_clause: &FromClause,
-) -> ParseResult<types::Node> {
+fn build_from_node(ctx: &common::ParsingContext, from_clause: &FromClause) -> ParseResult<types::Node> {
     match from_clause {
         FromClause::Tables(table_references) => {
             if table_references.len() == 1 {
@@ -768,7 +746,12 @@ fn build_from_node(
                 Ok(node)
             }
         }
-        FromClause::Join { left, right, join_type, condition } => {
+        FromClause::Join {
+            left,
+            right,
+            join_type,
+            condition,
+        } => {
             let left_node = build_from_node(ctx, left)?;
             let ds_right = lookup_data_source(&ctx.data_sources, right)?;
             if matches!(&ds_right, common::DataSource::Stdin(..)) {
@@ -777,9 +760,6 @@ fn build_from_node(
             let right_bindings = to_bindings_for_ref(&ctx.data_sources, right);
             let right_node = types::Node::DataSource(ds_right, right_bindings);
             match join_type {
-                JoinType::Cross => {
-                    Ok(types::Node::CrossJoin(Box::new(left_node), Box::new(right_node)))
-                }
                 JoinType::Left | JoinType::Inner | JoinType::Right => {
                     let on_expr = condition.as_ref().expect("JOIN requires ON condition");
 
@@ -787,43 +767,39 @@ fn build_from_node(
                     let left_aliases = collect_aliases_from_clause(left);
                     let right_alias = get_alias_for_ref(right);
 
-                    let (equi_keys, residual) = extract_equi_predicates_from_ast(
-                        on_expr, &left_aliases, &right_alias
-                    );
+                    let (equi_keys, residual) = extract_equi_predicates_from_ast(on_expr, &left_aliases, &right_alias);
 
                     let logical_join_type = match join_type {
                         JoinType::Inner => types::LogicalJoinType::Inner,
                         JoinType::Left => types::LogicalJoinType::Left,
                         JoinType::Right => types::LogicalJoinType::Right,
-                        _ => unreachable!(),
                     };
 
                     if equi_keys.is_empty() {
                         // No equi-predicates found; fall back to nested-loop
                         let formula = parse_logic(ctx, on_expr)?;
                         match logical_join_type {
-                            types::LogicalJoinType::Left => {
-                                return Ok(types::Node::LeftJoin(Box::new(left_node), Box::new(right_node), formula));
-                            }
+                            types::LogicalJoinType::Left => Ok(types::Node::LeftJoin(
+                                Box::new(left_node),
+                                Box::new(right_node),
+                                formula,
+                            )),
                             types::LogicalJoinType::Inner => {
                                 // INNER JOIN without equi-predicates: use CrossJoin + Filter
                                 let cross = types::Node::CrossJoin(Box::new(left_node), Box::new(right_node));
-                                return Ok(types::Node::Filter(formula, Box::new(cross)));
+                                Ok(types::Node::Filter(formula, Box::new(cross)))
                             }
-                            types::LogicalJoinType::Right => {
-                                return Err(ParseError::UnsupportedJoinType("RIGHT JOIN requires an equality condition (e.g., ON a.id = b.id)".to_string()));
-                            }
+                            types::LogicalJoinType::Right => Err(ParseError::UnsupportedJoinType(
+                                "RIGHT JOIN requires an equality condition (e.g., ON a.id = b.id)".to_string(),
+                            )),
                         }
                     } else {
-                        let residual_formula = residual
-                            .map(|r| parse_logic(ctx, &r))
-                            .transpose()?;
+                        let residual_formula = residual.map(|r| parse_logic(ctx, &r)).transpose()?;
 
                         // RIGHT JOIN: swap left/right and run as LEFT JOIN
                         if logical_join_type == types::LogicalJoinType::Right {
-                            let swapped_keys: Vec<(PathExpr, PathExpr)> = equi_keys.into_iter()
-                                .map(|(l, r)| (r, l))
-                                .collect();
+                            let swapped_keys: Vec<(PathExpr, PathExpr)> =
+                                equi_keys.into_iter().map(|(l, r)| (r, l)).collect();
                             return Ok(types::Node::HashJoin {
                                 left: Box::new(right_node),
                                 right: Box::new(left_node),
@@ -847,9 +823,13 @@ fn build_from_node(
     }
 }
 
-pub(crate) fn parse_query_top(q: ast::Query, data_sources: common::DataSourceRegistry, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
+pub(crate) fn parse_query_top(
+    q: ast::Query,
+    data_sources: common::DataSourceRegistry,
+    registry: Arc<FunctionRegistry>,
+) -> ParseResult<types::Node> {
     match q {
-        ast::Query::Select(stmt) => parse_query(stmt, data_sources, registry),
+        ast::Query::Select(stmt) => parse_query(*stmt, data_sources, registry),
         ast::Query::SetOp { op, all, left, right } => {
             let left_node = parse_query_top(*left, data_sources.clone(), registry.clone())?;
             let right_node = parse_query_top(*right, data_sources, registry)?;
@@ -865,15 +845,17 @@ pub(crate) fn parse_query_top(q: ast::Query, data_sources: common::DataSourceReg
                 ast::SetOperator::Intersect => {
                     Ok(types::Node::Intersect(Box::new(left_node), Box::new(right_node), all))
                 }
-                ast::SetOperator::Except => {
-                    Ok(types::Node::Except(Box::new(left_node), Box::new(right_node), all))
-                }
+                ast::SetOperator::Except => Ok(types::Node::Except(Box::new(left_node), Box::new(right_node), all)),
             }
         }
     }
 }
 
-pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::DataSourceRegistry, registry: Arc<FunctionRegistry>) -> ParseResult<types::Node> {
+pub(crate) fn parse_query(
+    query: ast::SelectStatement,
+    data_sources: common::DataSourceRegistry,
+    registry: Arc<FunctionRegistry>,
+) -> ParseResult<types::Node> {
     let from_clause = &query.from_clause;
 
     check_env(&data_sources, from_clause)?;
@@ -920,9 +902,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                                 group_by_vars.insert(s.clone());
                                 types::Named::Expression(*e.clone(), Some(s.clone()))
                             }
-                            PathSegment::ArrayIndex(_, _)
-                            | PathSegment::Wildcard
-                            | PathSegment::WildcardAttr => {
+                            PathSegment::ArrayIndex(_, _) | PathSegment::Wildcard | PathSegment::WildcardAttr => {
                                 group_by_vars.insert(format!("_{}", position + 1));
                                 types::Named::Expression(*e.clone(), Some(format!("_{}", position + 1)))
                             }
@@ -960,14 +940,11 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                 left_alias.insert(get_alias_for_ref(table_refs[0]));
                 let right_alias = get_alias_for_ref(table_refs[1]);
 
-                let (equi_keys, residual) = extract_equi_predicates_from_ast(
-                    &where_expr.expr, &left_alias, &right_alias
-                );
+                let (equi_keys, residual) =
+                    extract_equi_predicates_from_ast(&where_expr.expr, &left_alias, &right_alias);
 
                 if !equi_keys.is_empty() {
-                    let residual_formula = residual
-                        .map(|r| parse_logic(&parsing_context, &r))
-                        .transpose()?;
+                    let residual_formula = residual.map(|r| parse_logic(&parsing_context, &r)).transpose()?;
 
                     // Destructure CrossJoin to get owned left/right
                     if let types::Node::CrossJoin(cross_left, cross_right) = root {
@@ -998,7 +975,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                 for (offset, select_expr) in select_exprs.iter().enumerate() {
                     if let Ok(mut named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
                         match &named_aggregate.aggregate {
-                            types::Aggregate::GroupAsAggregate(_) => {
+                            types::Aggregate::GroupAs(_) => {
                                 unreachable!();
                             }
                             types::Aggregate::Avg(named) => {
@@ -1117,10 +1094,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                             .as_ref()
                             .and_then(|x| x.group_as_clause.as_ref())
                         {
-                            if check_contains_group_as_var(&[named.clone()], group_as_clause) {
+                            if check_contains_group_as_var(std::slice::from_ref(&named), group_as_clause) {
                                 named_list.push(named.clone());
                                 named_aggregates.push(types::NamedAggregate::new(
-                                    types::Aggregate::GroupAsAggregate(named),
+                                    types::Aggregate::GroupAs(named),
                                     Some(group_as_clause.clone()),
                                 ));
                             }
@@ -1134,47 +1111,41 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                 root = types::Node::Map(named_list.clone(), Box::new(root));
             }
         }
-        ast::SelectClause::ValueConstructor(vc) => {
-            match vc {
-                ast::ValueConstructor::Expression(expr) => {
-                    let e = parse_value_expression(&parsing_context, &expr)?;
-                    let name = match &*e {
-                        types::Expression::Variable(path_expr) => {
-                            match path_expr.path_segments.last().unwrap() {
-                                ast::PathSegment::AttrName(s) => Some(s.clone()),
-                                _ => Some("_value".to_string()),
-                            }
-                        }
+        ast::SelectClause::ValueConstructor(vc) => match vc {
+            ast::ValueConstructor::Expression(expr) => {
+                let e = parse_value_expression(&parsing_context, &expr)?;
+                let name = match &*e {
+                    types::Expression::Variable(path_expr) => match path_expr.path_segments.last().unwrap() {
+                        ast::PathSegment::AttrName(s) => Some(s.clone()),
                         _ => Some("_value".to_string()),
+                    },
+                    _ => Some("_value".to_string()),
+                };
+                named_list.push(types::Named::Expression(*e, name));
+                root = types::Node::Map(named_list.clone(), Box::new(root));
+            }
+            ast::ValueConstructor::TupleConstructor(tc) => {
+                for (key, val_expr) in tc.key_values.iter() {
+                    let e = parse_value_expression(&parsing_context, val_expr)?;
+                    named_list.push(types::Named::Expression(*e, Some(key.clone())));
+                }
+                root = types::Node::Map(named_list.clone(), Box::new(root));
+            }
+            ast::ValueConstructor::ArrayConstructor(ac) => {
+                for (idx, val_expr) in ac.values.iter().enumerate() {
+                    let e = parse_value_expression(&parsing_context, val_expr)?;
+                    let name = match &*e {
+                        types::Expression::Variable(path_expr) => match path_expr.path_segments.last().unwrap() {
+                            ast::PathSegment::AttrName(s) => Some(s.clone()),
+                            _ => Some(format!("_{}", idx)),
+                        },
+                        _ => Some(format!("_{}", idx)),
                     };
                     named_list.push(types::Named::Expression(*e, name));
-                    root = types::Node::Map(named_list.clone(), Box::new(root));
                 }
-                ast::ValueConstructor::TupleConstructor(tc) => {
-                    for (key, val_expr) in tc.key_values.iter() {
-                        let e = parse_value_expression(&parsing_context, val_expr)?;
-                        named_list.push(types::Named::Expression(*e, Some(key.clone())));
-                    }
-                    root = types::Node::Map(named_list.clone(), Box::new(root));
-                }
-                ast::ValueConstructor::ArrayConstructor(ac) => {
-                    for (idx, val_expr) in ac.values.iter().enumerate() {
-                        let e = parse_value_expression(&parsing_context, val_expr)?;
-                        let name = match &*e {
-                            types::Expression::Variable(path_expr) => {
-                                match path_expr.path_segments.last().unwrap() {
-                                    ast::PathSegment::AttrName(s) => Some(s.clone()),
-                                    _ => Some(format!("_{}", idx)),
-                                }
-                            }
-                            _ => Some(format!("_{}", idx)),
-                        };
-                        named_list.push(types::Named::Expression(*e, name));
-                    }
-                    root = types::Node::Map(named_list.clone(), Box::new(root));
-                }
+                root = types::Node::Map(named_list.clone(), Box::new(root));
             }
-        }
+        },
     }
 
     if !named_aggregates.is_empty() {
@@ -1193,7 +1164,9 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                                 let l = path_expr.path_segments.last().unwrap();
                                 match l {
                                     PathSegment::AttrName(s) => PathExpr::new(vec![PathSegment::AttrName(s.clone())]),
-                                    PathSegment::ArrayIndex(_, _) | PathSegment::Wildcard | PathSegment::WildcardAttr => {
+                                    PathSegment::ArrayIndex(_, _)
+                                    | PathSegment::Wildcard
+                                    | PathSegment::WildcardAttr => {
                                         let s = format!("_{}", position + 1);
                                         PathExpr::new(vec![PathSegment::AttrName(s.clone())])
                                     }
@@ -1213,10 +1186,10 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
                 .collect();
 
             // SELECT * with GROUP BY is not supported for jsonl or multi-table queries
-            if non_aggregates.iter().any(|n| matches!(n, types::Named::Star)) {
-                if data_sources.len() > 1 || file_format == "jsonl" {
-                    return Err(ParseError::StarGroupByUnsupported);
-                }
+            if non_aggregates.iter().any(|n| matches!(n, types::Named::Star))
+                && (data_sources.len() > 1 || file_format == "jsonl")
+            {
+                return Err(ParseError::StarGroupByUnsupported);
             }
 
             if !is_match_group_by_fields(&fields, &non_aggregates, &file_format) {
@@ -1274,7 +1247,7 @@ pub(crate) fn parse_query(query: ast::SelectStatement, data_sources: common::Dat
 }
 
 fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Named], file_format: &str) -> bool {
-    let a: HashSet<PathExpr> = variables.iter().map(|s| s.clone()).collect();
+    let a: HashSet<PathExpr> = variables.iter().cloned().collect();
     let mut b: HashSet<PathExpr> = HashSet::new();
 
     for named in named_list.iter() {
@@ -1295,20 +1268,19 @@ fn is_match_group_by_fields(variables: &[ast::PathExpr], named_list: &[types::Na
             }
             types::Named::Star => {
                 if file_format == "elb" {
-                    for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().into_iter() {
+                    for field_name in execution::datasource::ClassicLoadBalancerLogField::field_names().iter() {
                         b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "alb" {
-                    for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().into_iter()
-                    {
+                    for field_name in execution::datasource::ApplicationLoadBalancerLogField::field_names().iter() {
                         b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "squid" {
-                    for field_name in execution::datasource::SquidLogField::field_names().into_iter() {
+                    for field_name in execution::datasource::SquidLogField::field_names().iter() {
                         b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else if file_format == "s3" {
-                    for field_name in execution::datasource::S3Field::field_names().into_iter() {
+                    for field_name in execution::datasource::S3Field::field_names().iter() {
                         b.insert(PathExpr::new(vec![PathSegment::AttrName(field_name.clone())]));
                     }
                 } else {
@@ -1337,7 +1309,12 @@ mod test {
         );
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("a".to_string(), common::DataSource::Stdin("jsonl".to_string(), "a".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "a".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
@@ -1360,7 +1337,12 @@ mod test {
         ))));
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("a".to_string(), common::DataSource::Stdin("jsonl".to_string(), "a".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "a".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_logic_expression(&parsing_context, &before).unwrap();
@@ -1397,7 +1379,12 @@ mod test {
         ));
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("a".to_string(), common::DataSource::Stdin("jsonl".to_string(), "a".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "a".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_value_expression(&parsing_context, &before).unwrap();
@@ -1424,7 +1411,12 @@ mod test {
         let expected = types::NamedAggregate::new(types::Aggregate::Avg(named), None);
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("a".to_string(), common::DataSource::Stdin("jsonl".to_string(), "a".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "a".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_aggregate(&parsing_context, &before).unwrap();
@@ -1447,7 +1439,12 @@ mod test {
         ));
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("a".to_string(), common::DataSource::Stdin("jsonl".to_string(), "a".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "a".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "a".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let ans = parse_condition(&parsing_context, &before).unwrap();
@@ -1516,7 +1513,12 @@ mod test {
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let ans = parse_query(before, data_sources, registry).unwrap();
         assert_eq!(expected, ans);
     }
@@ -1570,7 +1572,12 @@ mod test {
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let ans = parse_query(before, data_sources, registry).unwrap();
         assert_eq!(expected, ans);
     }
@@ -1652,7 +1659,12 @@ mod test {
         let expected = types::Node::GroupBy(fields, named_aggregates, Box::new(filter));
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let ans = parse_query(before, data_sources, registry).unwrap();
         assert_eq!(expected, ans);
     }
@@ -1687,7 +1699,12 @@ mod test {
             None,
             None,
         );
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let ans = parse_query(before, data_sources, registry);
         let expected = Err(ParseError::GroupByFieldsMismatch);
@@ -1730,7 +1747,12 @@ mod test {
             None,
             None,
         );
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let ans = parse_query(before, data_sources, registry);
         let expected = Err(ParseError::GroupByFieldsMismatch);
@@ -1751,7 +1773,12 @@ mod test {
         );
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "it".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_logic(&parsing_context, &func_call);
@@ -1759,14 +1786,12 @@ mod test {
 
         let formula = result.unwrap();
         match *formula {
-            types::Formula::ExpressionPredicate(ref expr) => {
-                match &**expr {
-                    types::Expression::Function(name, _) => {
-                        assert_eq!(name, "upper");
-                    }
-                    _ => panic!("Expected Function expression"),
+            types::Formula::ExpressionPredicate(ref expr) => match &**expr {
+                types::Expression::Function(name, _) => {
+                    assert_eq!(name, "upper");
                 }
-            }
+                _ => panic!("Expected Function expression"),
+            },
             _ => panic!("Expected ExpressionPredicate formula"),
         }
     }
@@ -1778,7 +1803,12 @@ mod test {
         let column_expr = ast::Expression::Column(path_expr.clone());
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "it".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_logic(&parsing_context, &column_expr);
@@ -1786,14 +1816,12 @@ mod test {
 
         let formula = result.unwrap();
         match *formula {
-            types::Formula::ExpressionPredicate(ref expr) => {
-                match &**expr {
-                    types::Expression::Variable(p) => {
-                        assert_eq!(p, &path_expr);
-                    }
-                    _ => panic!("Expected Variable expression"),
+            types::Formula::ExpressionPredicate(ref expr) => match &**expr {
+                types::Expression::Variable(p) => {
+                    assert_eq!(p, &path_expr);
                 }
-            }
+                _ => panic!("Expected Variable expression"),
+            },
             _ => panic!("Expected ExpressionPredicate formula"),
         }
     }
@@ -1815,7 +1843,12 @@ mod test {
         });
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "it".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_logic(&parsing_context, &case_when);
@@ -1842,7 +1875,12 @@ mod test {
         let column_expr = ast::Expression::Column(path_expr_a.clone());
 
         let parsing_context = ParsingContext {
-            data_sources: vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect(),
+            data_sources: vec![(
+                "it".to_string(),
+                common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+            )]
+            .into_iter()
+            .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
         };
         let result = parse_condition(&parsing_context, &column_expr);
@@ -1850,14 +1888,12 @@ mod test {
 
         let formula = result.unwrap();
         match *formula {
-            types::Formula::ExpressionPredicate(ref expr) => {
-                match &**expr {
-                    types::Expression::Variable(p) => {
-                        assert_eq!(p, &path_expr_a);
-                    }
-                    _ => panic!("Expected Variable expression"),
+            types::Formula::ExpressionPredicate(ref expr) => match &**expr {
+                types::Expression::Variable(p) => {
+                    assert_eq!(p, &path_expr_a);
                 }
-            }
+                _ => panic!("Expected Variable expression"),
+            },
             _ => panic!("Expected ExpressionPredicate formula"),
         }
     }
@@ -1877,9 +1913,9 @@ mod test {
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
             false,
-            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(
-                ast::Expression::Column(path_expr_a.clone()),
-            )),
+            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(ast::Expression::Column(
+                path_expr_a.clone(),
+            ))),
             FromClause::Tables(vec![table_reference]),
             Some(where_expr),
             None,
@@ -1910,7 +1946,12 @@ mod test {
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let ans = parse_query(before, data_sources, registry).unwrap();
         assert_eq!(expected, ans);
     }
@@ -1922,9 +1963,9 @@ mod test {
         let table_reference = ast::TableReference::new(path_expr, None, None);
         let before = ast::SelectStatement::new(
             false,
-            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(
-                ast::Expression::Value(ast::Value::Integral(42)),
-            )),
+            SelectClause::ValueConstructor(ast::ValueConstructor::Expression(ast::Expression::Value(
+                ast::Value::Integral(42),
+            ))),
             FromClause::Tables(vec![table_reference]),
             None,
             None,
@@ -1945,7 +1986,12 @@ mod test {
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let ans = parse_query(before, data_sources, registry).unwrap();
         assert_eq!(expected, ans);
     }
@@ -1957,9 +2003,10 @@ mod test {
             PathSegment::AttrName("x".to_string()),
         ]);
 
-        let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_ax.clone())), None),
-        ];
+        let select_exprs = vec![ast::SelectExpression::Expression(
+            Box::new(ast::Expression::Column(path_expr_ax.clone())),
+            None,
+        )];
 
         let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_ref_a = ast::TableReference::new(path_expr_it.clone(), Some("a".to_string()), None);
@@ -1975,8 +2022,13 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::File(std::path::PathBuf::from("/tmp/test.jsonl"), "jsonl".to_string(), "it".to_string());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), data_source.clone())].into_iter().collect();
+        let data_source = common::DataSource::File(
+            std::path::PathBuf::from("/tmp/test.jsonl"),
+            "jsonl".to_string(),
+            "it".to_string(),
+        );
+        let data_sources: common::DataSourceRegistry =
+            vec![("it".to_string(), data_source.clone())].into_iter().collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
         let result = parse_query(stmt, data_sources, registry);
@@ -2015,9 +2067,10 @@ mod test {
         // A single table reference should NOT produce a CrossJoin node
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
 
-        let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_a.clone())), None),
-        ];
+        let select_exprs = vec![ast::SelectExpression::Expression(
+            Box::new(ast::Expression::Column(path_expr_a.clone())),
+            None,
+        )];
 
         let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_ref = ast::TableReference::new(path_expr_it, None, None);
@@ -2032,7 +2085,12 @@ mod test {
             None,
             None,
         );
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), common::DataSource::Stdin("jsonl".to_string(), "it".to_string()))].into_iter().collect();
+        let data_sources: common::DataSourceRegistry = vec![(
+            "it".to_string(),
+            common::DataSource::Stdin("jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
         let result = parse_query(stmt, data_sources, registry);
@@ -2093,8 +2151,13 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::File(std::path::PathBuf::from("/tmp/test.jsonl"), "jsonl".to_string(), "it".to_string());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), data_source.clone())].into_iter().collect();
+        let data_source = common::DataSource::File(
+            std::path::PathBuf::from("/tmp/test.jsonl"),
+            "jsonl".to_string(),
+            "it".to_string(),
+        );
+        let data_sources: common::DataSourceRegistry =
+            vec![("it".to_string(), data_source.clone())].into_iter().collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
         let result = parse_query(stmt, data_sources, registry);
@@ -2104,7 +2167,13 @@ mod test {
         // The root should be Map -> HashJoin(DataSource, DataSource, equi_keys, Left)
         match node {
             types::Node::Map(_, source) => match *source {
-                types::Node::HashJoin { left, right, equi_keys, residual, join_type } => {
+                types::Node::HashJoin {
+                    left,
+                    right,
+                    equi_keys,
+                    residual,
+                    join_type,
+                } => {
                     assert_eq!(join_type, types::LogicalJoinType::Left);
                     assert_eq!(equi_keys.len(), 1);
                     assert_eq!(equi_keys[0].0, path_expr_ax);
@@ -2145,9 +2214,10 @@ mod test {
             PathSegment::AttrName("x".to_string()),
         ]);
 
-        let select_exprs = vec![
-            ast::SelectExpression::Expression(Box::new(ast::Expression::Column(path_expr_ax.clone())), None),
-        ];
+        let select_exprs = vec![ast::SelectExpression::Expression(
+            Box::new(ast::Expression::Column(path_expr_ax.clone())),
+            None,
+        )];
 
         let path_expr_it = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
         let table_ref_a = ast::TableReference::new(path_expr_it.clone(), Some("a".to_string()), None);
@@ -2176,8 +2246,13 @@ mod test {
             None,
             None,
         );
-        let data_source = common::DataSource::File(std::path::PathBuf::from("/tmp/test.jsonl"), "jsonl".to_string(), "it".to_string());
-        let data_sources: common::DataSourceRegistry = vec![("it".to_string(), data_source.clone())].into_iter().collect();
+        let data_source = common::DataSource::File(
+            std::path::PathBuf::from("/tmp/test.jsonl"),
+            "jsonl".to_string(),
+            "it".to_string(),
+        );
+        let data_sources: common::DataSourceRegistry =
+            vec![("it".to_string(), data_source.clone())].into_iter().collect();
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
         let result = parse_query(stmt, data_sources, registry);
@@ -2235,11 +2310,7 @@ mod test {
             ]))),
             Box::new(ast::Expression::Value(ast::Value::Integral(10))),
         );
-        let expr = ast::Expression::BinaryOperator(
-            ast::BinaryOperator::And,
-            Box::new(equi),
-            Box::new(non_equi),
-        );
+        let expr = ast::Expression::BinaryOperator(ast::BinaryOperator::And, Box::new(equi), Box::new(non_equi));
         let left_aliases: HashSet<String> = vec!["a".to_string()].into_iter().collect();
         let (equi_keys, residual) = extract_equi_predicates_from_ast(&expr, &left_aliases, "b");
         assert_eq!(equi_keys.len(), 1);
@@ -2282,6 +2353,9 @@ mod test {
         assert_eq!(equi_keys.len(), 1);
         assert!(residual.is_none());
         // Verify that the left path is the one with alias "a"
-        assert_eq!(equi_keys[0].0.path_segments[0], ast::PathSegment::AttrName("a".to_string()));
+        assert_eq!(
+            equi_keys[0].0.path_segments[0],
+            ast::PathSegment::AttrName("a".to_string())
+        );
     }
 }

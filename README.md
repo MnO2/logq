@@ -1,7 +1,6 @@
 # logq - Query server logs with PartiQL, implemented in Rust
 
-[![Build Status](https://travis-ci.com/MnO2/logq.svg?branch=master)](https://travis-ci.com/MnO2/logq)
-[![codecov](https://codecov.io/gh/MnO2/logq/branch/master/graph/badge.svg)](https://codecov.io/gh/MnO2/logq)
+[![CI](https://github.com/MnO2/logq/actions/workflows/CI.yml/badge.svg)](https://github.com/MnO2/logq/actions/workflows/CI.yml)
 
 logq is a command-line tool for querying and analyzing server log files using [PartiQL](https://partiql.org/), a SQL-compatible query language designed for semi-structured data. It supports structured log formats (ELB, ALB, S3, Squid) and schema-free JSONL logs with nested field access, aggregations, JOINs, subqueries, and set operations.
 

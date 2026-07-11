@@ -11,7 +11,7 @@ pub mod string;
 pub mod type_conversion;
 pub mod url;
 
-pub use registry::{FunctionRegistry, FunctionDef, Arity, NullHandling, RegistryError};
+pub use registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 
 pub fn register_all() -> Result<FunctionRegistry, RegistryError> {
     let mut registry = FunctionRegistry::new();

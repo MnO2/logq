@@ -107,11 +107,7 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
 }
 
 /// Fallback: direct sort using compare_values (used for small result sets).
-fn direct_sort(
-    records: &mut Vec<Record>,
-    sort_keys: &[PathExpr],
-    orderings: &[Ordering],
-) {
+fn direct_sort(records: &mut [Record], sort_keys: &[PathExpr], orderings: &[Ordering]) {
     records.sort_by(|a, b| {
         for idx in 0..sort_keys.len() {
             let key = &sort_keys[idx];
@@ -120,11 +116,17 @@ fn direct_sort(
             let b_owned;
             let a_ref = match a.get_ref(key) {
                 Some(v) => v,
-                None => { a_owned = a.get(key); &a_owned }
+                None => {
+                    a_owned = a.get(key);
+                    &a_owned
+                }
             };
             let b_ref = match b.get_ref(key) {
                 Some(v) => v,
-                None => { b_owned = b.get(key); &b_owned }
+                None => {
+                    b_owned = b.get(key);
+                    &b_owned
+                }
             };
             let cmp_result = compare_values(a_ref, b_ref);
             let ordered = match ordering {
@@ -240,12 +242,7 @@ impl PrefixSortEncoder {
 
     /// Main entry point: sort records by the given keys and orderings.
     /// Returns a VecDeque of sorted records.
-    pub fn sort(
-        &self,
-        mut records: Vec<Record>,
-        sort_keys: &[PathExpr],
-        orderings: &[Ordering],
-    ) -> VecDeque<Record> {
+    pub fn sort(&self, mut records: Vec<Record>, sort_keys: &[PathExpr], orderings: &[Ordering]) -> VecDeque<Record> {
         if records.len() <= 1 {
             return VecDeque::from(records);
         }
@@ -264,14 +261,17 @@ impl PrefixSortEncoder {
 
         let mut buffer = vec![0u8; n * entry_w];
 
-        for i in 0..n {
+        for (i, record) in records.iter().enumerate().take(n) {
             let entry_offset = i * entry_w;
             for k in 0..num_keys {
                 let slot_offset = entry_offset + k * slot_w;
                 let val_owned;
-                let val = match records[i].get_ref(&sort_keys[k]) {
+                let val = match record.get_ref(&sort_keys[k]) {
                     Some(v) => v,
-                    None => { val_owned = records[i].get(&sort_keys[k]); &val_owned }
+                    None => {
+                        val_owned = record.get(&sort_keys[k]);
+                        &val_owned
+                    }
                 };
                 let descending = orderings[k] == Ordering::Desc;
                 self.encode_value(val, &mut buffer[slot_offset..slot_offset + slot_w], descending);
@@ -295,12 +295,8 @@ impl PrefixSortEncoder {
             }
 
             // Tie-breaking: check if any key position has a string-type tag
-            let row_a = u32::from_be_bytes(
-                buffer[a_off + key_w..a_off + key_w + 4].try_into().unwrap()
-            ) as usize;
-            let row_b = u32::from_be_bytes(
-                buffer[b_off + key_w..b_off + key_w + 4].try_into().unwrap()
-            ) as usize;
+            let row_a = u32::from_be_bytes(buffer[a_off + key_w..a_off + key_w + 4].try_into().unwrap()) as usize;
+            let row_b = u32::from_be_bytes(buffer[b_off + key_w..b_off + key_w + 4].try_into().unwrap()) as usize;
 
             for k in 0..num_keys {
                 let slot_a = a_off + k * slot_w;
@@ -318,12 +314,18 @@ impl PrefixSortEncoder {
                     let va_owned;
                     let va = match records[row_a].get_ref(&sort_keys[k]) {
                         Some(v) => v,
-                        None => { va_owned = records[row_a].get(&sort_keys[k]); &va_owned }
+                        None => {
+                            va_owned = records[row_a].get(&sort_keys[k]);
+                            &va_owned
+                        }
                     };
                     let vb_owned;
                     let vb = match records[row_b].get_ref(&sort_keys[k]) {
                         Some(v) => v,
-                        None => { vb_owned = records[row_b].get(&sort_keys[k]); &vb_owned }
+                        None => {
+                            vb_owned = records[row_b].get(&sort_keys[k]);
+                            &vb_owned
+                        }
                     };
                     let cmp = compare_values(va, vb);
                     let ordered = match orderings[k] {
@@ -344,7 +346,9 @@ impl PrefixSortEncoder {
         let mut result = VecDeque::with_capacity(n);
         for &idx in &indices {
             let row_idx = u32::from_be_bytes(
-                buffer[idx * entry_w + key_w..idx * entry_w + key_w + 4].try_into().unwrap()
+                buffer[idx * entry_w + key_w..idx * entry_w + key_w + 4]
+                    .try_into()
+                    .unwrap(),
             ) as usize;
             result.push_back(opt_records[row_idx].take().unwrap());
         }
@@ -481,10 +485,7 @@ mod tests {
         encode_datetime(&t2, &mut buf2);
         encode_datetime(&t3, &mut buf3);
 
-        assert!(
-            buf0 < buf1,
-            "pre-epoch date should sort before post-epoch date"
-        );
+        assert!(buf0 < buf1, "pre-epoch date should sort before post-epoch date");
         assert!(buf1 < buf2);
         assert!(buf2 < buf3);
     }
@@ -580,7 +581,7 @@ mod tests {
         let encoder = PrefixSortEncoder::default();
         let slot_width = encoder.slot_width();
 
-        let values = vec![
+        let values = [
             Value::Boolean(true),
             Value::Int(1),
             Value::Float(OrderedFloat::from(1.0f32)),
@@ -623,7 +624,7 @@ mod tests {
     // ---- sort function tests ----
 
     fn make_record(field_names: &[String], values: Vec<Value>) -> Record {
-        Record::new(&field_names.to_vec(), values)
+        Record::new(field_names, values)
     }
 
     fn path(name: &str) -> PathExpr {
@@ -641,7 +642,10 @@ mod tests {
         let keys = vec![path("x")];
         let orderings = vec![Ordering::Asc];
 
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let result = encoder.sort(records, &keys, &orderings);
 
         let vals: Vec<Value> = result.iter().map(|r| r.get(&path("x"))).collect();
@@ -659,7 +663,10 @@ mod tests {
         let keys = vec![path("x")];
         let orderings = vec![Ordering::Desc];
 
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let result = encoder.sort(records, &keys, &orderings);
 
         let vals: Vec<Value> = result.iter().map(|r| r.get(&path("x"))).collect();
@@ -678,7 +685,10 @@ mod tests {
         let keys = vec![path("x")];
         let orderings = vec![Ordering::Asc];
 
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let result = encoder.sort(records, &keys, &orderings);
 
         let vals: Vec<Value> = result.iter().map(|r| r.get(&path("x"))).collect();
@@ -698,7 +708,10 @@ mod tests {
         let keys = vec![path("x")];
         let orderings = vec![Ordering::Asc];
 
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let result = encoder.sort(records, &keys, &orderings);
 
         let vals: Vec<Value> = result.iter().map(|r| r.get(&path("x"))).collect();
@@ -717,17 +730,21 @@ mod tests {
         let keys = vec![path("a"), path("b")];
         let orderings = vec![Ordering::Asc, Ordering::Asc];
 
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let result = encoder.sort(records, &keys, &orderings);
 
-        let vals: Vec<(Value, Value)> = result.iter()
-            .map(|r| (r.get(&path("a")), r.get(&path("b"))))
-            .collect();
-        assert_eq!(vals, vec![
-            (Value::Int(1), Value::Int(10)),
-            (Value::Int(1), Value::Int(30)),
-            (Value::Int(2), Value::Int(10)),
-        ]);
+        let vals: Vec<(Value, Value)> = result.iter().map(|r| (r.get(&path("a")), r.get(&path("b")))).collect();
+        assert_eq!(
+            vals,
+            vec![
+                (Value::Int(1), Value::Int(10)),
+                (Value::Int(1), Value::Int(30)),
+                (Value::Int(2), Value::Int(10)),
+            ]
+        );
     }
 
     #[test]
@@ -751,9 +768,18 @@ mod tests {
     #[test]
     fn test_compare_values_basic() {
         assert_eq!(compare_values(&Value::Int(1), &Value::Int(2)), std::cmp::Ordering::Less);
-        assert_eq!(compare_values(&Value::Int(2), &Value::Int(1)), std::cmp::Ordering::Greater);
-        assert_eq!(compare_values(&Value::Int(1), &Value::Int(1)), std::cmp::Ordering::Equal);
-        assert_eq!(compare_values(&Value::Null, &Value::Int(1)), std::cmp::Ordering::Greater);
+        assert_eq!(
+            compare_values(&Value::Int(2), &Value::Int(1)),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_values(&Value::Int(1), &Value::Int(1)),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            compare_values(&Value::Null, &Value::Int(1)),
+            std::cmp::Ordering::Greater
+        );
         assert_eq!(compare_values(&Value::Int(1), &Value::Null), std::cmp::Ordering::Less);
         assert_eq!(compare_values(&Value::Null, &Value::Missing), std::cmp::Ordering::Equal);
     }
@@ -764,12 +790,17 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(12345);
 
         let fields = vec!["x".to_string(), "y".to_string()];
-        let records: Vec<Record> = (0..500).map(|_| {
-            make_record(&fields, vec![
-                Value::Int(rng.gen_range(-1000..1000)),
-                Value::String(format!("str_{}", rng.gen_range(0..50)).into()),
-            ])
-        }).collect();
+        let records: Vec<Record> = (0..500)
+            .map(|_| {
+                make_record(
+                    &fields,
+                    vec![
+                        Value::Int(rng.gen_range(-1000..1000)),
+                        Value::String(format!("str_{}", rng.gen_range(0..50)).into()),
+                    ],
+                )
+            })
+            .collect();
 
         let keys = vec![path("x"), path("y")];
         let orderings = vec![Ordering::Asc, Ordering::Desc];
@@ -777,14 +808,16 @@ mod tests {
         // Direct sort (control)
         let mut direct = records.clone();
         direct_sort(&mut direct, &keys, &orderings);
-        let direct_vals: Vec<(Value, Value)> = direct.iter()
-            .map(|r| (r.get(&path("x")), r.get(&path("y"))))
-            .collect();
+        let direct_vals: Vec<(Value, Value)> = direct.iter().map(|r| (r.get(&path("x")), r.get(&path("y")))).collect();
 
         // Prefix sort (treatment)
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let prefix_result = encoder.sort(records, &keys, &orderings);
-        let prefix_vals: Vec<(Value, Value)> = prefix_result.iter()
+        let prefix_vals: Vec<(Value, Value)> = prefix_result
+            .iter()
             .map(|r| (r.get(&path("x")), r.get(&path("y"))))
             .collect();
 
@@ -797,14 +830,16 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(99999);
 
         let fields = vec!["x".to_string()];
-        let records: Vec<Record> = (0..200).map(|_| {
-            let val = if rng.gen_bool(0.2) {
-                Value::Null
-            } else {
-                Value::Int(rng.gen_range(0..100))
-            };
-            make_record(&fields, vec![val])
-        }).collect();
+        let records: Vec<Record> = (0..200)
+            .map(|_| {
+                let val = if rng.gen_bool(0.2) {
+                    Value::Null
+                } else {
+                    Value::Int(rng.gen_range(0..100))
+                };
+                make_record(&fields, vec![val])
+            })
+            .collect();
 
         let keys = vec![path("x")];
         let orderings = vec![Ordering::Asc];
@@ -813,7 +848,10 @@ mod tests {
         direct_sort(&mut direct, &keys, &orderings);
         let direct_vals: Vec<Value> = direct.iter().map(|r| r.get(&path("x"))).collect();
 
-        let encoder = PrefixSortEncoder { threshold: 0, ..Default::default() };
+        let encoder = PrefixSortEncoder {
+            threshold: 0,
+            ..Default::default()
+        };
         let prefix_result = encoder.sort(records, &keys, &orderings);
         let prefix_vals: Vec<Value> = prefix_result.iter().map(|r| r.get(&path("x"))).collect();
 

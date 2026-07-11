@@ -1,6 +1,5 @@
 // src/execution/batch.rs
 
-use std::collections::VecDeque;
 use crate::common::types::Value;
 use crate::execution::stream::{Record, RecordStream};
 use crate::execution::types::StreamResult;
@@ -9,6 +8,7 @@ use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
 use crate::simd::selection::SelectionVector;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
+use std::collections::VecDeque;
 
 /// Compile-time tunable batch size.
 pub const BATCH_SIZE: usize = 1024;
@@ -206,7 +206,12 @@ impl BatchToRowAdapter {
                 }
                 Value::Boolean(data.is_set(row))
             }
-            TypedColumn::Utf8 { data, offsets, null, missing } => {
+            TypedColumn::Utf8 {
+                data,
+                offsets,
+                null,
+                missing,
+            } => {
                 if !missing.is_set(row) {
                     return Value::Missing;
                 }
@@ -218,7 +223,13 @@ impl BatchToRowAdapter {
                 let s = String::from_utf8_lossy(&data[start..end]).into_owned();
                 Value::String(s.into())
             }
-            TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing } => {
+            TypedColumn::DictUtf8 {
+                dict_data,
+                dict_offsets,
+                codes,
+                null,
+                missing,
+            } => {
                 if !missing.is_set(row) {
                     return Value::Missing;
                 }
@@ -241,12 +252,8 @@ impl BatchToRowAdapter {
                 let micros = data[row];
                 let secs = micros / 1_000_000;
                 let nanos = ((micros % 1_000_000) * 1000) as u32;
-                let naive = chrono::NaiveDateTime::from_timestamp_opt(secs, nanos)
-                    .expect("invalid timestamp");
-                let fixed = chrono::DateTime::<chrono::FixedOffset>::from_utc(
-                    naive,
-                    chrono::FixedOffset::east(0),
-                );
+                let naive = chrono::NaiveDateTime::from_timestamp_opt(secs, nanos).expect("invalid timestamp");
+                let fixed = chrono::DateTime::<chrono::FixedOffset>::from_utc(naive, chrono::FixedOffset::east(0));
                 Value::DateTime(fixed)
             }
             TypedColumn::Mixed { data, null, missing } => {
@@ -414,8 +421,7 @@ impl BatchStream for RowToBatchAdapter {
                 }
                 ColumnType::Utf8 => {
                     let mut data_builder = PaddedVecBuilder::<u8>::new();
-                    let mut offsets_builder =
-                        PaddedVecBuilder::<u32>::with_capacity(num_rows + 1);
+                    let mut offsets_builder = PaddedVecBuilder::<u32>::with_capacity(num_rows + 1);
                     offsets_builder.push(0);
                     let mut null_bm = Bitmap::all_set(num_rows);
                     let mut missing_bm = Bitmap::all_set(num_rows);
@@ -550,7 +556,10 @@ mod tests {
     #[test]
     fn test_empty_batch_stream() {
         let mut stream = EmptyBatchStream {
-            schema: BatchSchema { names: vec![], types: vec![] },
+            schema: BatchSchema {
+                names: vec![],
+                types: vec![],
+            },
         };
         assert!(stream.next_batch().unwrap().is_none());
     }
@@ -575,11 +584,20 @@ mod tests {
     #[test]
     fn test_batch_to_row_adapter_empty() {
         use crate::execution::stream::RecordStream;
-        let schema = BatchSchema { names: vec![], types: vec![] };
-        struct NoBatches { schema: BatchSchema }
+        let schema = BatchSchema {
+            names: vec![],
+            types: vec![],
+        };
+        struct NoBatches {
+            schema: BatchSchema,
+        }
         impl BatchStream for NoBatches {
-            fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> { Ok(None) }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
+                Ok(None)
+            }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
         let mut adapter = BatchToRowAdapter::new(Box::new(NoBatches { schema }));
@@ -600,14 +618,27 @@ mod tests {
             selection: crate::simd::selection::SelectionVector::All,
             len: 3,
         };
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
-            fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> { Ok(self.batch.take()) }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
+                Ok(self.batch.take())
+            }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
-        let mut adapter = BatchToRowAdapter::new(Box::new(OneBatch { batch: Some(batch), schema }));
+        let mut adapter = BatchToRowAdapter::new(Box::new(OneBatch {
+            batch: Some(batch),
+            schema,
+        }));
         let r1 = adapter.next().unwrap().unwrap();
         assert_eq!(r1.to_variables()["x"], crate::common::types::Value::Int(10));
         let r2 = adapter.next().unwrap().unwrap();
@@ -626,21 +657,35 @@ mod tests {
             missing: Bitmap::all_set(3),
         };
         let mut sel = Bitmap::all_unset(3);
-        sel.set(0); sel.set(2);
+        sel.set(0);
+        sel.set(2);
         let batch = ColumnBatch {
             columns: vec![col],
             names: vec!["x".to_string()],
             selection: crate::simd::selection::SelectionVector::Bitmap(sel),
             len: 3,
         };
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
-            fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> { Ok(self.batch.take()) }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
+                Ok(self.batch.take())
+            }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
-        let mut adapter = BatchToRowAdapter::new(Box::new(OneBatch { batch: Some(batch), schema }));
+        let mut adapter = BatchToRowAdapter::new(Box::new(OneBatch {
+            batch: Some(batch),
+            schema,
+        }));
         let r1 = adapter.next().unwrap().unwrap();
         assert_eq!(r1.to_variables()["x"], crate::common::types::Value::Int(10));
         let r2 = adapter.next().unwrap().unwrap();
@@ -650,9 +695,9 @@ mod tests {
 
     #[test]
     fn test_row_to_batch_adapter() {
+        use crate::common::types::Value;
         use crate::execution::stream::InMemoryStream;
         use std::collections::VecDeque;
-        use crate::common::types::Value;
 
         let records = vec![
             Record::new_with_variables({
@@ -689,16 +734,18 @@ mod tests {
 
     #[test]
     fn test_adapter_round_trip() {
-        use crate::execution::stream::{RecordStream, InMemoryStream};
-        use std::collections::VecDeque;
         use crate::common::types::Value;
+        use crate::execution::stream::{InMemoryStream, RecordStream};
+        use std::collections::VecDeque;
 
-        let records: Vec<Record> = (0..3).map(|i| {
-            let mut v = LinkedHashMap::new();
-            v.insert("id".to_string(), Value::Int(i));
-            v.insert("name".to_string(), Value::String(format!("item_{}", i).into()));
-            Record::new_with_variables(v)
-        }).collect();
+        let records: Vec<Record> = (0..3)
+            .map(|i| {
+                let mut v = LinkedHashMap::new();
+                v.insert("id".to_string(), Value::Int(i));
+                v.insert("name".to_string(), Value::String(format!("item_{}", i).into()));
+                Record::new_with_variables(v)
+            })
+            .collect();
 
         let source = InMemoryStream::new(VecDeque::from(records));
         let schema = BatchSchema {
@@ -711,7 +758,10 @@ mod tests {
         for i in 0..3 {
             let record = row_stream.next().unwrap().unwrap();
             assert_eq!(record.to_variables()["id"], Value::Int(i));
-            assert_eq!(record.to_variables()["name"], Value::String(format!("item_{}", i).into()));
+            assert_eq!(
+                record.to_variables()["name"],
+                Value::String(format!("item_{}", i).into())
+            );
         }
         assert!(row_stream.next().unwrap().is_none());
     }

@@ -96,9 +96,7 @@ pub fn filter_eq_i32_to_bitmap(data: &[i32], value: i32) -> Bitmap {
 
 // --- String equality kernel ---
 
-pub fn str_eq_batch(
-    haystack: &[u8], offsets: &[u32], needle: &[u8], result: &mut [u8],
-) {
+pub fn str_eq_batch(haystack: &[u8], offsets: &[u32], needle: &[u8], result: &mut [u8]) {
     for i in 0..offsets.len() - 1 {
         let start = offsets[i] as usize;
         let end = offsets[i + 1] as usize;
@@ -109,9 +107,7 @@ pub fn str_eq_batch(
 
 // --- String contains (SIMD-accelerated via memchr) ---
 
-pub fn str_contains_scalar(
-    haystack: &[u8], offsets: &[u32], needle: &[u8], result: &mut [u8],
-) {
+pub fn str_contains_scalar(haystack: &[u8], offsets: &[u32], needle: &[u8], result: &mut [u8]) {
     let finder = memchr::memmem::Finder::new(needle);
     for i in 0..offsets.len() - 1 {
         let start = offsets[i] as usize;
@@ -233,7 +229,9 @@ mod tests {
     fn test_sum_i32_selected() {
         let data = [10i32, 20, 30, 40, 50];
         let mut bm = Bitmap::all_unset(5);
-        bm.set(0); bm.set(2); bm.set(4); // select 10, 30, 50
+        bm.set(0);
+        bm.set(2);
+        bm.set(4); // select 10, 30, 50
         assert_eq!(sum_i32_selected(&data, &bm), 90);
     }
 
@@ -247,7 +245,9 @@ mod tests {
     #[test]
     fn test_count_selected() {
         let mut bm = Bitmap::all_unset(100);
-        bm.set(0); bm.set(50); bm.set(99);
+        bm.set(0);
+        bm.set(50);
+        bm.set(99);
         assert_eq!(count_selected(&bm), 3);
     }
 

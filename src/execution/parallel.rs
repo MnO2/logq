@@ -1,52 +1,45 @@
-use memmap2::MmapOptions;
-use rayon::prelude::*;
-use std::cmp;
-use std::collections::BinaryHeap;
-use std::cmp::Reverse;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
-use std::sync::Arc;
-use crate::common::types::{Tuple, Value, Variables};
+#[cfg(test)]
+use crate::common::types::Value;
+use crate::common::types::Variables;
 use crate::execution::batch::*;
 use crate::execution::batch_scan::BatchScanOperator;
 use crate::execution::log_schema::LogSchema;
-use crate::execution::types::{
-    CountAggregate, SumAggregate, AvgAggregate, MinAggregate, MaxAggregate,
-    Formula, StreamResult,
-};
+#[cfg(test)]
+use crate::execution::types::{AvgAggregate, CountAggregate, MaxAggregate, MinAggregate, SumAggregate};
+use crate::execution::types::{Formula, StreamResult};
 use crate::functions::FunctionRegistry;
+use memmap2::MmapOptions;
+#[cfg(test)]
 use ordered_float::OrderedFloat;
+use rayon::prelude::*;
+use std::cmp;
+use std::fs::File;
+use std::io::{self, BufRead};
+use std::path::Path;
+use std::sync::Arc;
 
 pub(crate) const PARALLEL_THRESHOLD: u64 = 16 * 1024 * 1024; // 16MB
 
 pub(crate) enum ScanStrategy {
     Mmap(memmap2::Mmap),
-    BufReader(Box<dyn BufRead>),
+    Sequential,
 }
 
 pub(crate) fn choose_strategy(path: &Path) -> ScanStrategy {
     let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
 
     if file_size < PARALLEL_THRESHOLD || file_size == 0 {
-        return match File::open(path) {
-            Ok(f) => ScanStrategy::BufReader(Box::new(BufReader::with_capacity(64 * 1024, f))),
-            Err(_) => ScanStrategy::BufReader(Box::new(io::Cursor::new(Vec::new()))),
-        };
+        return ScanStrategy::Sequential;
     }
 
     #[cfg(target_pointer_width = "64")]
     {
-        match File::open(path).and_then(|f| unsafe { MmapOptions::new().map(&f) }) {
-            Ok(mmap) => return ScanStrategy::Mmap(mmap),
-            Err(_) => {}
+        if let Ok(mmap) = File::open(path).and_then(|f| unsafe { MmapOptions::new().map(&f) }) {
+            return ScanStrategy::Mmap(mmap);
         }
     }
 
-    match File::open(path) {
-        Ok(f) => ScanStrategy::BufReader(Box::new(BufReader::with_capacity(64 * 1024, f))),
-        Err(_) => ScanStrategy::BufReader(Box::new(io::Cursor::new(Vec::new()))),
-    }
+    ScanStrategy::Sequential
 }
 
 /// Split a byte slice into chunks along newline boundaries.
@@ -80,7 +73,7 @@ pub(crate) fn split_chunks(data: &[u8], num_chunks: usize) -> Vec<&[u8]> {
         start = end;
     }
 
-    while chunks.last().map_or(false, |c| c.is_empty()) {
+    while chunks.last().is_some_and(|c| c.is_empty()) {
         chunks.pop();
     }
 
@@ -98,6 +91,7 @@ fn collect_results<T>(results: Vec<StreamResult<T>>) -> StreamResult<Vec<T>> {
     Ok(collected)
 }
 
+#[cfg(test)]
 pub(crate) fn parallel_scan_chunks(
     data: &[u8],
     num_threads: usize,
@@ -107,8 +101,13 @@ pub(crate) fn parallel_scan_chunks(
     pushed_predicate: &Option<(Formula, Variables, Arc<FunctionRegistry>)>,
 ) -> StreamResult<Vec<Vec<ColumnBatch>>> {
     parallel_scan_chunks_limited(
-        data, num_threads, schema, projected_fields,
-        filter_field_indices, pushed_predicate, None,
+        data,
+        num_threads,
+        schema,
+        projected_fields,
+        filter_field_indices,
+        pushed_predicate,
+        None,
     )
 }
 
@@ -165,6 +164,7 @@ pub(crate) fn parallel_scan_chunks_limited(
 // ---------------------------------------------------------------------------
 
 /// Merge two CountAggregates by summing counts per key.
+#[cfg(test)]
 pub(crate) fn merge_count(a: &CountAggregate, b: &CountAggregate) -> CountAggregate {
     let mut merged = a.clone();
     for (key, &count) in b.counts.iter() {
@@ -174,6 +174,7 @@ pub(crate) fn merge_count(a: &CountAggregate, b: &CountAggregate) -> CountAggreg
 }
 
 /// Merge two SumAggregates by summing values per key.
+#[cfg(test)]
 pub(crate) fn merge_sum(a: &SumAggregate, b: &SumAggregate) -> SumAggregate {
     let mut merged = a.clone();
     for (key, &sum) in b.sums.iter() {
@@ -184,6 +185,7 @@ pub(crate) fn merge_sum(a: &SumAggregate, b: &SumAggregate) -> SumAggregate {
 }
 
 /// Merge two AvgAggregates by combining (sum, count) pairs per key.
+#[cfg(test)]
 pub(crate) fn merge_avg(a: &AvgAggregate, b: &AvgAggregate) -> AvgAggregate {
     let mut merged = a.clone();
     for (key, &sum) in b.sums.iter() {
@@ -197,6 +199,7 @@ pub(crate) fn merge_avg(a: &AvgAggregate, b: &AvgAggregate) -> AvgAggregate {
 }
 
 /// Merge two MinAggregates by taking the minimum value per key.
+#[cfg(test)]
 pub(crate) fn merge_min(a: &MinAggregate, b: &MinAggregate) -> MinAggregate {
     let mut merged = a.clone();
     for (key, value) in b.mins.iter() {
@@ -220,6 +223,7 @@ pub(crate) fn merge_min(a: &MinAggregate, b: &MinAggregate) -> MinAggregate {
 }
 
 /// Merge two MaxAggregates by taking the maximum value per key.
+#[cfg(test)]
 pub(crate) fn merge_max(a: &MaxAggregate, b: &MaxAggregate) -> MaxAggregate {
     let mut merged = a.clone();
     for (key, value) in b.maxs.iter() {
@@ -248,6 +252,7 @@ pub(crate) fn merge_max(a: &MaxAggregate, b: &MaxAggregate) -> MaxAggregate {
 
 /// An entry in the k-way merge heap. Compared by sort key bytes, then
 /// chunk index and row index as tiebreakers for stable ordering.
+#[cfg(test)]
 struct MergeEntry {
     key: Vec<u8>,
     chunk_idx: usize,
@@ -255,16 +260,17 @@ struct MergeEntry {
     record: Variables,
 }
 
+#[cfg(test)]
 impl Eq for MergeEntry {}
 
+#[cfg(test)]
 impl PartialEq for MergeEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-            && self.chunk_idx == other.chunk_idx
-            && self.row_idx == other.row_idx
+        self.key == other.key && self.chunk_idx == other.chunk_idx && self.row_idx == other.row_idx
     }
 }
 
+#[cfg(test)]
 impl Ord for MergeEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.key
@@ -274,6 +280,7 @@ impl Ord for MergeEntry {
     }
 }
 
+#[cfg(test)]
 impl PartialOrd for MergeEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -283,17 +290,15 @@ impl PartialOrd for MergeEntry {
 /// Perform a k-way merge of pre-sorted chunks. Each chunk is a Vec of
 /// `(sort_key_bytes, record)` pairs sorted in ascending key order.
 /// Returns records in globally-sorted order, optionally limited to `limit`.
-pub(crate) fn kway_merge(
-    chunks: Vec<Vec<(Vec<u8>, Variables)>>,
-    limit: Option<usize>,
-) -> Vec<Variables> {
+#[cfg(test)]
+pub(crate) fn kway_merge(chunks: Vec<Vec<(Vec<u8>, Variables)>>, limit: Option<usize>) -> Vec<Variables> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
     let mut heap: BinaryHeap<Reverse<MergeEntry>> = BinaryHeap::new();
 
     // Iterators to track current position within each chunk.
-    let mut iters: Vec<std::vec::IntoIter<(Vec<u8>, Variables)>> = chunks
-        .into_iter()
-        .map(|c| c.into_iter())
-        .collect();
+    let mut iters: Vec<std::vec::IntoIter<(Vec<u8>, Variables)>> = chunks.into_iter().map(|c| c.into_iter()).collect();
 
     // Seed the heap with the first element from each chunk.
     for (chunk_idx, iter) in iters.iter_mut().enumerate() {
@@ -335,6 +340,7 @@ pub(crate) fn kway_merge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::types::Tuple;
 
     #[test]
     fn test_split_chunks_basic() {
@@ -399,13 +405,13 @@ mod tests {
         let file_path = dir.path().join("small.log");
         std::fs::write(&file_path, "hello world\n").unwrap();
         let strategy = choose_strategy(&file_path);
-        assert!(matches!(strategy, ScanStrategy::BufReader(_)));
+        assert!(matches!(strategy, ScanStrategy::Sequential));
     }
 
     #[test]
     fn test_scan_strategy_nonexistent() {
         let strategy = choose_strategy(std::path::Path::new("/tmp/nonexistent_logq_test_file.log"));
-        assert!(matches!(strategy, ScanStrategy::BufReader(_)));
+        assert!(matches!(strategy, ScanStrategy::Sequential));
     }
 
     #[test]
@@ -415,22 +421,22 @@ mod tests {
         for i in 0..20 {
             data.push_str(&format!(
                 "ts{} {} host{} status{} {} GET url{} rfc{} peer{} type{}\n",
-                i, i, i, i, i * 100, i, i, i, i
+                i,
+                i,
+                i,
+                i,
+                i * 100,
+                i,
+                i,
+                i,
+                i
             ));
         }
 
         let schema = LogSchema::from_format("squid");
         let all_fields: Vec<usize> = (0..schema.field_count()).collect();
 
-        let results = parallel_scan_chunks(
-            data.as_bytes(),
-            2,
-            &schema,
-            &all_fields,
-            &[],
-            &None,
-        )
-        .unwrap();
+        let results = parallel_scan_chunks(data.as_bytes(), 2, &schema, &all_fields, &[], &None).unwrap();
 
         let total_rows: usize = results
             .iter()
@@ -576,14 +582,8 @@ mod tests {
 
     #[test]
     fn test_kway_merge_with_limit() {
-        let chunk1 = vec![
-            (b"a".to_vec(), make_record("a1")),
-            (b"c".to_vec(), make_record("c1")),
-        ];
-        let chunk2 = vec![
-            (b"b".to_vec(), make_record("b2")),
-            (b"d".to_vec(), make_record("d2")),
-        ];
+        let chunk1 = vec![(b"a".to_vec(), make_record("a1")), (b"c".to_vec(), make_record("c1"))];
+        let chunk2 = vec![(b"b".to_vec(), make_record("b2")), (b"d".to_vec(), make_record("d2"))];
 
         let result = kway_merge(vec![chunk1, chunk2], Some(2));
         assert_eq!(result.len(), 2);

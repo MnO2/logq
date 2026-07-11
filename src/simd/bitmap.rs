@@ -7,7 +7,7 @@ pub struct Bitmap {
 
 impl Bitmap {
     pub fn all_set(len: usize) -> Self {
-        let num_words = (len + 63) / 64;
+        let num_words = len.div_ceil(64);
         let mut words = vec![u64::MAX; num_words];
         let remainder = len % 64;
         if remainder > 0 {
@@ -17,8 +17,10 @@ impl Bitmap {
     }
 
     pub fn all_unset(len: usize) -> Self {
-        let num_words = (len + 63) / 64;
-        Self { words: vec![0u64; num_words] }
+        let num_words = len.div_ceil(64);
+        Self {
+            words: vec![0u64; num_words],
+        }
     }
 
     #[inline]
@@ -47,8 +49,7 @@ impl Bitmap {
 
     pub fn and(&self, other: &Bitmap) -> Bitmap {
         debug_assert_eq!(self.words.len(), other.words.len());
-        let words = self.words.iter().zip(other.words.iter())
-            .map(|(a, b)| a & b).collect();
+        let words = self.words.iter().zip(other.words.iter()).map(|(a, b)| a & b).collect();
         Bitmap { words }
     }
 
@@ -62,8 +63,7 @@ impl Bitmap {
 
     pub fn or(&self, other: &Bitmap) -> Bitmap {
         debug_assert_eq!(self.words.len(), other.words.len());
-        let words = self.words.iter().zip(other.words.iter())
-            .map(|(a, b)| a | b).collect();
+        let words = self.words.iter().zip(other.words.iter()).map(|(a, b)| a | b).collect();
         Bitmap { words }
     }
 
@@ -89,14 +89,14 @@ impl Bitmap {
 
     pub fn unpack_to_bytes(&self, len: usize) -> Vec<u8> {
         let mut mask = vec![0u8; len];
-        for i in 0..len {
-            mask[i] = ((self.words[i / 64] >> (i % 64)) & 1) as u8;
+        for (i, byte) in mask.iter_mut().enumerate().take(len) {
+            *byte = ((self.words[i / 64] >> (i % 64)) & 1) as u8;
         }
         mask
     }
 
     pub fn pack_from_bytes(mask: &[u8]) -> Self {
-        let num_words = (mask.len() + 63) / 64;
+        let num_words = mask.len().div_ceil(64);
         let mut words = vec![0u64; num_words];
         for (i, &byte) in mask.iter().enumerate() {
             debug_assert!(byte <= 1, "pack_from_bytes expects 0 or 1, got {}", byte);
@@ -138,8 +138,12 @@ mod tests {
     fn test_and() {
         let mut a = Bitmap::all_unset(64);
         let mut b = Bitmap::all_unset(64);
-        a.set(0); a.set(1); a.set(2);
-        b.set(1); b.set(2); b.set(3);
+        a.set(0);
+        a.set(1);
+        a.set(2);
+        b.set(1);
+        b.set(2);
+        b.set(3);
         let c = a.and(&b);
         assert!(!c.is_set(0));
         assert!(c.is_set(1));
@@ -181,7 +185,9 @@ mod tests {
     #[test]
     fn test_unpack_to_bytes() {
         let mut bm = Bitmap::all_unset(8);
-        bm.set(0); bm.set(2); bm.set(4);
+        bm.set(0);
+        bm.set(2);
+        bm.set(4);
         let bytes = bm.unpack_to_bytes(8);
         assert_eq!(bytes, vec![1, 0, 1, 0, 1, 0, 0, 0]);
     }
@@ -197,7 +203,9 @@ mod tests {
     #[test]
     fn test_popcount_1024() {
         let mut bm = Bitmap::all_unset(1024);
-        for i in (0..1024).step_by(2) { bm.set(i); }
+        for i in (0..1024).step_by(2) {
+            bm.set(i);
+        }
         assert_eq!(bm.count_ones(), 512);
     }
 
@@ -213,8 +221,12 @@ mod tests {
     fn test_bitmap_ops_at_batch_size() {
         let mut a = Bitmap::all_unset(1024);
         let mut b = Bitmap::all_unset(1024);
-        for i in (0..1024).step_by(2) { a.set(i); }  // evens
-        for i in (0..1024).step_by(3) { b.set(i); }  // multiples of 3
+        for i in (0..1024).step_by(2) {
+            a.set(i);
+        } // evens
+        for i in (0..1024).step_by(3) {
+            b.set(i);
+        } // multiples of 3
 
         let and_result = a.and(&b);
         // evens AND multiples-of-3 = multiples of 6

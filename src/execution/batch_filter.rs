@@ -1,11 +1,11 @@
 // src/execution/batch_filter.rs
 
+use crate::common::types::Variables;
 use crate::execution::batch::*;
 use crate::execution::batch_predicate::evaluate_batch_predicate;
 use crate::execution::types::{Formula, StreamResult};
-use crate::simd::selection::SelectionVector;
-use crate::common::types::Variables;
 use crate::functions::FunctionRegistry;
+use crate::simd::selection::SelectionVector;
 use std::sync::Arc;
 
 pub(crate) struct BatchFilterOperator {
@@ -29,23 +29,25 @@ impl BatchFilterOperator {
         };
         // Fold constant sub-expressions before execution
         let formula = formula.fold_constants();
-        Self { child, formula, variables, registry, schema }
+        Self {
+            child,
+            formula,
+            variables,
+            registry,
+            schema,
+        }
     }
 }
 
 impl BatchStream for BatchFilterOperator {
     fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
         while let Some(mut batch) = self.child.next_batch()? {
-            let result_bm = evaluate_batch_predicate(
-                &self.formula, &batch, &self.variables, &self.registry,
-            )?;
+            let result_bm = evaluate_batch_predicate(&self.formula, &batch, &self.variables, &self.registry)?;
 
             // Combine with existing selection
             let new_selection = match batch.selection {
                 SelectionVector::All => SelectionVector::Bitmap(result_bm),
-                SelectionVector::Bitmap(ref existing) => {
-                    SelectionVector::Bitmap(existing.and(&result_bm))
-                }
+                SelectionVector::Bitmap(ref existing) => SelectionVector::Bitmap(existing.and(&result_bm)),
             };
 
             batch.selection = new_selection;
@@ -70,11 +72,11 @@ impl BatchStream for BatchFilterOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::types::Value;
+    use crate::execution::types::{Expression, Formula, Relation};
     use crate::simd::bitmap::Bitmap;
     use crate::simd::padded_vec::PaddedVecBuilder;
-    use crate::execution::types::{Formula, Expression, Relation};
     use crate::syntax::ast::{PathExpr, PathSegment};
-    use crate::common::types::Value;
 
     #[test]
     fn test_batch_filter_narrows_selection() {
@@ -98,27 +100,38 @@ mod tests {
             len: 4,
         };
 
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 Ok(self.batch.take())
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
         let formula = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("status".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "status".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let schema = BatchSchema { names: vec!["status".to_string()], types: vec![ColumnType::Utf8] };
+        let schema = BatchSchema {
+            names: vec!["status".to_string()],
+            types: vec![ColumnType::Utf8],
+        };
         let mut filter = BatchFilterOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             formula,
             Variables::new(),
             registry,
@@ -148,28 +161,39 @@ mod tests {
             len: 3,
         };
 
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 Ok(self.batch.take())
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
         // Filter: x > 100 — nothing matches
         let formula = Formula::Predicate(
             Relation::MoreThan,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("x".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "x".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(100))),
         );
 
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
         let mut filter = BatchFilterOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             formula,
             Variables::new(),
             registry,

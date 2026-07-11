@@ -15,11 +15,7 @@ fn json_navigate(value: &json::JsonValue, path: &str) -> Option<json::JsonValue>
     let path = path.trim();
 
     // Strip leading "$"
-    let rest = if path.starts_with('$') {
-        &path[1..]
-    } else {
-        path
-    };
+    let rest = path.strip_prefix('$').unwrap_or(path);
 
     // If nothing remains after "$", return root
     if rest.is_empty() {
@@ -27,11 +23,7 @@ fn json_navigate(value: &json::JsonValue, path: &str) -> Option<json::JsonValue>
     }
 
     // Strip leading "." if present (e.g. "$.key" -> "key")
-    let rest = if rest.starts_with('.') {
-        &rest[1..]
-    } else {
-        rest
-    };
+    let rest = rest.strip_prefix('.').unwrap_or(rest);
 
     // Parse path into segments: split by "." but also handle "[N]"
     let segments = parse_path_segments(rest);
@@ -138,9 +130,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
                 match json_navigate(&parsed, path) {
                     Some(val) => {
-                        if val.is_object() || val.is_array() {
-                            Ok(Value::Null)
-                        } else if val.is_null() {
+                        if val.is_object() || val.is_array() || val.is_null() {
                             Ok(Value::Null)
                         } else if val.is_boolean() {
                             Ok(Value::String(val.as_bool().unwrap().to_string().into()))
@@ -226,9 +216,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
                 match json_navigate(&parsed, path) {
                     Some(val) => {
-                        if val.is_array() {
-                            Ok(Value::Int(val.len() as i32))
-                        } else if val.is_object() {
+                        if val.is_array() || val.is_object() {
                             Ok(Value::Int(val.len() as i32))
                         } else {
                             Ok(Value::Int(0))
@@ -278,10 +266,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::String(json_str) => {
                 let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
-                let is_scalar = parsed.is_string()
-                    || parsed.is_number()
-                    || parsed.is_boolean()
-                    || parsed.is_null();
+                let is_scalar = parsed.is_string() || parsed.is_number() || parsed.is_boolean() || parsed.is_null();
                 Ok(Value::Boolean(is_scalar))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -308,7 +293,10 @@ mod tests {
         let r = make_registry();
         let json = r#"{"name": "Alice", "age": 30}"#;
         assert_eq!(
-            r.call("json_extract", &[Value::String(json.into()), Value::String("$.name".into())]),
+            r.call(
+                "json_extract",
+                &[Value::String(json.into()), Value::String("$.name".into())]
+            ),
             Ok(Value::String("\"Alice\"".into()))
         );
     }
@@ -318,11 +306,17 @@ mod tests {
         let r = make_registry();
         let json = r#"{"name": "Alice", "age": 30}"#;
         assert_eq!(
-            r.call("json_extract_scalar", &[Value::String(json.into()), Value::String("$.name".into())]),
+            r.call(
+                "json_extract_scalar",
+                &[Value::String(json.into()), Value::String("$.name".into())]
+            ),
             Ok(Value::String("Alice".into()))
         );
         assert_eq!(
-            r.call("json_extract_scalar", &[Value::String(json.into()), Value::String("$.age".into())]),
+            r.call(
+                "json_extract_scalar",
+                &[Value::String(json.into()), Value::String("$.age".into())]
+            ),
             Ok(Value::String("30".into()))
         );
     }
@@ -332,7 +326,10 @@ mod tests {
         let r = make_registry();
         let json = r#"{"store": {"name": "Books R Us"}}"#;
         assert_eq!(
-            r.call("json_extract_scalar", &[Value::String(json.into()), Value::String("$.store.name".into())]),
+            r.call(
+                "json_extract_scalar",
+                &[Value::String(json.into()), Value::String("$.store.name".into())]
+            ),
             Ok(Value::String("Books R Us".into()))
         );
     }
@@ -342,7 +339,10 @@ mod tests {
         let r = make_registry();
         let json = r#"{"items": [10, 20, 30]}"#;
         assert_eq!(
-            r.call("json_extract_scalar", &[Value::String(json.into()), Value::String("$.items[1]".into())]),
+            r.call(
+                "json_extract_scalar",
+                &[Value::String(json.into()), Value::String("$.items[1]".into())]
+            ),
             Ok(Value::String("20".into()))
         );
     }
@@ -369,11 +369,17 @@ mod tests {
     fn test_json_array_contains() {
         let r = make_registry();
         assert_eq!(
-            r.call("json_array_contains", &[Value::String("[1, 2, 3]".into()), Value::Int(2)]),
+            r.call(
+                "json_array_contains",
+                &[Value::String("[1, 2, 3]".into()), Value::Int(2)]
+            ),
             Ok(Value::Boolean(true))
         );
         assert_eq!(
-            r.call("json_array_contains", &[Value::String("[1, 2, 3]".into()), Value::Int(5)]),
+            r.call(
+                "json_array_contains",
+                &[Value::String("[1, 2, 3]".into()), Value::Int(5)]
+            ),
             Ok(Value::Boolean(false))
         );
     }
@@ -382,7 +388,10 @@ mod tests {
     fn test_json_size_array() {
         let r = make_registry();
         assert_eq!(
-            r.call("json_size", &[Value::String("[1, 2, 3]".into()), Value::String("$".into())]),
+            r.call(
+                "json_size",
+                &[Value::String("[1, 2, 3]".into()), Value::String("$".into())]
+            ),
             Ok(Value::Int(3))
         );
     }
@@ -391,7 +400,10 @@ mod tests {
     fn test_json_size_object() {
         let r = make_registry();
         assert_eq!(
-            r.call("json_size", &[Value::String(r#"{"a": 1, "b": 2}"#.into()), Value::String("$".into())]),
+            r.call(
+                "json_size",
+                &[Value::String(r#"{"a": 1, "b": 2}"#.into()), Value::String("$".into())]
+            ),
             Ok(Value::Int(2))
         );
     }
@@ -414,10 +426,22 @@ mod tests {
     #[test]
     fn test_is_json_scalar() {
         let r = make_registry();
-        assert_eq!(r.call("is_json_scalar", &[Value::String("42".into())]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("is_json_scalar", &[Value::String(r#""hello""#.into())]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("is_json_scalar", &[Value::String("[1,2]".into())]), Ok(Value::Boolean(false)));
-        assert_eq!(r.call("is_json_scalar", &[Value::String(r#"{"a":1}"#.into())]), Ok(Value::Boolean(false)));
+        assert_eq!(
+            r.call("is_json_scalar", &[Value::String("42".into())]),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call("is_json_scalar", &[Value::String(r#""hello""#.into())]),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call("is_json_scalar", &[Value::String("[1,2]".into())]),
+            Ok(Value::Boolean(false))
+        );
+        assert_eq!(
+            r.call("is_json_scalar", &[Value::String(r#"{"a":1}"#.into())]),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]

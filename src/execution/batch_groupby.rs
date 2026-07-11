@@ -2,18 +2,14 @@
 
 use crate::common;
 use crate::common::types::{Tuple, Value, Variables};
-use crate::execution::batch::{
-    BatchSchema, BatchStream, BatchToRowAdapter, ColumnBatch, TypedColumn,
-};
-use crate::execution::types::{
-    Aggregate, Expression, Named, NamedAggregate, StreamResult, value_less_than,
-};
-use ordered_float::OrderedFloat;
+use crate::execution::batch::{BatchSchema, BatchStream, BatchToRowAdapter, ColumnBatch, TypedColumn};
+use crate::execution::types::{value_less_than, Aggregate, Expression, Named, NamedAggregate, StreamResult};
 use crate::functions::FunctionRegistry;
 use crate::simd::bitmap::Bitmap;
 use crate::simd::selection::SelectionVector;
 use crate::syntax::ast::PathExpr;
 use linked_hash_map::LinkedHashMap;
+use ordered_float::OrderedFloat;
 use std::collections::hash_set;
 use std::sync::Arc;
 
@@ -96,7 +92,7 @@ impl BatchGroupByOperator {
                 }
             }
         }
-        for (idx, named_agg) in self.aggregates.iter().enumerate() {
+        for named_agg in self.aggregates.iter() {
             if let Some(ref name) = named_agg.name_opt {
                 names.push(name.clone());
             } else {
@@ -207,11 +203,17 @@ impl BatchGroupByOperator {
                             TypedColumn::Mixed { data, null, missing } => {
                                 let valid = null.and(missing);
                                 let active = sel_bm.and(&valid);
-                                for j in 0..batch.len {
+                                for (j, value) in data.iter().enumerate().take(batch.len) {
                                     if active.is_set(j) {
-                                        match &data[j] {
-                                            Value::Int(v) => { sum_f64[i] += *v as f64; count_col[i] += 1; }
-                                            Value::Float(v) => { sum_f64[i] += v.into_inner() as f64; count_col[i] += 1; }
+                                        match value {
+                                            Value::Int(v) => {
+                                                sum_f64[i] += *v as f64;
+                                                count_col[i] += 1;
+                                            }
+                                            Value::Float(v) => {
+                                                sum_f64[i] += v.into_inner() as f64;
+                                                count_col[i] += 1;
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -223,19 +225,27 @@ impl BatchGroupByOperator {
                     Aggregate::Min(_, _) | Aggregate::Max(_, _) => {
                         let is_min = matches!(&na.aggregate, Aggregate::Min(_, _));
                         for j in 0..batch.len {
-                            if !sel_bm.is_set(j) { continue; }
+                            if !sel_bm.is_set(j) {
+                                continue;
+                            }
                             let val = BatchToRowAdapter::extract_value(&batch.columns[col_idx], j);
-                            if matches!(val, Value::Null | Value::Missing) { continue; }
+                            if matches!(val, Value::Null | Value::Missing) {
+                                continue;
+                            }
                             let slot = if is_min { &mut min_val[i] } else { &mut max_val[i] };
                             match slot {
-                                None => { *slot = Some(val); }
+                                None => {
+                                    *slot = Some(val);
+                                }
                                 Some(ref current) => {
                                     let replace = if is_min {
                                         value_less_than(&val, current)
                                     } else {
                                         value_less_than(current, &val)
                                     };
-                                    if replace { *slot = Some(val); }
+                                    if replace {
+                                        *slot = Some(val);
+                                    }
                                 }
                             }
                         }
@@ -299,8 +309,7 @@ impl BatchGroupByOperator {
             return false;
         }
         let keys_ok = self.group_keys.iter().all(|k| {
-            k.path_segments.len() == 1
-                && matches!(&k.path_segments[0], crate::syntax::ast::PathSegment::AttrName(_))
+            k.path_segments.len() == 1 && matches!(&k.path_segments[0], crate::syntax::ast::PathSegment::AttrName(_))
         });
         if !keys_ok {
             return false;
@@ -319,24 +328,6 @@ impl BatchGroupByOperator {
         })
     }
 
-    /// Extract the string value at row `row` from a string column (Utf8 or DictUtf8).
-    fn extract_string_key(col: &TypedColumn, row: usize) -> Vec<u8> {
-        match col {
-            TypedColumn::Utf8 { data, offsets, .. } => {
-                let start = offsets[row] as usize;
-                let end = offsets[row + 1] as usize;
-                data[start..end].to_vec()
-            }
-            TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, .. } => {
-                let code = codes[row] as usize;
-                let start = dict_offsets[code] as usize;
-                let end = dict_offsets[code + 1] as usize;
-                dict_data[start..end].to_vec()
-            }
-            _ => Vec::new(),
-        }
-    }
-
     /// Columnar fast path for grouped aggregation.
     /// Avoids materializing rows into LinkedHashMap by extracting group keys
     /// and aggregate values directly from typed columns.
@@ -347,20 +338,26 @@ impl BatchGroupByOperator {
         let num_keys = self.group_keys.len();
 
         // Extract key column names
-        let key_col_names: Vec<String> = self.group_keys.iter().map(|k| {
-            if let crate::syntax::ast::PathSegment::AttrName(name) = &k.path_segments[0] {
-                name.clone()
-            } else {
-                unreachable!()
-            }
-        }).collect();
+        let key_col_names: Vec<String> = self
+            .group_keys
+            .iter()
+            .map(|k| {
+                if let crate::syntax::ast::PathSegment::AttrName(name) = &k.path_segments[0] {
+                    name.clone()
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect();
 
         // Extract aggregate column names
         let mut agg_col_names: Vec<Option<String>> = vec![None; num_aggs];
         let mut is_count_star = vec![false; num_aggs];
         for (i, na) in self.aggregates.iter().enumerate() {
             match &na.aggregate {
-                Aggregate::Count(_, Named::Star) => { is_count_star[i] = true; }
+                Aggregate::Count(_, Named::Star) => {
+                    is_count_star[i] = true;
+                }
                 Aggregate::Count(_, Named::Expression(Expression::Variable(p), _))
                 | Aggregate::Sum(_, Named::Expression(Expression::Variable(p), _))
                 | Aggregate::Avg(_, Named::Expression(Expression::Variable(p), _))
@@ -388,11 +385,17 @@ impl BatchGroupByOperator {
             let sel_bm = batch.selection.to_bitmap(batch.len);
 
             // Resolve key and aggregate column indices in this batch
-            let key_col_indices: Vec<Option<usize>> = key_col_names.iter()
+            let key_col_indices: Vec<Option<usize>> = key_col_names
+                .iter()
                 .map(|name| batch.names.iter().position(|n| n == name))
                 .collect();
-            let agg_col_indices: Vec<Option<usize>> = agg_col_names.iter()
-                .map(|name_opt| name_opt.as_ref().and_then(|name| batch.names.iter().position(|n| n == name)))
+            let agg_col_indices: Vec<Option<usize>> = agg_col_names
+                .iter()
+                .map(|name_opt| {
+                    name_opt
+                        .as_ref()
+                        .and_then(|name| batch.names.iter().position(|n| n == name))
+                })
                 .collect();
 
             for row in 0..batch.len {
@@ -403,7 +406,7 @@ impl BatchGroupByOperator {
                 // Build a composite key as concatenated bytes with length prefixes
                 let mut key_bytes = Vec::with_capacity(64);
                 let mut key_values = Vec::with_capacity(num_keys);
-                for (k, &col_idx_opt) in key_col_indices.iter().enumerate() {
+                for &col_idx_opt in key_col_indices.iter() {
                     let col_idx = match col_idx_opt {
                         Some(i) => i,
                         None => {
@@ -426,11 +429,14 @@ impl BatchGroupByOperator {
                             key_bytes.push(2); // type tag
                             key_bytes.extend_from_slice(&(s.len() as u32).to_le_bytes());
                             key_bytes.extend_from_slice(s);
-                            key_values.push(Value::String(
-                                String::from_utf8_lossy(s).into_owned().into()
-                            ));
+                            key_values.push(Value::String(String::from_utf8_lossy(s).into_owned().into()));
                         }
-                        TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, .. } => {
+                        TypedColumn::DictUtf8 {
+                            dict_data,
+                            dict_offsets,
+                            codes,
+                            ..
+                        } => {
                             let code = codes[row] as usize;
                             let start = dict_offsets[code] as usize;
                             let end = dict_offsets[code + 1] as usize;
@@ -438,9 +444,7 @@ impl BatchGroupByOperator {
                             key_bytes.push(2);
                             key_bytes.extend_from_slice(&(s.len() as u32).to_le_bytes());
                             key_bytes.extend_from_slice(s);
-                            key_values.push(Value::String(
-                                String::from_utf8_lossy(s).into_owned().into()
-                            ));
+                            key_values.push(Value::String(String::from_utf8_lossy(s).into_owned().into()));
                         }
                         TypedColumn::Float32 { data, .. } => {
                             key_bytes.push(3);
@@ -450,7 +454,7 @@ impl BatchGroupByOperator {
                         _ => {
                             let val = BatchToRowAdapter::extract_value(col, row);
                             key_bytes.push(0);
-                            key_bytes.extend_from_slice(&format!("{:?}", val).as_bytes());
+                            key_bytes.extend_from_slice(format!("{:?}", val).as_bytes());
                             key_values.push(val);
                         }
                     }
@@ -489,44 +493,62 @@ impl BatchGroupByOperator {
                                 count_col_acc[i][group_idx] += 1;
                             }
                         }
-                        Aggregate::Sum(_, _) | Aggregate::Avg(_, _) => {
-                            match &batch.columns[col_idx] {
-                                TypedColumn::Int32 { data, null, missing, .. } => {
-                                    if null.is_set(row) && missing.is_set(row) {
-                                        sum_acc[i][group_idx] += data[row] as f64;
-                                        count_col_acc[i][group_idx] += 1;
-                                    }
-                                }
-                                TypedColumn::Float32 { data, null, missing, .. } => {
-                                    if null.is_set(row) && missing.is_set(row) {
-                                        sum_acc[i][group_idx] += data[row] as f64;
-                                        count_col_acc[i][group_idx] += 1;
-                                    }
-                                }
-                                _ => {
-                                    let val = BatchToRowAdapter::extract_value(&batch.columns[col_idx], row);
-                                    match &val {
-                                        Value::Int(v) => { sum_acc[i][group_idx] += *v as f64; count_col_acc[i][group_idx] += 1; }
-                                        Value::Float(v) => { sum_acc[i][group_idx] += v.into_inner() as f64; count_col_acc[i][group_idx] += 1; }
-                                        _ => {}
-                                    }
+                        Aggregate::Sum(_, _) | Aggregate::Avg(_, _) => match &batch.columns[col_idx] {
+                            TypedColumn::Int32 {
+                                data, null, missing, ..
+                            } => {
+                                if null.is_set(row) && missing.is_set(row) {
+                                    sum_acc[i][group_idx] += data[row] as f64;
+                                    count_col_acc[i][group_idx] += 1;
                                 }
                             }
-                        }
+                            TypedColumn::Float32 {
+                                data, null, missing, ..
+                            } => {
+                                if null.is_set(row) && missing.is_set(row) {
+                                    sum_acc[i][group_idx] += data[row] as f64;
+                                    count_col_acc[i][group_idx] += 1;
+                                }
+                            }
+                            _ => {
+                                let val = BatchToRowAdapter::extract_value(&batch.columns[col_idx], row);
+                                match &val {
+                                    Value::Int(v) => {
+                                        sum_acc[i][group_idx] += *v as f64;
+                                        count_col_acc[i][group_idx] += 1;
+                                    }
+                                    Value::Float(v) => {
+                                        sum_acc[i][group_idx] += v.into_inner() as f64;
+                                        count_col_acc[i][group_idx] += 1;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        },
                         Aggregate::Min(_, _) | Aggregate::Max(_, _) => {
                             let is_min = matches!(&na.aggregate, Aggregate::Min(_, _));
                             let val = BatchToRowAdapter::extract_value(&batch.columns[col_idx], row);
-                            if matches!(val, Value::Null | Value::Missing) { continue; }
-                            let slot = if is_min { &mut min_acc[i][group_idx] } else { &mut max_acc[i][group_idx] };
+                            if matches!(val, Value::Null | Value::Missing) {
+                                continue;
+                            }
+                            let slot = if is_min {
+                                &mut min_acc[i][group_idx]
+                            } else {
+                                &mut max_acc[i][group_idx]
+                            };
                             match slot {
-                                None => { *slot = Some(val); }
+                                None => {
+                                    *slot = Some(val);
+                                }
                                 Some(ref current) => {
                                     let replace = if is_min {
                                         value_less_than(&val, current)
                                     } else {
                                         value_less_than(current, &val)
                                     };
-                                    if replace { *slot = Some(val); }
+                                    if replace {
+                                        *slot = Some(val);
+                                    }
                                 }
                             }
                         }
@@ -568,7 +590,9 @@ impl BatchGroupByOperator {
                         if count_col_acc[i][group_idx] == 0 {
                             Value::Null
                         } else {
-                            Value::Float(OrderedFloat((sum_acc[i][group_idx] / count_col_acc[i][group_idx] as f64) as f32))
+                            Value::Float(OrderedFloat(
+                                (sum_acc[i][group_idx] / count_col_acc[i][group_idx] as f64) as f32,
+                            ))
                         }
                     }
                     Aggregate::Min(_, _) => min_acc[i][group_idx].clone().unwrap_or(Value::Null),
@@ -625,7 +649,11 @@ impl BatchGroupByOperator {
 
                 // Use scoped lookup instead of merge to avoid allocations
                 let variables = &row_vars;
-                let scope: Option<&common::types::Variables> = if self.variables.is_empty() { None } else { Some(&self.variables) };
+                let scope: Option<&common::types::Variables> = if self.variables.is_empty() {
+                    None
+                } else {
+                    Some(&self.variables)
+                };
 
                 // Build group key
                 let key = self.build_group_key(variables, scope);
@@ -638,19 +666,17 @@ impl BatchGroupByOperator {
                 // Feed into each aggregate
                 for named_agg in self.aggregates.iter_mut() {
                     match &mut named_agg.aggregate {
-                        Aggregate::Count(ref mut inner, named) => {
-                            match named {
-                                Named::Star => {
-                                    inner.add_row(&key)?;
-                                }
-                                Named::Expression(expr, _) => {
-                                    let val = expr
-                                        .expression_value_impl(variables, scope, &self.registry)
-                                        .map_err(crate::execution::types::StreamError::Expression)?;
-                                    inner.add_record(&key, &val)?;
-                                }
+                        Aggregate::Count(ref mut inner, named) => match named {
+                            Named::Star => {
+                                inner.add_row(&key)?;
                             }
-                        }
+                            Named::Expression(expr, _) => {
+                                let val = expr
+                                    .expression_value_impl(variables, scope, &self.registry)
+                                    .map_err(crate::execution::types::StreamError::Expression)?;
+                                inner.add_record(&key, &val)?;
+                            }
+                        },
                         Aggregate::Sum(ref mut inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
@@ -731,8 +757,7 @@ impl BatchGroupByOperator {
                         Aggregate::GroupAs(ref mut inner, named) => {
                             match named {
                                 Named::Expression(_, _) => {
-                                    let val =
-                                        Value::Object(Box::new(row_vars.clone()));
+                                    let val = Value::Object(Box::new(row_vars.clone()));
                                     inner.add_record(&key, &val)?;
                                 }
                                 Named::Star => {} // no-op
@@ -851,9 +876,7 @@ mod tests {
     use super::*;
     use crate::common::types::Value;
     use crate::execution::batch::{BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn};
-    use crate::execution::types::{
-        Aggregate, CountAggregate, Named, NamedAggregate, StreamResult,
-    };
+    use crate::execution::types::{Aggregate, CountAggregate, Named, NamedAggregate, StreamResult};
     use crate::functions::FunctionRegistry;
     use crate::simd::bitmap::Bitmap;
     use crate::simd::padded_vec::PaddedVecBuilder;
@@ -932,9 +955,7 @@ mod tests {
             schema,
         };
 
-        let group_keys = vec![PathExpr::new(vec![PathSegment::AttrName(
-            "status".to_string(),
-        )])];
+        let group_keys = vec![PathExpr::new(vec![PathSegment::AttrName("status".to_string())])];
 
         let count_agg = NamedAggregate::new(
             Aggregate::Count(CountAggregate::new(), Named::Star),
@@ -944,21 +965,14 @@ mod tests {
         let registry = Arc::new(FunctionRegistry::new());
         let variables = LinkedHashMap::new();
 
-        let mut op = BatchGroupByOperator::new(
-            Box::new(child),
-            group_keys,
-            vec![count_agg],
-            variables,
-            registry,
-        );
+        let mut op = BatchGroupByOperator::new(Box::new(child), group_keys, vec![count_agg], variables, registry);
 
         let result = op.next_batch().unwrap().unwrap();
         assert_eq!(result.len, 2, "should have 2 groups");
         assert_eq!(result.columns.len(), 2, "should have 2 columns (status, cnt)");
 
         // Collect the results into a map for order-independent checking
-        let mut group_counts: std::collections::HashMap<String, i32> =
-            std::collections::HashMap::new();
+        let mut group_counts: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
         for row in 0..result.len {
             let status_val = BatchToRowAdapter::extract_value(&result.columns[0], row);
             let count_val = BatchToRowAdapter::extract_value(&result.columns[1], row);
@@ -1044,7 +1058,10 @@ mod tests {
 
         let registry = Arc::new(FunctionRegistry::new());
         let mut op = BatchGroupByOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec![],
             vec![count_agg],
             LinkedHashMap::new(),
@@ -1059,8 +1076,8 @@ mod tests {
 
     #[test]
     fn test_batch_groupby_ungrouped_fast_sum() {
-        use crate::simd::padded_vec::PaddedVec;
         use crate::execution::types::SumAggregate;
+        use crate::simd::padded_vec::PaddedVec;
 
         let col = TypedColumn::Int32 {
             data: PaddedVec::from_vec(vec![10, 20, 30, 40]),
@@ -1082,9 +1099,9 @@ mod tests {
             Aggregate::Sum(
                 SumAggregate::new(),
                 Named::Expression(
-                    Expression::Variable(PathExpr::new(vec![
-                        crate::syntax::ast::PathSegment::AttrName("x".to_string()),
-                    ])),
+                    Expression::Variable(PathExpr::new(vec![crate::syntax::ast::PathSegment::AttrName(
+                        "x".to_string(),
+                    )])),
                     Some("x".to_string()),
                 ),
             ),
@@ -1093,7 +1110,10 @@ mod tests {
 
         let registry = Arc::new(FunctionRegistry::new());
         let mut op = BatchGroupByOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec![],
             vec![sum_agg],
             LinkedHashMap::new(),
@@ -1137,7 +1157,10 @@ mod tests {
 
         let registry = Arc::new(FunctionRegistry::new());
         let mut op = BatchGroupByOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec![],
             vec![count_agg],
             LinkedHashMap::new(),

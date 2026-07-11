@@ -9,14 +9,10 @@ readme = "README.md"
 keywords = ["log", "sql", "query", "search"]
 categories = ["command-line-utilities"]
 edition = "2018"
-exclude = ["/benches/**", "/.travis.yml", "/data/**"]
+exclude = ["/benches/**", "/data/**"]
 
 [features]
 bench-internals = []
-
-[badges]
-travis-ci = { repository = "MnO2/logq" }
-codecov = { repository = "MnO2/logq" }
 
 [dependencies]
 clap = {version = "2.33", features = ["yaml"]}

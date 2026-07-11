@@ -1,5 +1,8 @@
 use super::datasource::RecordRead;
-use super::types::{AggregateDef, ExtractionStrategy, Expression, Formula, GroupState, LogicalJoinType, Named, NamedAggregate, Node, StreamResult};
+use super::types::{
+    AggregateDef, Expression, ExtractionStrategy, Formula, GroupState, LogicalJoinType, Named, NamedAggregate, Node,
+    StreamResult,
+};
 use crate::common;
 use crate::common::types::{Tuple, Value, VariableName, Variables};
 use crate::functions::FunctionRegistry;
@@ -17,7 +20,7 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn new(field_names: &Vec<VariableName>, data: Vec<Value>) -> Self {
+    pub fn new(field_names: &[VariableName], data: Vec<Value>) -> Self {
         let mut variables = LinkedHashMap::with_capacity(field_names.len());
         for (i, v) in data.into_iter().enumerate() {
             variables.insert(field_names[i].clone(), v);
@@ -50,14 +53,14 @@ impl Record {
         None
     }
 
-    /// Direct field access by bare name. Bypasses PathExpr construction.
-    /// For the join key extraction hot path.
+    /// Direct field access by bare name for focused record assertions.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn get_field_value(&self, field_name: &str) -> Option<&Value> {
         self.variables.get(field_name)
     }
 
-    pub(crate) fn alias(&mut self, bindings: &Vec<common::types::Binding>) {
+    pub(crate) fn alias(&mut self, bindings: &[common::types::Binding]) {
         for binding in bindings.iter() {
             let val = common::types::get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
             self.variables.insert(binding.name.clone(), val);
@@ -99,14 +102,14 @@ impl Record {
         self.variables
             .values()
             .map(|val| match val {
-                Value::String(s) => Cell::new(&*s),
-                Value::Int(i) => Cell::new(&*i.to_string()),
-                Value::Float(f) => Cell::new(&*f.to_string()),
-                Value::Boolean(b) => Cell::new(&*b.to_string()),
+                Value::String(s) => Cell::new(s),
+                Value::Int(i) => Cell::new(&i.to_string()),
+                Value::Float(f) => Cell::new(&f.to_string()),
+                Value::Boolean(b) => Cell::new(&b.to_string()),
                 Value::Null => Cell::new("<null>"),
-                Value::DateTime(dt) => Cell::new(&*dt.to_string()),
-                Value::HttpRequest(request) => Cell::new(&*request.to_string()),
-                Value::Host(host) => Cell::new(&*host.to_string()),
+                Value::DateTime(dt) => Cell::new(&dt.to_string()),
+                Value::HttpRequest(request) => Cell::new(&request.to_string()),
+                Value::Host(host) => Cell::new(&host.to_string()),
                 Value::Missing => Cell::new("<null>"),
                 Value::Object(_) => Cell::new("{...}"),
                 Value::Array(_) => Cell::new("[...]"),
@@ -189,12 +192,7 @@ pub(crate) fn extract_key(record: &Record, key_fields: &[ast::PathExpr]) -> Join
             other => JoinKey::Composite(vec![other]),
         }
     } else {
-        JoinKey::Composite(
-            key_fields
-                .iter()
-                .map(|f| record.get(f))
-                .collect(),
-        )
+        JoinKey::Composite(key_fields.iter().map(|f| record.get(f)).collect())
     }
 }
 
@@ -218,42 +216,51 @@ pub struct MapStream {
 }
 
 impl MapStream {
-    pub fn new(named_list: Vec<Named>, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
-        let column_names: Vec<Option<String>> = named_list.iter().enumerate().map(|(idx, named)| {
-            match named {
-                Named::Expression(_, name_opt) => {
-                    Some(name_opt.clone().unwrap_or_else(|| format!("_{}", idx)))
-                }
+    pub fn new(
+        named_list: Vec<Named>,
+        variables: Variables,
+        source: Box<dyn RecordStream>,
+        registry: Arc<FunctionRegistry>,
+    ) -> Self {
+        let column_names: Vec<Option<String>> = named_list
+            .iter()
+            .enumerate()
+            .map(|(idx, named)| match named {
+                Named::Expression(_, name_opt) => Some(name_opt.clone().unwrap_or_else(|| format!("_{}", idx))),
                 Named::Star => None,
-            }
-        }).collect();
+            })
+            .collect();
         // Pre-compute: can we use the move-based fast path?
         // True when all entries are simple single-segment Variable references
         // and variables is empty (no merge needed).
-        let simple_projection = variables.is_empty() && named_list.iter().all(|n| matches!(n,
-            Named::Expression(Expression::Variable(pe), _)
-                if pe.path_segments.len() == 1 && matches!(&pe.path_segments[0], PathSegment::AttrName(_))
-        ));
+        let simple_projection = variables.is_empty()
+            && named_list.iter().all(|n| {
+                matches!(n,
+                    Named::Expression(Expression::Variable(pe), _)
+                        if pe.path_segments.len() == 1 && matches!(&pe.path_segments[0], PathSegment::AttrName(_))
+                )
+            });
         // Also check for pure SELECT * (single Star, no extra variables)
-        let is_star_only = variables.is_empty()
-            && named_list.len() == 1
-            && matches!(&named_list[0], Named::Star);
+        let is_star_only = variables.is_empty() && named_list.len() == 1 && matches!(&named_list[0], Named::Star);
         // Pre-compute (source_field, output_column) pairs for simple_projection
         let projection_map: Vec<(String, String)> = if simple_projection {
-            named_list.iter().enumerate().filter_map(|(idx, named)| {
-                if let Named::Expression(Expression::Variable(pe), _) = named {
-                    if let PathSegment::AttrName(ref field_name) = pe.path_segments[0] {
-                        let out_name = column_names[idx].as_ref().unwrap().clone();
-                        return Some((field_name.clone(), out_name));
+            named_list
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, named)| {
+                    if let Named::Expression(Expression::Variable(pe), _) = named {
+                        if let PathSegment::AttrName(ref field_name) = pe.path_segments[0] {
+                            let out_name = column_names[idx].as_ref().unwrap().clone();
+                            return Some((field_name.clone(), out_name));
+                        }
                     }
-                }
-                None
-            }).collect()
+                    None
+                })
+                .collect()
         } else {
             Vec::new()
         };
-        let projection_rename_free = simple_projection
-            && projection_map.iter().all(|(src, out)| src == out);
+        let projection_rename_free = simple_projection && projection_map.iter().all(|(src, out)| src == out);
         MapStream {
             named_list,
             column_names,
@@ -304,7 +311,11 @@ impl RecordStream for MapStream {
             }
 
             let record_vars = record.to_variables();
-            let scope: Option<&Variables> = if self.variables.is_empty() { None } else { Some(&self.variables) };
+            let scope: Option<&Variables> = if self.variables.is_empty() {
+                None
+            } else {
+                Some(&self.variables)
+            };
 
             let mut out = Variables::with_capacity(self.named_list.len());
             for (idx, named) in self.named_list.iter().enumerate() {
@@ -386,7 +397,12 @@ pub struct FilterStream {
 const REORDER_INTERVAL: u64 = 1024;
 
 impl FilterStream {
-    pub fn new(formula: Formula, variables: Variables, source: Box<dyn RecordStream>, registry: Arc<FunctionRegistry>) -> Self {
+    pub fn new(
+        formula: Formula,
+        variables: Variables,
+        source: Box<dyn RecordStream>,
+        registry: Arc<FunctionRegistry>,
+    ) -> Self {
         // Fold constant sub-expressions before execution
         let formula = formula.fold_constants();
         let has_scope = !variables.is_empty();
@@ -426,10 +442,15 @@ impl FilterStream {
         // Build (cost_per_drop, original_index) for sorting.
         // cost_per_drop = elapsed_ns / max(rows_dropped, 1)
         // Lower is better — cheap predicates that eliminate many rows go first.
-        let mut order: Vec<(u64, usize)> = self.conjunct_stats.iter().enumerate().map(|(i, &(_, dropped, elapsed))| {
-            let cost = elapsed / dropped.max(1);
-            (cost, i)
-        }).collect();
+        let mut order: Vec<(u64, usize)> = self
+            .conjunct_stats
+            .iter()
+            .enumerate()
+            .map(|(i, &(_, dropped, elapsed))| {
+                let cost = elapsed / dropped.max(1);
+                (cost, i)
+            })
+            .collect();
         order.sort_unstable();
 
         // Apply the permutation
@@ -470,7 +491,7 @@ impl RecordStream for FilterStream {
 
             // Adaptive AND path: evaluate conjuncts in order, tracking stats
             self.rows_seen += 1;
-            if self.rows_seen % REORDER_INTERVAL == 0 {
+            if self.rows_seen.is_multiple_of(REORDER_INTERVAL) {
                 self.maybe_reorder();
             }
 
@@ -539,10 +560,7 @@ impl GroupByStream {
         source: Box<dyn RecordStream>,
         registry: Arc<FunctionRegistry>,
     ) -> Self {
-        let aggregate_defs: Vec<AggregateDef> = aggregates
-            .iter()
-            .map(AggregateDef::from_named_aggregate)
-            .collect();
+        let aggregate_defs: Vec<AggregateDef> = aggregates.iter().map(AggregateDef::from_named_aggregate).collect();
         GroupByStream {
             keys,
             variables,
@@ -584,8 +602,7 @@ impl RecordStream for GroupByStream {
                             state.accumulators[i].accumulate(val)?;
                         }
                         ExtractionStrategy::RecordCapture => {
-                            let val =
-                                Value::Object(Box::new(record.to_variables().clone()));
+                            let val = Value::Object(Box::new(record.to_variables().clone()));
                             state.accumulators[i].accumulate(&val)?;
                         }
                         ExtractionStrategy::None => {
@@ -819,7 +836,13 @@ pub(crate) struct CrossJoinStream {
 }
 
 impl CrossJoinStream {
-    pub(crate) fn new(left: Box<dyn RecordStream>, right_node: Node, right_variables: Variables, registry: Arc<FunctionRegistry>, threads: usize) -> Self {
+    pub(crate) fn new(
+        left: Box<dyn RecordStream>,
+        right_node: Node,
+        right_variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+    ) -> Self {
         CrossJoinStream {
             left,
             right_node,
@@ -833,8 +856,10 @@ impl CrossJoinStream {
     }
 
     fn materialize_right(&mut self) -> StreamResult<()> {
-        let mut right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone(), self.threads)
-            .map_err(|e| super::types::StreamError::Get(e))?;
+        let mut right_stream = self
+            .right_node
+            .get(self.right_variables.clone(), self.registry.clone(), self.threads)
+            .map_err(super::types::StreamError::Get)?;
         let mut rows = Vec::new();
         while let Some(record) = right_stream.next()? {
             rows.push(record);
@@ -855,12 +880,13 @@ impl RecordStream for CrossJoinStream {
 
         loop {
             // If we have a current left record, try to get next right record by index
-            if self.current_left.is_some() && self.right_index < right_rows.len() {
-                let left = self.current_left.as_ref().unwrap();
-                let right_record = &right_rows[self.right_index];
-                self.right_index += 1;
-                let merged = left.merge(right_record);
-                return Ok(Some(merged));
+            if let Some(left) = self.current_left.as_ref() {
+                if self.right_index < right_rows.len() {
+                    let right_record = &right_rows[self.right_index];
+                    self.right_index += 1;
+                    let merged = left.merge(right_record);
+                    return Ok(Some(merged));
+                }
             }
 
             // Get next left record and reset right index
@@ -918,17 +944,17 @@ impl LeftJoinStream {
     }
 
     fn materialize_right(&mut self) -> StreamResult<()> {
-        let mut right_stream = self.right_node.get(self.right_variables.clone(), self.registry.clone(), self.threads)
-            .map_err(|e| super::types::StreamError::Get(e))?;
+        let mut right_stream = self
+            .right_node
+            .get(self.right_variables.clone(), self.registry.clone(), self.threads)
+            .map_err(super::types::StreamError::Get)?;
         let mut rows = Vec::new();
         while let Some(record) = right_stream.next()? {
             rows.push(record);
         }
         // Populate right_field_names from first record if available
         if !rows.is_empty() {
-            self.right_field_names = Some(
-                rows[0].to_variables().keys().cloned().collect(),
-            );
+            self.right_field_names = Some(rows[0].to_variables().keys().cloned().collect());
         }
         self.right_rows = Some(rows);
         Ok(())
@@ -956,23 +982,23 @@ impl RecordStream for LeftJoinStream {
 
         loop {
             // If we have a current left record, try to get next right record by index
-            if self.current_left.is_some() && self.right_index < right_rows.len() {
-                let right_record = &right_rows[self.right_index];
-                self.right_index += 1;
+            if let Some(left) = self.current_left.as_ref() {
+                if self.right_index < right_rows.len() {
+                    let right_record = &right_rows[self.right_index];
+                    self.right_index += 1;
+                    let merged = left.merge(right_record);
 
-                let left = self.current_left.as_ref().unwrap();
-                let merged = left.merge(right_record);
+                    // Evaluate ON condition
+                    let merged_vars = common::types::merge(&self.right_variables, merged.to_variables());
+                    let predicate = self.condition.evaluate(&merged_vars, &self.registry)?;
 
-                // Evaluate ON condition
-                let merged_vars = common::types::merge(&self.right_variables, merged.to_variables());
-                let predicate = self.condition.evaluate(&merged_vars, &self.registry)?;
-
-                if predicate == Some(true) {
-                    self.matched = true;
-                    return Ok(Some(merged));
+                    if predicate == Some(true) {
+                        self.matched = true;
+                        return Ok(Some(merged));
+                    }
+                    // Condition didn't match; continue to next right row
+                    continue;
                 }
-                // Condition didn't match; continue to next right row
-                continue;
             }
 
             // If we just finished scanning right for a left row and found no match,
@@ -1027,6 +1053,8 @@ pub(crate) struct HashJoinStream {
 }
 
 impl HashJoinStream {
+    // Join construction keeps both streams, key sets, semantics, limits, and registry explicit.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         left: Box<dyn RecordStream>,
         right: Box<dyn RecordStream>,
@@ -1069,26 +1097,30 @@ impl HashJoinStream {
             }
 
             // Check for NULL/Missing keys — skip them (NULL != NULL in SQL)
-            let has_null_key = self.right_key_fields.iter().any(|f| {
-                match record.get(f) {
-                    Value::Null | Value::Missing => true,
-                    _ => false,
-                }
-            });
+            let has_null_key = self
+                .right_key_fields
+                .iter()
+                .any(|f| matches!(record.get(f), Value::Null | Value::Missing));
             if has_null_key {
                 continue;
             }
 
             // Approximate memory tracking: count field values
-            let record_size: usize = record.to_variables().iter().map(|(k, v)| {
-                k.len() + 24 + match v {
-                    Value::String(s) => s.len() + 24,
-                    Value::Int(_) => 4,
-                    Value::Float(_) => 4,
-                    Value::Boolean(_) => 1,
-                    _ => 24,
-                }
-            }).sum();
+            let record_size: usize = record
+                .to_variables()
+                .iter()
+                .map(|(k, v)| {
+                    k.len()
+                        + 24
+                        + match v {
+                            Value::String(s) => s.len() + 24,
+                            Value::Int(_) => 4,
+                            Value::Float(_) => 4,
+                            Value::Boolean(_) => 1,
+                            _ => 24,
+                        }
+                })
+                .sum();
             approx_bytes += record_size + 80; // 80 for LinkedHashMap per-entry overhead
 
             if approx_bytes > self.memory_limit {
@@ -1102,7 +1134,7 @@ impl HashJoinStream {
             let key = extract_key(&record, &self.right_key_fields);
             let idx = self.build_records.len() as u32;
             self.build_records.push(record);
-            self.hash_table.entry(key).or_insert_with(SmallVec::new).push(idx);
+            self.hash_table.entry(key).or_default().push(idx);
         }
 
         self.built = true;
@@ -1126,24 +1158,25 @@ impl RecordStream for HashJoinStream {
 
         loop {
             // If we have pending matches from a previous probe, yield them
-            if self.current_left.is_some() && self.match_index < self.current_match_indices.len() {
-                let left = self.current_left.as_ref().unwrap();
-                let right_idx = self.current_match_indices[self.match_index] as usize;
-                self.match_index += 1;
-                let right = &self.build_records[right_idx];
-                let merged = left.merge(right);
+            if let Some(left) = self.current_left.as_ref() {
+                if self.match_index < self.current_match_indices.len() {
+                    let right_idx = self.current_match_indices[self.match_index] as usize;
+                    self.match_index += 1;
+                    let right = &self.build_records[right_idx];
+                    let merged = left.merge(right);
 
-                // Apply residual filter if present
-                if let Some(ref residual) = self.residual {
-                    let vars = merged.to_variables().clone();
-                    let predicate = residual.evaluate(&vars, &self.registry)?;
-                    if predicate != Some(true) {
-                        continue;
+                    // Apply residual filter if present
+                    if let Some(ref residual) = self.residual {
+                        let vars = merged.to_variables().clone();
+                        let predicate = residual.evaluate(&vars, &self.registry)?;
+                        if predicate != Some(true) {
+                            continue;
+                        }
                     }
-                }
 
-                self.matched = true;
-                return Ok(Some(merged));
+                    self.matched = true;
+                    return Ok(Some(merged));
+                }
             }
 
             // Finished scanning matches for current left row
@@ -1161,12 +1194,10 @@ impl RecordStream for HashJoinStream {
             match self.left.next()? {
                 Some(left_record) => {
                     // Check for NULL/Missing keys on probe side
-                    let has_null_key = self.left_key_fields.iter().any(|f| {
-                        match left_record.get(f) {
-                            Value::Null | Value::Missing => true,
-                            _ => false,
-                        }
-                    });
+                    let has_null_key = self
+                        .left_key_fields
+                        .iter()
+                        .any(|f| matches!(left_record.get(f), Value::Null | Value::Missing));
 
                     if has_null_key {
                         // NULL keys never match
@@ -1180,10 +1211,7 @@ impl RecordStream for HashJoinStream {
 
                     let key = extract_key(&left_record, &self.left_key_fields);
                     // Copy only the small index vec, not the full Records
-                    self.current_match_indices = self.hash_table
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or_else(SmallVec::new);
+                    self.current_match_indices = self.hash_table.get(&key).cloned().unwrap_or_else(SmallVec::new);
                     self.current_left = Some(left_record);
                     self.match_index = 0;
                     self.matched = false;
@@ -1238,11 +1266,7 @@ pub(crate) struct IntersectStream {
 }
 
 impl IntersectStream {
-    pub(crate) fn new(
-        left: Box<dyn RecordStream>,
-        mut right: Box<dyn RecordStream>,
-        all: bool,
-    ) -> StreamResult<Self> {
+    pub(crate) fn new(left: Box<dyn RecordStream>, mut right: Box<dyn RecordStream>, all: bool) -> StreamResult<Self> {
         let mut right_set = std::collections::HashMap::new();
         while let Some(record) = right.next()? {
             let key = record.to_tuples();
@@ -1282,11 +1306,7 @@ pub(crate) struct ExceptStream {
 }
 
 impl ExceptStream {
-    pub(crate) fn new(
-        left: Box<dyn RecordStream>,
-        mut right: Box<dyn RecordStream>,
-        all: bool,
-    ) -> StreamResult<Self> {
+    pub(crate) fn new(left: Box<dyn RecordStream>, mut right: Box<dyn RecordStream>, all: bool) -> StreamResult<Self> {
         let mut right_set = std::collections::HashMap::new();
         while let Some(record) = right.next()? {
             let key = record.to_tuples();
@@ -1367,15 +1387,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -1388,7 +1408,7 @@ mod tests {
         }
 
         let expected = vec![Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         )];
 
@@ -1410,15 +1430,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -1432,7 +1452,7 @@ mod tests {
         }
 
         let expected = vec![Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         )];
 
@@ -1448,15 +1468,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -1471,15 +1491,15 @@ mod tests {
 
         let expected = vec![
             Record::new(
-                &vec!["host".to_string(), "port".to_string()],
+                &["host".to_string(), "port".to_string()],
                 vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
             ),
             Record::new(
-                &vec!["host".to_string(), "port".to_string()],
+                &["host".to_string(), "port".to_string()],
                 vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
             ),
             Record::new(
-                &vec!["host".to_string(), "port".to_string()],
+                &["host".to_string(), "port".to_string()],
                 vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
             ),
         ];
@@ -1500,15 +1520,15 @@ mod tests {
 
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example01.com".to_string().into()), Value::Int(8002)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -1522,9 +1542,9 @@ mod tests {
         }
 
         let expected = vec![
-            Record::new(&vec!["port".to_string()], vec![Value::Int(8000)]),
-            Record::new(&vec!["port".to_string()], vec![Value::Int(8001)]),
-            Record::new(&vec!["port".to_string()], vec![Value::Int(8002)]),
+            Record::new(&["port".to_string()], vec![Value::Int(8000)]),
+            Record::new(&["port".to_string()], vec![Value::Int(8001)]),
+            Record::new(&["port".to_string()], vec![Value::Int(8002)]),
         ];
 
         assert_eq!(expected, result);
@@ -1534,19 +1554,19 @@ mod tests {
     fn test_distinct_stream() {
         let mut records = VecDeque::new();
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("other.com".to_string().into()), Value::Int(8001)],
         ));
         records.push_back(Record::new(
-            &vec!["host".to_string(), "port".to_string()],
+            &["host".to_string(), "port".to_string()],
             vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
         ));
         let stream = Box::new(InMemoryStream::new(records));
@@ -1560,11 +1580,11 @@ mod tests {
 
         let expected = vec![
             Record::new(
-                &vec!["host".to_string(), "port".to_string()],
+                &["host".to_string(), "port".to_string()],
                 vec![Value::String("example.com".to_string().into()), Value::Int(8000)],
             ),
             Record::new(
-                &vec!["host".to_string(), "port".to_string()],
+                &["host".to_string(), "port".to_string()],
                 vec![Value::String("other.com".to_string().into()), Value::Int(8001)],
             ),
         ];
@@ -1575,18 +1595,9 @@ mod tests {
     #[test]
     fn test_distinct_stream_all_unique() {
         let mut records = VecDeque::new();
-        records.push_back(Record::new(
-            &vec!["a".to_string()],
-            vec![Value::Int(1)],
-        ));
-        records.push_back(Record::new(
-            &vec!["a".to_string()],
-            vec![Value::Int(2)],
-        ));
-        records.push_back(Record::new(
-            &vec!["a".to_string()],
-            vec![Value::Int(3)],
-        ));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(1)]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(2)]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(3)]));
         let stream = Box::new(InMemoryStream::new(records));
 
         let mut distinct_stream = DistinctStream::new(stream);
@@ -1612,18 +1623,12 @@ mod tests {
 
     #[test]
     fn test_record_merge() {
-        let left = Record::new(
-            &vec!["a".to_string(), "b".to_string()],
-            vec![Value::Int(1), Value::Int(2)],
-        );
-        let right = Record::new(
-            &vec!["c".to_string(), "d".to_string()],
-            vec![Value::Int(3), Value::Int(4)],
-        );
+        let left = Record::new(&["a".to_string(), "b".to_string()], vec![Value::Int(1), Value::Int(2)]);
+        let right = Record::new(&["c".to_string(), "d".to_string()], vec![Value::Int(3), Value::Int(4)]);
 
         let merged = left.merge(&right);
         let expected = Record::new(
-            &vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()],
+            &["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()],
             vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
         );
 
@@ -1633,14 +1638,8 @@ mod tests {
     #[test]
     fn test_record_merge_overlapping_keys() {
         // When keys overlap, the right record's values should take precedence
-        let left = Record::new(
-            &vec!["a".to_string(), "b".to_string()],
-            vec![Value::Int(1), Value::Int(2)],
-        );
-        let right = Record::new(
-            &vec!["b".to_string(), "c".to_string()],
-            vec![Value::Int(99), Value::Int(3)],
-        );
+        let left = Record::new(&["a".to_string(), "b".to_string()], vec![Value::Int(1), Value::Int(2)]);
+        let right = Record::new(&["b".to_string(), "c".to_string()], vec![Value::Int(99), Value::Int(3)]);
 
         let merged = left.merge(&right);
         // b should be overwritten with 99
@@ -1653,24 +1652,19 @@ mod tests {
         // count(a) should not count null values
         let path_expr_a = ast::PathExpr::new(vec![ast::PathSegment::AttrName("a".to_string())]);
         let mut records = VecDeque::new();
-        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(1)]));
-        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Null]));
-        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(3)]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(1)]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Null]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(3)]));
         let stream = Box::new(InMemoryStream::new(records));
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
-        let aggregates = vec![
-            types::NamedAggregate::new(
-                types::Aggregate::Count(
-                    types::CountAggregate::new(),
-                    types::Named::Expression(
-                        types::Expression::Variable(path_expr_a),
-                        Some("a".to_string()),
-                    ),
-                ),
-                Some("cnt".to_string()),
+        let aggregates = vec![types::NamedAggregate::new(
+            types::Aggregate::Count(
+                types::CountAggregate::new(),
+                types::Named::Expression(types::Expression::Variable(path_expr_a), Some("a".to_string())),
             ),
-        ];
+            Some("cnt".to_string()),
+        )];
 
         let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
 
@@ -1682,18 +1676,16 @@ mod tests {
     #[test]
     fn test_groupby_count_star_counts_all() {
         let mut records = VecDeque::new();
-        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(1)]));
-        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Null]));
-        records.push_back(Record::new(&vec!["a".to_string()], vec![Value::Int(3)]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(1)]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Null]));
+        records.push_back(Record::new(&["a".to_string()], vec![Value::Int(3)]));
         let stream = Box::new(InMemoryStream::new(records));
         let registry = Arc::new(crate::functions::register_all().unwrap());
 
-        let aggregates = vec![
-            types::NamedAggregate::new(
-                types::Aggregate::Count(types::CountAggregate::new(), types::Named::Star),
-                Some("cnt".to_string()),
-            ),
-        ];
+        let aggregates = vec![types::NamedAggregate::new(
+            types::Aggregate::Count(types::CountAggregate::new(), types::Named::Star),
+            Some("cnt".to_string()),
+        )];
 
         let mut stream = GroupByStream::new(vec![], Variables::default(), aggregates, stream, registry);
 
@@ -1710,7 +1702,10 @@ mod tests {
         let record = Record::new_with_variables(vars);
 
         assert_eq!(record.get_field_value("status"), Some(&Value::Int(200)));
-        assert_eq!(record.get_field_value("host"), Some(&Value::String("example.com".to_string().into())));
+        assert_eq!(
+            record.get_field_value("host"),
+            Some(&Value::String("example.com".to_string().into()))
+        );
         assert_eq!(record.get_field_value("missing"), None);
     }
 
@@ -1730,10 +1725,7 @@ mod tests {
             types::NamedAggregate::new(
                 types::Aggregate::Sum(
                     types::SumAggregate::new(),
-                    types::Named::Expression(
-                        types::Expression::Variable(path_expr_a),
-                        Some("a".to_string()),
-                    ),
+                    types::Named::Expression(types::Expression::Variable(path_expr_a), Some("a".to_string())),
                 ),
                 Some("total".to_string()),
             ),
@@ -1756,8 +1748,8 @@ mod tests {
         assert_ne!(k1, k3);
 
         // Verify equal keys produce equal hashes
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut h1 = DefaultHasher::new();
         let mut h2 = DefaultHasher::new();
         k1.hash(&mut h1);
@@ -1881,15 +1873,19 @@ mod tests {
             record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("a".into()))]),
             record_from_pairs(vec![("id", Value::Int(2)), ("x", Value::String("b".into()))]),
         ];
-        let right_records = vec![
-            record_from_pairs(vec![("id", Value::Int(1)), ("y", Value::String("c".into()))]),
-        ];
+        let right_records = vec![record_from_pairs(vec![
+            ("id", Value::Int(1)),
+            ("y", Value::String("c".into())),
+        ])];
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
             in_memory_stream(left_records),
             in_memory_stream(right_records),
-            vec![path("id")], vec![path("id")],
-            None, types::LogicalJoinType::Left, 512 * 1024 * 1024,
+            vec![path("id")],
+            vec![path("id")],
+            None,
+            types::LogicalJoinType::Left,
+            512 * 1024 * 1024,
             registry,
         );
         let mut results = Vec::new();
@@ -1909,9 +1905,13 @@ mod tests {
         let right = vec![record_from_pairs(vec![("id", Value::Null), ("y", Value::Int(1))])];
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
-            in_memory_stream(left), in_memory_stream(right),
-            vec![path("id")], vec![path("id")],
-            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            in_memory_stream(left),
+            in_memory_stream(right),
+            vec![path("id")],
+            vec![path("id")],
+            None,
+            types::LogicalJoinType::Inner,
+            512 * 1024 * 1024,
             registry,
         );
         let result = join.next().unwrap();
@@ -1930,9 +1930,13 @@ mod tests {
         ];
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
-            in_memory_stream(left), in_memory_stream(right),
-            vec![path("id")], vec![path("id")],
-            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            in_memory_stream(left),
+            in_memory_stream(right),
+            vec![path("id")],
+            vec![path("id")],
+            None,
+            types::LogicalJoinType::Inner,
+            512 * 1024 * 1024,
             registry,
         );
         let mut results = Vec::new();
@@ -1945,25 +1949,34 @@ mod tests {
 
     #[test]
     fn test_hash_join_empty_right() {
-        let left = vec![
-            record_from_pairs(vec![("id", Value::Int(1)), ("x", Value::String("a".into()))]),
-        ];
+        let left = vec![record_from_pairs(vec![
+            ("id", Value::Int(1)),
+            ("x", Value::String("a".into())),
+        ])];
         let right: Vec<Record> = vec![];
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         // INNER JOIN with empty right → 0 results
         let mut join = HashJoinStream::new(
-            in_memory_stream(left.clone()), in_memory_stream(right.clone()),
-            vec![path("id")], vec![path("id")],
-            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            in_memory_stream(left.clone()),
+            in_memory_stream(right.clone()),
+            vec![path("id")],
+            vec![path("id")],
+            None,
+            types::LogicalJoinType::Inner,
+            512 * 1024 * 1024,
             registry.clone(),
         );
         assert!(join.next().unwrap().is_none());
 
         // LEFT JOIN with empty right → left row with no right field names (no padding possible)
         let mut join = HashJoinStream::new(
-            in_memory_stream(left), in_memory_stream(right),
-            vec![path("id")], vec![path("id")],
-            None, types::LogicalJoinType::Left, 512 * 1024 * 1024,
+            in_memory_stream(left),
+            in_memory_stream(right),
+            vec![path("id")],
+            vec![path("id")],
+            None,
+            types::LogicalJoinType::Left,
+            512 * 1024 * 1024,
             registry,
         );
         let result = join.next().unwrap();
@@ -1978,14 +1991,19 @@ mod tests {
             record_from_pairs(vec![("name", Value::String("alice".into())), ("v", Value::Int(1))]),
             record_from_pairs(vec![("name", Value::String("bob".into())), ("v", Value::Int(2))]),
         ];
-        let right = vec![
-            record_from_pairs(vec![("name", Value::String("alice".into())), ("w", Value::Int(10))]),
-        ];
+        let right = vec![record_from_pairs(vec![
+            ("name", Value::String("alice".into())),
+            ("w", Value::Int(10)),
+        ])];
         let registry = Arc::new(crate::functions::registry::FunctionRegistry::new());
         let mut join = HashJoinStream::new(
-            in_memory_stream(left), in_memory_stream(right),
-            vec![path("name")], vec![path("name")],
-            None, types::LogicalJoinType::Inner, 512 * 1024 * 1024,
+            in_memory_stream(left),
+            in_memory_stream(right),
+            vec![path("name")],
+            vec![path("name")],
+            None,
+            types::LogicalJoinType::Inner,
+            512 * 1024 * 1024,
             registry,
         );
         let mut results = Vec::new();

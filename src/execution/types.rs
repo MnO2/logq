@@ -1,15 +1,18 @@
 use super::datasource::{ReaderBuilder, ReaderError};
-use super::stream::{CrossJoinStream, DistinctStream, ExceptStream, FilterStream, GroupByStream, HashJoinStream, InMemoryStream, IntersectStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream, UnionStream};
+use super::stream::{
+    CrossJoinStream, DistinctStream, ExceptStream, FilterStream, GroupByStream, HashJoinStream, InMemoryStream,
+    IntersectStream, LeftJoinStream, LimitStream, LogFileStream, MapStream, RecordStream, UnionStream,
+};
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
-use crate::execution::batch::{BatchSchema, BatchToRowAdapter, BatchStream, ColumnType, PrecomputedBatchStream};
-use crate::execution::batch_scan::datatype_to_column_type;
-use crate::execution::parallel;
+use crate::execution::batch::{BatchSchema, BatchStream, BatchToRowAdapter, ColumnType, PrecomputedBatchStream};
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
 use crate::execution::batch_project::BatchProjectOperator;
+use crate::execution::batch_scan::datatype_to_column_type;
 use crate::execution::batch_scan::BatchScanOperator;
 use crate::execution::log_schema::LogSchema;
+use crate::execution::parallel;
 use crate::execution::stream::ProjectionStream;
 use crate::functions::FunctionRegistry;
 use crate::syntax::ast::{CastType, PathExpr, PathSegment};
@@ -19,6 +22,8 @@ use pdatastructs::hyperloglog::HyperLogLog;
 use std::io;
 use std::result;
 use std::sync::Arc;
+
+type PushedPredicate = Option<(Formula, Variables, Arc<FunctionRegistry>)>;
 use tdigest::TDigest;
 
 pub type EvaluateResult<T> = result::Result<T, EvaluateError>;
@@ -130,6 +135,8 @@ pub enum Ordering {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Public only so feature-gated external benchmarks can construct plans.
+#[allow(private_interfaces)]
 pub enum Expression {
     Constant(Value),
     Logic(Box<Formula>),
@@ -141,16 +148,21 @@ pub enum Expression {
 }
 
 impl Expression {
-    pub(crate) fn expression_value(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
+    #[cfg(test)]
+    pub(crate) fn expression_value(
+        &self,
+        variables: &Variables,
+        registry: &Arc<FunctionRegistry>,
+    ) -> ExpressionResult<Value> {
         self.expression_value_impl(variables, None, registry)
     }
 
-    /// Evaluate expression with a fallback scope, avoiding merge() allocations.
-    pub(crate) fn expression_value_in_scope(&self, variables: &Variables, scope: &Variables, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
-        self.expression_value_impl(variables, Some(scope), registry)
-    }
-
-    pub(crate) fn expression_value_impl(&self, variables: &Variables, scope: Option<&Variables>, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Value> {
+    pub(crate) fn expression_value_impl(
+        &self,
+        variables: &Variables,
+        scope: Option<&Variables>,
+        registry: &Arc<FunctionRegistry>,
+    ) -> ExpressionResult<Value> {
         match self {
             Expression::Constant(value) => Ok(value.clone()),
             Expression::Logic(formula) => {
@@ -164,10 +176,14 @@ impl Expression {
                 // Fast path: single-segment AttrName is the overwhelmingly common case
                 if path_expr.path_segments.len() == 1 {
                     if let PathSegment::AttrName(ref name) = path_expr.path_segments[0] {
-                        return Ok(common::types::scoped_get(variables, scope, name).cloned().unwrap_or(Value::Missing));
+                        return Ok(common::types::scoped_get(variables, scope, name)
+                            .cloned()
+                            .unwrap_or(Value::Missing));
                     }
                 }
-                Ok(common::types::get_value_by_path_expr_scoped(path_expr, 0, variables, scope))
+                Ok(common::types::get_value_by_path_expr_scoped(
+                    path_expr, 0, variables, scope,
+                ))
             }
             Expression::Function(name, arguments) => {
                 let mut values: Vec<Value> = Vec::with_capacity(arguments.len());
@@ -206,16 +222,18 @@ impl Expression {
                     // To Int
                     (Value::Int(_), CastType::Int) => Ok(val),
                     (Value::Float(f), CastType::Int) => Ok(Value::Int(f.into_inner() as i32)),
-                    (Value::String(s), CastType::Int) => {
-                        s.parse::<i32>().map(Value::Int).map_err(|_| ExpressionError::TypeMismatch)
-                    }
+                    (Value::String(s), CastType::Int) => s
+                        .parse::<i32>()
+                        .map(Value::Int)
+                        .map_err(|_| ExpressionError::TypeMismatch),
                     (Value::Boolean(b), CastType::Int) => Ok(Value::Int(if *b { 1 } else { 0 })),
                     // To Float
                     (Value::Float(_), CastType::Float) => Ok(val),
                     (Value::Int(i), CastType::Float) => Ok(Value::Float(OrderedFloat::from(*i as f32))),
-                    (Value::String(s), CastType::Float) => {
-                        s.parse::<f32>().map(|f| Value::Float(OrderedFloat::from(f))).map_err(|_| ExpressionError::TypeMismatch)
-                    }
+                    (Value::String(s), CastType::Float) => s
+                        .parse::<f32>()
+                        .map(|f| Value::Float(OrderedFloat::from(f)))
+                        .map_err(|_| ExpressionError::TypeMismatch),
                     // To String (Varchar)
                     (Value::String(_), CastType::Varchar) => Ok(val),
                     (Value::Int(i), CastType::Varchar) => Ok(Value::String(i.to_string().into())),
@@ -223,21 +241,19 @@ impl Expression {
                     (Value::Boolean(b), CastType::Varchar) => Ok(Value::String(b.to_string().into())),
                     // To Boolean
                     (Value::Boolean(_), CastType::Boolean) => Ok(val),
-                    (Value::String(s), CastType::Boolean) => {
-                        match s.to_lowercase().as_str() {
-                            "true" => Ok(Value::Boolean(true)),
-                            "false" => Ok(Value::Boolean(false)),
-                            _ => Err(ExpressionError::TypeMismatch),
-                        }
-                    }
+                    (Value::String(s), CastType::Boolean) => match s.to_lowercase().as_str() {
+                        "true" => Ok(Value::Boolean(true)),
+                        "false" => Ok(Value::Boolean(false)),
+                        _ => Err(ExpressionError::TypeMismatch),
+                    },
                     _ => Err(ExpressionError::TypeMismatch),
                 }
             }
             Expression::Subquery(node) => {
-                let mut stream = node.get(variables.clone(), registry.clone(), 0)
+                let mut stream = node
+                    .get(variables.clone(), registry.clone(), 0)
                     .map_err(|_| ExpressionError::InvalidArguments)?;
-                if let Some(record) = stream.next()
-                    .map_err(|_| ExpressionError::InvalidArguments)? {
+                if let Some(record) = stream.next().map_err(|_| ExpressionError::InvalidArguments)? {
                     let tuples = record.to_tuples();
                     if let Some((_, val)) = tuples.into_iter().next() {
                         Ok(val)
@@ -311,13 +327,27 @@ impl Relation {
         }
     }
 
-    pub(crate) fn apply(&self, variables: &Variables, left: &Expression, right: &Expression, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Option<bool>> {
+    #[cfg(test)]
+    pub(crate) fn apply(
+        &self,
+        variables: &Variables,
+        left: &Expression,
+        right: &Expression,
+        registry: &Arc<FunctionRegistry>,
+    ) -> ExpressionResult<Option<bool>> {
         let left_result = left.expression_value(variables, registry)?;
         let right_result = right.expression_value(variables, registry)?;
         self.compare_ref(&left_result, &right_result)
     }
 
-    fn apply_in_scope(&self, variables: &Variables, scope: Option<&Variables>, left: &Expression, right: &Expression, registry: &Arc<FunctionRegistry>) -> ExpressionResult<Option<bool>> {
+    fn apply_in_scope(
+        &self,
+        variables: &Variables,
+        scope: Option<&Variables>,
+        left: &Expression,
+        right: &Expression,
+        registry: &Arc<FunctionRegistry>,
+    ) -> ExpressionResult<Option<bool>> {
         let left_result = left.expression_value_impl(variables, scope, registry)?;
         let right_result = right.expression_value_impl(variables, scope, registry)?;
         self.compare_ref(&left_result, &right_result)
@@ -382,24 +412,38 @@ fn get_or_compile_like_regex(pattern: &str) -> Result<regex::Regex, EvaluateErro
             return Ok(re.clone());
         }
         let regex_pattern = like_pattern_to_regex(pattern);
-        let re = regex::Regex::new(&regex_pattern)
-            .map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+        let re =
+            regex::Regex::new(&regex_pattern).map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
         cache.put(pattern.to_string(), re.clone());
         Ok(re)
     })
 }
 
 impl Formula {
-    pub(crate) fn evaluate(&self, variables: &Variables, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
+    pub(crate) fn evaluate(
+        &self,
+        variables: &Variables,
+        registry: &Arc<FunctionRegistry>,
+    ) -> EvaluateResult<Option<bool>> {
         self.evaluate_impl(variables, None, registry)
     }
 
     /// Evaluate formula with a fallback scope, avoiding merge() allocations.
-    pub(crate) fn evaluate_in_scope(&self, variables: &Variables, scope: &Variables, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
+    pub(crate) fn evaluate_in_scope(
+        &self,
+        variables: &Variables,
+        scope: &Variables,
+        registry: &Arc<FunctionRegistry>,
+    ) -> EvaluateResult<Option<bool>> {
         self.evaluate_impl(variables, Some(scope), registry)
     }
 
-    pub(crate) fn evaluate_impl(&self, variables: &Variables, scope: Option<&Variables>, registry: &Arc<FunctionRegistry>) -> EvaluateResult<Option<bool>> {
+    pub(crate) fn evaluate_impl(
+        &self,
+        variables: &Variables,
+        scope: Option<&Variables>,
+        registry: &Arc<FunctionRegistry>,
+    ) -> EvaluateResult<Option<bool>> {
         match self {
             Formula::And(left_formula, right_formula) => {
                 let left = left_formula.evaluate_impl(variables, scope, registry)?;
@@ -435,9 +479,7 @@ impl Formula {
                 // Fast path: Variable op Constant — avoid expression_value overhead
                 // by looking up the variable directly and comparing by reference.
                 match (left_formula.as_ref(), right_formula.as_ref()) {
-                    (Expression::Variable(pe), Expression::Constant(constant))
-                        if pe.path_segments.len() == 1 =>
-                    {
+                    (Expression::Variable(pe), Expression::Constant(constant)) if pe.path_segments.len() == 1 => {
                         if let PathSegment::AttrName(ref name) = pe.path_segments[0] {
                             match common::types::scoped_get(variables, scope, name) {
                                 Some(val) => return Ok(relation.compare_ref(val, constant)?),
@@ -445,9 +487,7 @@ impl Formula {
                             }
                         }
                     }
-                    (Expression::Constant(constant), Expression::Variable(pe))
-                        if pe.path_segments.len() == 1 =>
-                    {
+                    (Expression::Constant(constant), Expression::Variable(pe)) if pe.path_segments.len() == 1 => {
                         if let PathSegment::AttrName(ref name) = pe.path_segments[0] {
                             match common::types::scoped_get(variables, scope, name) {
                                 Some(val) => return Ok(relation.compare_ref(constant, val)?),
@@ -626,48 +666,39 @@ impl Formula {
     /// Evaluate a comparison of two constant values at compile time.
     fn evaluate_constant_comparison(rel: &Relation, left: &Value, right: &Value) -> Option<bool> {
         match (left, right) {
-            (Value::Int(a), Value::Int(b)) => {
-                Some(match rel {
-                    Relation::Equal => a == b,
-                    Relation::NotEqual => a != b,
-                    Relation::MoreThan => a > b,
-                    Relation::LessThan => a < b,
-                    Relation::GreaterEqual => a >= b,
-                    Relation::LessEqual => a <= b,
-                })
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                Some(match rel {
-                    Relation::Equal => a == b,
-                    Relation::NotEqual => a != b,
-                    Relation::MoreThan => a > b,
-                    Relation::LessThan => a < b,
-                    Relation::GreaterEqual => a >= b,
-                    Relation::LessEqual => a <= b,
-                })
-            }
-            (Value::String(a), Value::String(b)) => {
-                Some(match rel {
-                    Relation::Equal => a == b,
-                    Relation::NotEqual => a != b,
-                    Relation::MoreThan => a > b,
-                    Relation::LessThan => a < b,
-                    Relation::GreaterEqual => a >= b,
-                    Relation::LessEqual => a <= b,
-                })
-            }
-            (Value::Boolean(a), Value::Boolean(b)) => {
-                match rel {
-                    Relation::Equal => Some(a == b),
-                    Relation::NotEqual => Some(a != b),
-                    _ => None,
-                }
-            }
+            (Value::Int(a), Value::Int(b)) => Some(match rel {
+                Relation::Equal => a == b,
+                Relation::NotEqual => a != b,
+                Relation::MoreThan => a > b,
+                Relation::LessThan => a < b,
+                Relation::GreaterEqual => a >= b,
+                Relation::LessEqual => a <= b,
+            }),
+            (Value::Float(a), Value::Float(b)) => Some(match rel {
+                Relation::Equal => a == b,
+                Relation::NotEqual => a != b,
+                Relation::MoreThan => a > b,
+                Relation::LessThan => a < b,
+                Relation::GreaterEqual => a >= b,
+                Relation::LessEqual => a <= b,
+            }),
+            (Value::String(a), Value::String(b)) => Some(match rel {
+                Relation::Equal => a == b,
+                Relation::NotEqual => a != b,
+                Relation::MoreThan => a > b,
+                Relation::LessThan => a < b,
+                Relation::GreaterEqual => a >= b,
+                Relation::LessEqual => a <= b,
+            }),
+            (Value::Boolean(a), Value::Boolean(b)) => match rel {
+                Relation::Equal => Some(a == b),
+                Relation::NotEqual => Some(a != b),
+                _ => None,
+            },
             _ => None,
         }
     }
 }
-
 
 /// Parameters extracted when a streaming GroupBy pattern is detected.
 struct StreamingGroupByParams<'a> {
@@ -685,6 +716,8 @@ pub enum LogicalJoinType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Public only so feature-gated external benchmarks can construct plans.
+#[allow(private_interfaces)]
 pub enum Node {
     DataSource(DataSource, Vec<common::types::Binding>),
     Filter(Box<Node>, Box<Formula>),
@@ -711,9 +744,7 @@ impl Node {
     /// Walk down the plan tree to find the datasource format and path.
     fn find_datasource_format(&self) -> Option<(String, std::path::PathBuf)> {
         match self {
-            Node::DataSource(DataSource::File(path, format, _), _) => {
-                Some((format.clone(), path.clone()))
-            }
+            Node::DataSource(DataSource::File(path, format, _), _) => Some((format.clone(), path.clone())),
             Node::Filter(source, _)
             | Node::Map(_, source)
             | Node::Limit(_, source)
@@ -770,25 +801,23 @@ impl Node {
         _scan_agg_hint: &crate::execution::batch_scan::ScanAggregation,
         variables: &Variables,
         registry: &Arc<FunctionRegistry>,
-        threads: usize,
+        _threads: usize,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
         use crate::execution::batch_scan::ScanAggregation;
 
         // Walk through Map nodes to get to the actual data source
         let (inner_source, formula_opt) = match source {
-            Node::Map(_, child) => {
-                match child.as_ref() {
-                    Node::Filter(ds, formula) => (ds.as_ref(), Some(formula.as_ref())),
-                    Node::DataSource(..) => (child.as_ref(), None),
-                    _ => return None,
-                }
-            }
+            Node::Map(_, child) => match child.as_ref() {
+                Node::Filter(ds, formula) => (ds.as_ref(), Some(formula.as_ref())),
+                Node::DataSource(..) => (child.as_ref(), None),
+                _ => return None,
+            },
             Node::Filter(ds, formula) => (ds.as_ref(), Some(formula.as_ref())),
             Node::DataSource(..) => (source, None),
             _ => return None,
         };
 
-        let (path, file_format, schema) = match inner_source {
+        let (path, _file_format, schema) = match inner_source {
             Node::DataSource(DataSource::File(path, file_format, _), bindings) => {
                 if !bindings.is_empty() || file_format == "jsonl" {
                     return None;
@@ -807,13 +836,12 @@ impl Node {
         };
 
         // Determine filter fields if there's a predicate
-        let (filter_fields, pushed_pred): (Vec<usize>, Option<(Formula, Variables, Arc<FunctionRegistry>)>) =
-            if let Some(formula) = formula_opt {
-                let ff = crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
-                (ff, Some((formula.clone(), variables.clone(), registry.clone())))
-            } else {
-                (vec![], None)
-            };
+        let (filter_fields, pushed_pred): (Vec<usize>, PushedPredicate) = if let Some(formula) = formula_opt {
+            let ff = crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
+            (ff, Some((formula.clone(), variables.clone(), registry.clone())))
+        } else {
+            (vec![], None)
+        };
 
         // For COUNT(*), we don't need any projected fields — use a minimal schema
         let agg_name = "_count".to_string();
@@ -826,8 +854,7 @@ impl Node {
         // since we're not constructing full column batches
         match std::fs::File::open(path) {
             Ok(file) => {
-                let reader: Box<dyn std::io::BufRead> =
-                    Box::new(std::io::BufReader::new(file));
+                let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
                 // Use filter_fields as both projected and filter fields
                 // (we only need them for predicate evaluation)
                 let projected = if filter_fields.is_empty() {
@@ -835,11 +862,8 @@ impl Node {
                 } else {
                     filter_fields.clone()
                 };
-                let scan = BatchScanOperator::new(
-                    reader, schema, projected,
-                    filter_fields,
-                    pushed_pred,
-                ).with_scan_aggregation(scan_agg, batch_schema);
+                let scan = BatchScanOperator::new(reader, schema, projected, filter_fields, pushed_pred)
+                    .with_scan_aggregation(scan_agg, batch_schema);
                 Some(Ok(Box::new(scan) as Box<dyn BatchStream>))
             }
             Err(_) => Some(Err(CreateStreamError::Io)),
@@ -853,10 +877,7 @@ impl Node {
     /// 2. Child is a Map node containing a time_bucket() function call
     ///    that aliases to the group key name
     /// 3. Underlying data source is time-ordered (ELB or ALB)
-    fn detect_streaming_groupby<'a>(
-        keys: &[PathExpr],
-        source: &'a Node,
-    ) -> Option<StreamingGroupByParams<'a>> {
+    fn detect_streaming_groupby<'a>(keys: &[PathExpr], source: &'a Node) -> Option<StreamingGroupByParams<'a>> {
         // Must have exactly one GROUP BY key
         if keys.len() != 1 {
             return None;
@@ -874,11 +895,7 @@ impl Node {
 
         // Find the time_bucket() call in the Map's named list that aliases to key_name
         for named in named_list {
-            if let Named::Expression(
-                Expression::Function(func_name, args),
-                Some(alias),
-            ) = named
-            {
+            if let Named::Expression(Expression::Function(func_name, args), Some(alias)) = named {
                 if func_name == "time_bucket" && alias == &key_name && args.len() == 2 {
                     // Extract interval string from first argument
                     let interval = match &args[0] {
@@ -887,12 +904,10 @@ impl Node {
                     };
                     // Extract timestamp column name from second argument
                     let ts_col = match &args[1] {
-                        Named::Expression(Expression::Variable(path), _) => {
-                            match path.path_segments.last()? {
-                                PathSegment::AttrName(name) => name.clone(),
-                                _ => return None,
-                            }
-                        }
+                        Named::Expression(Expression::Variable(path), _) => match path.path_segments.last()? {
+                            PathSegment::AttrName(name) => name.clone(),
+                            _ => return None,
+                        },
                         _ => return None,
                     };
                     // Verify the underlying source is time-ordered
@@ -964,26 +979,31 @@ impl Node {
                         // Try parallel mmap path
                         if threads > 1 {
                             if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
-                                match parallel::parallel_scan_chunks_limited(
-                                    &mmap, threads, &schema, &fields, &[], &None, row_limit,
+                                if let Ok(chunk_batches) = parallel::parallel_scan_chunks_limited(
+                                    &mmap,
+                                    threads,
+                                    &schema,
+                                    &fields,
+                                    &[],
+                                    &None,
+                                    row_limit,
                                 ) {
-                                    Ok(chunk_batches) => {
-                                        let batch_schema = BatchSchema {
-                                            names: fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
-                                            types: fields.iter().map(|&i| datatype_to_column_type(&schema.field_type(i))).collect(),
-                                        };
-                                        let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
-                                        return Some(Ok(Box::new(PrecomputedBatchStream::new(all_batches, batch_schema))));
-                                    }
-                                    Err(_) => {} // fall through to sequential
+                                    let batch_schema = BatchSchema {
+                                        names: fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
+                                        types: fields
+                                            .iter()
+                                            .map(|&i| datatype_to_column_type(&schema.field_type(i)))
+                                            .collect(),
+                                    };
+                                    let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
+                                    return Some(Ok(Box::new(PrecomputedBatchStream::new(all_batches, batch_schema))));
                                 }
                             }
                         }
                         // Sequential fallback
                         match std::fs::File::open(path) {
                             Ok(file) => {
-                                let reader: Box<dyn std::io::BufRead> =
-                                    Box::new(std::io::BufReader::new(file));
+                                let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
                                 let scan = BatchScanOperator::new(reader, schema, fields, vec![], None);
                                 Some(Ok(Box::new(scan) as Box<dyn BatchStream>))
                             }
@@ -1000,7 +1020,8 @@ impl Node {
                         if let DataSource::File(path, file_format, _) = ds {
                             if file_format != "jsonl" {
                                 let schema = LogSchema::from_format(file_format);
-                                let filter_fields = crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
+                                let filter_fields =
+                                    crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
                                 // Union filter fields with required_fields from parent
                                 let mut all_fields = required_fields.to_vec();
                                 for &fi in &filter_fields {
@@ -1018,18 +1039,30 @@ impl Node {
                                 if threads > 1 {
                                     if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
                                         let pushed = Some((*formula.clone(), variables.clone(), registry.clone()));
-                                        match parallel::parallel_scan_chunks_limited(
-                                            &mmap, threads, &schema, &all_fields, &filter_fields, &pushed, row_limit,
+                                        if let Ok(chunk_batches) = parallel::parallel_scan_chunks_limited(
+                                            &mmap,
+                                            threads,
+                                            &schema,
+                                            &all_fields,
+                                            &filter_fields,
+                                            &pushed,
+                                            row_limit,
                                         ) {
-                                            Ok(chunk_batches) => {
-                                                let batch_schema = BatchSchema {
-                                                    names: all_fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
-                                                    types: all_fields.iter().map(|&i| datatype_to_column_type(&schema.field_type(i))).collect(),
-                                                };
-                                                let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
-                                                return Some(Ok(Box::new(PrecomputedBatchStream::new(all_batches, batch_schema))));
-                                            }
-                                            Err(_) => {} // fall through to sequential
+                                            let batch_schema = BatchSchema {
+                                                names: all_fields
+                                                    .iter()
+                                                    .map(|&i| schema.field_name(i).to_string())
+                                                    .collect(),
+                                                types: all_fields
+                                                    .iter()
+                                                    .map(|&i| datatype_to_column_type(&schema.field_type(i)))
+                                                    .collect(),
+                                            };
+                                            let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
+                                            return Some(Ok(Box::new(PrecomputedBatchStream::new(
+                                                all_batches,
+                                                batch_schema,
+                                            ))));
                                         }
                                     }
                                 }
@@ -1037,10 +1070,11 @@ impl Node {
                                 // Sequential fallback
                                 match std::fs::File::open(path) {
                                     Ok(file) => {
-                                        let reader: Box<dyn std::io::BufRead> =
-                                            Box::new(std::io::BufReader::new(file));
+                                        let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
                                         let scan = BatchScanOperator::new(
-                                            reader, schema, all_fields,
+                                            reader,
+                                            schema,
+                                            all_fields,
                                             filter_fields,
                                             Some((*formula.clone(), variables.clone(), registry.clone())),
                                         );
@@ -1056,7 +1090,10 @@ impl Node {
                 match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
-                            batch_stream, *formula.clone(), variables.clone(), registry.clone(),
+                            batch_stream,
+                            *formula.clone(),
+                            variables.clone(),
+                            registry.clone(),
                         );
                         Some(Ok(Box::new(filter) as Box<dyn BatchStream>))
                     }
@@ -1082,26 +1119,23 @@ impl Node {
             }
             Node::Map(named_list, source) => {
                 // Only handle simple variable projections in batch path
-                let is_simple = named_list.iter().all(|named| match named {
-                    Named::Expression(Expression::Variable(_), _) => true,
-                    Named::Star => true,
-                    _ => false,
-                });
+                let is_simple = named_list
+                    .iter()
+                    .all(|named| matches!(named, Named::Expression(Expression::Variable(_), _) | Named::Star));
                 if !is_simple {
                     return None; // Complex expressions need row-based MapStream
                 }
                 // SELECT * over a bare DataSource gains nothing from batch —
                 // columnar parse + BatchToRowAdapter is pure overhead.
-                if named_list.iter().any(|n| matches!(n, Named::Star))
-                    && matches!(**source, Node::DataSource(..))
-                {
+                if named_list.iter().any(|n| matches!(n, Named::Star)) && matches!(**source, Node::DataSource(..)) {
                     return None;
                 }
                 match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
                     Some(Ok(batch_stream)) => {
                         // Extract output column names from named_list
-                        let output_names: Vec<String> = named_list.iter().filter_map(|named| {
-                            match named {
+                        let output_names: Vec<String> = named_list
+                            .iter()
+                            .filter_map(|named| match named {
                                 Named::Expression(Expression::Variable(path), _) => {
                                     path.path_segments.last().and_then(|seg| {
                                         if let PathSegment::AttrName(name) = seg {
@@ -1112,8 +1146,8 @@ impl Node {
                                     })
                                 }
                                 _ => None,
-                            }
-                        }).collect();
+                            })
+                            .collect();
                         if output_names.is_empty() && named_list.iter().any(|n| matches!(n, Named::Star)) {
                             // SELECT * — pass through without projection
                             return Some(Ok(batch_stream));
@@ -1131,9 +1165,9 @@ impl Node {
                 // aggregation into the scan operator to avoid constructing columns.
                 if keys.is_empty() && aggregates.len() == 1 {
                     if let Some(scan_agg) = Self::detect_scan_aggregation(&aggregates[0]) {
-                        if let Some(scan_result) = Self::try_build_scan_with_aggregation(
-                            source, &scan_agg, variables, registry, threads,
-                        ) {
+                        if let Some(scan_result) =
+                            Self::try_build_scan_with_aggregation(source, &scan_agg, variables, registry, threads)
+                        {
                             return Some(scan_result);
                         }
                     }
@@ -1143,7 +1177,10 @@ impl Node {
                 if let Some(params) = Self::detect_streaming_groupby(keys, source) {
                     // Bypass the Map node: get batch stream from the Map's child
                     let required = params.map_source.compute_required_fields_for_batch();
-                    match params.map_source.try_get_batch_limited(variables, registry, &required, threads, row_limit) {
+                    match params
+                        .map_source
+                        .try_get_batch_limited(variables, registry, &required, threads, row_limit)
+                    {
                         Some(Ok(batch_stream)) => {
                             let op = crate::execution::batch_streaming_groupby::BatchStreamingGroupByOperator::new(
                                 batch_stream,
@@ -1193,9 +1230,7 @@ impl Node {
             Node::Distinct(source) => {
                 match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
                     Some(Ok(batch_stream)) => {
-                        let op = crate::execution::batch_distinct::BatchDistinctOperator::new(
-                            batch_stream,
-                        );
+                        let op = crate::execution::batch_distinct::BatchDistinctOperator::new(batch_stream);
                         Some(Ok(Box::new(op) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
@@ -1206,7 +1241,12 @@ impl Node {
         }
     }
 
-    pub fn get(&self, variables: Variables, registry: Arc<FunctionRegistry>, threads: usize) -> CreateStreamResult<Box<dyn RecordStream>> {
+    pub fn get(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+    ) -> CreateStreamResult<Box<dyn RecordStream>> {
         // Try batch pipeline first for supported node patterns.
         // Skip for bare DataSource — the columnar round-trip (parse to columns →
         // BatchToRowAdapter back to rows) is slower than direct row-based parsing
@@ -1240,7 +1280,7 @@ impl Node {
                     if !bindings.is_empty() {
                         let stream = ProjectionStream::new(Box::new(file_stream), bindings.clone());
 
-                        return Ok(Box::new(stream));
+                        Ok(Box::new(stream))
                     } else {
                         Ok(Box::new(file_stream))
                     }
@@ -1254,7 +1294,13 @@ impl Node {
             },
             Node::GroupBy(fields, named_aggregates, source) => {
                 let record_stream = source.get(variables.clone(), registry.clone(), threads)?;
-                let stream = GroupByStream::new(fields.clone(), variables, named_aggregates.clone(), record_stream, registry);
+                let stream = GroupByStream::new(
+                    fields.clone(),
+                    variables,
+                    named_aggregates.clone(),
+                    record_stream,
+                    registry,
+                );
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
@@ -1284,15 +1330,34 @@ impl Node {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(CrossJoinStream::new(left_stream, right_node, right_variables, registry, threads)))
+                Ok(Box::new(CrossJoinStream::new(
+                    left_stream,
+                    right_node,
+                    right_variables,
+                    registry,
+                    threads,
+                )))
             }
             Node::LeftJoin(left, right, condition) => {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(LeftJoinStream::new(left_stream, right_node, right_variables, *condition.clone(), registry, threads)))
+                Ok(Box::new(LeftJoinStream::new(
+                    left_stream,
+                    right_node,
+                    right_variables,
+                    *condition.clone(),
+                    registry,
+                    threads,
+                )))
             }
-            Node::HashJoin { left, right, equi_keys, residual, join_type } => {
+            Node::HashJoin {
+                left,
+                right,
+                equi_keys,
+                residual,
+                join_type,
+            } => {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_stream = right.get(variables.clone(), registry.clone(), threads)?;
                 // Strip the table alias prefix from equi-key PathExprs.
@@ -1305,17 +1370,15 @@ impl Node {
                         p.clone()
                     }
                 };
-                let left_key_fields: Vec<PathExpr> = equi_keys.iter()
-                    .map(|(l, _)| strip_alias(l))
-                    .collect();
-                let right_key_fields: Vec<PathExpr> = equi_keys.iter()
-                    .map(|(_, r)| strip_alias(r))
-                    .collect();
+                let left_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(l, _)| strip_alias(l)).collect();
+                let right_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(_, r)| strip_alias(r)).collect();
                 // Default memory limit: 512 MB
                 let memory_limit = 512 * 1024 * 1024;
                 Ok(Box::new(HashJoinStream::new(
-                    left_stream, right_stream,
-                    left_key_fields, right_key_fields,
+                    left_stream,
+                    right_stream,
+                    left_key_fields,
+                    right_key_fields,
                     residual.as_ref().map(|r| *r.clone()),
                     join_type.clone(),
                     memory_limit,
@@ -1364,6 +1427,8 @@ impl NamedAggregate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Public only so feature-gated external benchmarks can construct aggregates.
+#[allow(private_interfaces)]
 pub enum Aggregate {
     Avg(AvgAggregate, Named),
     Count(CountAggregate, Named),
@@ -1379,7 +1444,7 @@ pub enum Aggregate {
 }
 
 impl Aggregate {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         match self {
             Aggregate::GroupAs(agg, _) => agg.add_record(key, value),
@@ -1395,6 +1460,7 @@ impl Aggregate {
             Aggregate::ApproxPercentile(agg, _) => agg.add_record(key, value),
         }
     }
+
     pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
         match self {
             Aggregate::GroupAs(agg, _) => agg.get_aggregated(key),
@@ -1429,7 +1495,7 @@ impl PercentileDiscAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        let v = self.partitions.entry(key.clone()).or_insert(Vec::new());
+        let v = self.partitions.entry(key.clone()).or_default();
         v.push(value.clone());
 
         Ok(())
@@ -1509,7 +1575,7 @@ impl ApproxPercentileAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        let buf = self.buffer.entry(key.clone()).or_insert(Vec::new());
+        let buf = self.buffer.entry(key.clone()).or_default();
         buf.push(value.clone());
 
         if buf.len() < 10000 {
@@ -1544,7 +1610,7 @@ impl ApproxPercentileAggregate {
     }
 
     pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
-        let buf = self.buffer.entry(key.clone()).or_insert(Vec::new());
+        let buf = self.buffer.entry(key.clone()).or_default();
         let t = if !buf.is_empty() {
             let v = self
                 .partitions
@@ -1594,9 +1660,9 @@ impl AvgAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        let new_value: f64 = match value {
-            &Value::Int(i) => i as f64,
-            &Value::Float(f) => f.into_inner() as f64,
+        let new_value: f64 = match *value {
+            Value::Int(i) => i as f64,
+            Value::Float(f) => f.into_inner() as f64,
             _ => {
                 return Err(AggregateError::InvalidType);
             }
@@ -1609,7 +1675,9 @@ impl AvgAggregate {
 
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let (Some(&sum), Some(&count)) = (self.sums.get(key), self.counts.get(key)) {
-            Ok(Value::Float(OrderedFloat::from((sum.into_inner() / count as f64) as f32)))
+            Ok(Value::Float(OrderedFloat::from(
+                (sum.into_inner() / count as f64) as f32,
+            )))
         } else {
             Err(AggregateError::KeyNotFound)
         }
@@ -1627,9 +1695,9 @@ impl SumAggregate {
     }
 
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        let new_value: OrderedFloat<f32> = match value {
-            &Value::Int(i) => OrderedFloat::from(i as f32),
-            &Value::Float(f) => f,
+        let new_value: OrderedFloat<f32> = match *value {
+            Value::Int(i) => OrderedFloat::from(i as f32),
+            Value::Float(f) => f,
             _ => {
                 return Err(AggregateError::InvalidType);
             }
@@ -1870,7 +1938,7 @@ impl PartialEq for ApproxCountDistinctAggregate {
             && self
                 .counts
                 .iter()
-                .all(|(k, v)| other.counts.get(k).map_or(false, |ov| v.count() == ov.count()))
+                .all(|(k, v)| other.counts.get(k).is_some_and(|ov| v.count() == ov.count()))
     }
 }
 
@@ -1932,8 +2000,14 @@ pub(crate) enum AccumulatorKind {
     Last,
     GroupAs,
     ApproxCountDistinct,
-    PercentileDisc { percentile: OrderedFloat<f32>, ordering: Ordering },
-    ApproxPercentile { percentile: OrderedFloat<f32>, ordering: Ordering },
+    PercentileDisc {
+        percentile: OrderedFloat<f32>,
+        ordering: Ordering,
+    },
+    ApproxPercentile {
+        percentile: OrderedFloat<f32>,
+        ordering: Ordering,
+    },
 }
 
 /// Per-group accumulator state (one per aggregate in the SELECT).
@@ -1947,17 +2021,29 @@ pub(crate) enum AccumulatorState {
     Count(i64),
     CountStar(i64),
     Sum(Option<OrderedFloat<f32>>),
-    Avg { sum: OrderedFloat<f64>, count: i64 },
+    Avg {
+        sum: OrderedFloat<f64>,
+        count: i64,
+    },
     Min(Option<Value>),
     Max(Option<Value>),
     First(Option<Value>),
     Last(Option<Value>),
     GroupAs(Vec<Value>),
     ApproxCountDistinct(HyperLogLog<Value>),
-    PercentileDisc { values: Vec<Value>, percentile: OrderedFloat<f32>, ordering: Ordering },
+    PercentileDisc {
+        values: Vec<Value>,
+        percentile: OrderedFloat<f32>,
+        ordering: Ordering,
+    },
     // ordering is stored for future use (TDigest quantile estimation is always ascending)
     #[allow(dead_code)]
-    ApproxPercentile { digest: TDigest, buffer: Vec<Value>, percentile: OrderedFloat<f32>, ordering: Ordering },
+    ApproxPercentile {
+        digest: TDigest,
+        buffer: Vec<Value>,
+        percentile: OrderedFloat<f32>,
+        ordering: Ordering,
+    },
 }
 
 impl AccumulatorState {
@@ -1976,24 +2062,18 @@ impl AccumulatorState {
             AccumulatorKind::First => AccumulatorState::First(None),
             AccumulatorKind::Last => AccumulatorState::Last(None),
             AccumulatorKind::GroupAs => AccumulatorState::GroupAs(Vec::new()),
-            AccumulatorKind::ApproxCountDistinct => {
-                AccumulatorState::ApproxCountDistinct(HyperLogLog::new(8))
-            }
-            AccumulatorKind::PercentileDisc { percentile, ordering } => {
-                AccumulatorState::PercentileDisc {
-                    values: Vec::new(),
-                    percentile: *percentile,
-                    ordering: ordering.clone(),
-                }
-            }
-            AccumulatorKind::ApproxPercentile { percentile, ordering } => {
-                AccumulatorState::ApproxPercentile {
-                    digest: TDigest::new_with_size(100),
-                    buffer: Vec::new(),
-                    percentile: *percentile,
-                    ordering: ordering.clone(),
-                }
-            }
+            AccumulatorKind::ApproxCountDistinct => AccumulatorState::ApproxCountDistinct(HyperLogLog::new(8)),
+            AccumulatorKind::PercentileDisc { percentile, ordering } => AccumulatorState::PercentileDisc {
+                values: Vec::new(),
+                percentile: *percentile,
+                ordering: *ordering,
+            },
+            AccumulatorKind::ApproxPercentile { percentile, ordering } => AccumulatorState::ApproxPercentile {
+                digest: TDigest::new_with_size(100),
+                buffer: Vec::new(),
+                percentile: *percentile,
+                ordering: *ordering,
+            },
         }
     }
 
@@ -2040,30 +2120,26 @@ impl AccumulatorState {
                 *sum += fval;
                 *count += 1;
             }
-            AccumulatorState::Min(current) => {
-                match current {
-                    None => {
+            AccumulatorState::Min(current) => match current {
+                None => {
+                    *current = Some(val.clone());
+                }
+                Some(cur) => {
+                    if value_less_than(val, cur) {
                         *current = Some(val.clone());
                     }
-                    Some(cur) => {
-                        if value_less_than(val, cur) {
-                            *current = Some(val.clone());
-                        }
-                    }
                 }
-            }
-            AccumulatorState::Max(current) => {
-                match current {
-                    None => {
+            },
+            AccumulatorState::Max(current) => match current {
+                None => {
+                    *current = Some(val.clone());
+                }
+                Some(cur) => {
+                    if value_less_than(cur, val) {
                         *current = Some(val.clone());
                     }
-                    Some(cur) => {
-                        if value_less_than(cur, val) {
-                            *current = Some(val.clone());
-                        }
-                    }
                 }
-            }
+            },
             AccumulatorState::First(slot) => {
                 if slot.is_none() {
                     *slot = Some(val.clone());
@@ -2122,28 +2198,20 @@ impl AccumulatorState {
     /// buffer into the TDigest before computing the quantile.
     pub(crate) fn finalize(&mut self) -> AggregateResult<Value> {
         match self {
-            AccumulatorState::Count(c) | AccumulatorState::CountStar(c) => {
-                Ok(Value::Int(*c as i32))
-            }
-            AccumulatorState::Sum(opt_sum) => {
-                Ok(opt_sum.map(Value::Float).unwrap_or(Value::Null))
-            }
+            AccumulatorState::Count(c) | AccumulatorState::CountStar(c) => Ok(Value::Int(*c as i32)),
+            AccumulatorState::Sum(opt_sum) => Ok(opt_sum.map(Value::Float).unwrap_or(Value::Null)),
             AccumulatorState::Avg { sum, count } => {
                 if *count == 0 {
                     return Ok(Value::Null);
                 }
-                Ok(Value::Float(OrderedFloat(
-                    (sum.into_inner() / *count as f64) as f32,
-                )))
+                Ok(Value::Float(OrderedFloat((sum.into_inner() / *count as f64) as f32)))
             }
             AccumulatorState::Min(v)
             | AccumulatorState::Max(v)
             | AccumulatorState::First(v)
             | AccumulatorState::Last(v) => Ok(v.clone().unwrap_or(Value::Null)),
             AccumulatorState::GroupAs(vals) => Ok(Value::Array(vals.clone())),
-            AccumulatorState::ApproxCountDistinct(hll) => {
-                Ok(Value::Int(hll.count() as i32))
-            }
+            AccumulatorState::ApproxCountDistinct(hll) => Ok(Value::Int(hll.count() as i32)),
             AccumulatorState::PercentileDisc {
                 values,
                 percentile,
@@ -2189,19 +2257,26 @@ impl AccumulatorState {
     /// Merge another accumulator's state into this one.
     /// Used to combine partial aggregations from adjacent parallel chunks.
     /// `self` is from the earlier chunk, `other` is from the later chunk.
+    #[cfg(test)]
     pub(crate) fn merge(&mut self, other: &AccumulatorState) {
         match (self, other) {
             (AccumulatorState::Count(a), AccumulatorState::Count(b)) => *a += b,
             (AccumulatorState::CountStar(a), AccumulatorState::CountStar(b)) => *a += b,
-            (AccumulatorState::Sum(a), AccumulatorState::Sum(b)) => {
-                match (a.as_mut(), b) {
-                    (Some(a_val), Some(b_val)) => *a_val = OrderedFloat(a_val.0 + b_val.0),
-                    (None, Some(b_val)) => *a = Some(*b_val),
-                    _ => {}
-                }
-            }
-            (AccumulatorState::Avg { sum: a_sum, count: a_count },
-             AccumulatorState::Avg { sum: b_sum, count: b_count }) => {
+            (AccumulatorState::Sum(a), AccumulatorState::Sum(b)) => match (a.as_mut(), b) {
+                (Some(a_val), Some(b_val)) => *a_val = OrderedFloat(a_val.0 + b_val.0),
+                (None, Some(b_val)) => *a = Some(*b_val),
+                _ => {}
+            },
+            (
+                AccumulatorState::Avg {
+                    sum: a_sum,
+                    count: a_count,
+                },
+                AccumulatorState::Avg {
+                    sum: b_sum,
+                    count: b_count,
+                },
+            ) => {
                 *a_sum = OrderedFloat(a_sum.0 + b_sum.0);
                 *a_count += b_count;
             }
@@ -2237,34 +2312,58 @@ impl AccumulatorState {
             (AccumulatorState::ApproxCountDistinct(a), AccumulatorState::ApproxCountDistinct(b)) => {
                 a.merge(b);
             }
-            (AccumulatorState::PercentileDisc { values: a_vals, .. },
-             AccumulatorState::PercentileDisc { values: b_vals, .. }) => {
+            (
+                AccumulatorState::PercentileDisc { values: a_vals, .. },
+                AccumulatorState::PercentileDisc { values: b_vals, .. },
+            ) => {
                 a_vals.extend(b_vals.iter().cloned());
             }
-            (AccumulatorState::ApproxPercentile { digest: a_digest, buffer: a_buf, .. },
-             AccumulatorState::ApproxPercentile { digest: b_digest, buffer: b_buf, .. }) => {
+            (
+                AccumulatorState::ApproxPercentile {
+                    digest: a_digest,
+                    buffer: a_buf,
+                    ..
+                },
+                AccumulatorState::ApproxPercentile {
+                    digest: b_digest,
+                    buffer: b_buf,
+                    ..
+                },
+            ) => {
                 // Flush a's buffer
                 if !a_buf.is_empty() {
-                    let mut a_values: Vec<f64> = a_buf.drain(..).filter_map(|v| match v {
-                        Value::Float(f) => Some(f.0 as f64),
-                        Value::Int(i) => Some(i as f64),
-                        _ => None,
-                    }).collect();
+                    let mut a_values: Vec<f64> = a_buf
+                        .drain(..)
+                        .filter_map(|v| match v {
+                            Value::Float(f) => Some(f.0 as f64),
+                            Value::Int(i) => Some(i as f64),
+                            _ => None,
+                        })
+                        .collect();
                     if !a_values.is_empty() {
                         a_values.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-                        *a_digest = TDigest::merge_digests(vec![a_digest.clone(), TDigest::new_with_size(100).merge_sorted(a_values)]);
+                        *a_digest = TDigest::merge_digests(vec![
+                            a_digest.clone(),
+                            TDigest::new_with_size(100).merge_sorted(a_values),
+                        ]);
                     }
                 }
                 // Flush b's buffer and merge
                 let b_flushed = if !b_buf.is_empty() {
-                    let mut b_values: Vec<f64> = b_buf.iter().filter_map(|v| match v {
-                        Value::Float(f) => Some(f.0 as f64),
-                        Value::Int(i) => Some(*i as f64),
-                        _ => None,
-                    }).collect();
+                    let mut b_values: Vec<f64> = b_buf
+                        .iter()
+                        .filter_map(|v| match v {
+                            Value::Float(f) => Some(f.0 as f64),
+                            Value::Int(i) => Some(*i as f64),
+                            _ => None,
+                        })
+                        .collect();
                     if !b_values.is_empty() {
                         b_values.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-                        TDigest::merge_digests(vec![b_digest.clone(), TDigest::new_with_size(100).merge_sorted(b_values)])
+                        TDigest::merge_digests(vec![
+                            b_digest.clone(),
+                            TDigest::new_with_size(100).merge_sorted(b_values),
+                        ])
                     } else {
                         b_digest.clone()
                     }
@@ -2295,6 +2394,7 @@ impl GroupState {
 
     /// Merge another GroupState into this one, element-wise.
     /// `self` is from the earlier chunk, `other` is from the later chunk.
+    #[cfg(test)]
     pub(crate) fn merge(&mut self, other: &GroupState) {
         assert_eq!(self.accumulators.len(), other.accumulators.len());
         for (a, b) in self.accumulators.iter_mut().zip(other.accumulators.iter()) {
@@ -2314,57 +2414,44 @@ pub(crate) struct AggregateDef {
 impl AggregateDef {
     pub(crate) fn from_named_aggregate(na: &NamedAggregate) -> Self {
         let (kind, extraction) = match &na.aggregate {
-            Aggregate::Count(_, Named::Star) => (
-                AccumulatorKind::CountStar,
-                ExtractionStrategy::None,
-            ),
-            Aggregate::Count(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::Count,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
-            Aggregate::Sum(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::Sum,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
-            Aggregate::Avg(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::Avg,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
-            Aggregate::Min(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::Min,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
-            Aggregate::Max(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::Max,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
-            Aggregate::First(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::First,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
-            Aggregate::Last(_, Named::Expression(expr, _)) => (
-                AccumulatorKind::Last,
-                ExtractionStrategy::Expression(expr.clone()),
-            ),
+            Aggregate::Count(_, Named::Star) => (AccumulatorKind::CountStar, ExtractionStrategy::None),
+            Aggregate::Count(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::Count, ExtractionStrategy::Expression(expr.clone()))
+            }
+            Aggregate::Sum(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::Sum, ExtractionStrategy::Expression(expr.clone()))
+            }
+            Aggregate::Avg(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::Avg, ExtractionStrategy::Expression(expr.clone()))
+            }
+            Aggregate::Min(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::Min, ExtractionStrategy::Expression(expr.clone()))
+            }
+            Aggregate::Max(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::Max, ExtractionStrategy::Expression(expr.clone()))
+            }
+            Aggregate::First(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::First, ExtractionStrategy::Expression(expr.clone()))
+            }
+            Aggregate::Last(_, Named::Expression(expr, _)) => {
+                (AccumulatorKind::Last, ExtractionStrategy::Expression(expr.clone()))
+            }
             Aggregate::ApproxCountDistinct(_, Named::Expression(expr, _)) => (
                 AccumulatorKind::ApproxCountDistinct,
                 ExtractionStrategy::Expression(expr.clone()),
             ),
-            Aggregate::GroupAs(_, _) => (
-                AccumulatorKind::GroupAs,
-                ExtractionStrategy::RecordCapture,
-            ),
+            Aggregate::GroupAs(_, _) => (AccumulatorKind::GroupAs, ExtractionStrategy::RecordCapture),
             Aggregate::PercentileDisc(agg, col_name) => (
                 AccumulatorKind::PercentileDisc {
                     percentile: agg.percentile,
-                    ordering: agg.ordering.clone(),
+                    ordering: agg.ordering,
                 },
                 ExtractionStrategy::ColumnLookup(col_name.clone()),
             ),
             Aggregate::ApproxPercentile(agg, col_name) => (
                 AccumulatorKind::ApproxPercentile {
                     percentile: agg.percentile,
-                    ordering: agg.ordering.clone(),
+                    ordering: agg.ordering,
                 },
                 ExtractionStrategy::ColumnLookup(col_name.clone()),
             ),
@@ -2527,9 +2614,9 @@ mod tests {
     fn test_evaluate_host_functions() {
         let registry = test_registry();
         let v = Value::Host(Box::new(common::types::parse_host("192.168.131.39:2817").unwrap()));
-        let name = registry.call("host_name", &vec![v.clone()]).unwrap();
+        let name = registry.call("host_name", std::slice::from_ref(&v)).unwrap();
         assert_eq!(name, Value::String("192.168.131.39".to_string().into()));
-        let port = registry.call("host_port", &vec![v]).unwrap();
+        let port = registry.call("host_port", &[v]).unwrap();
         assert_eq!(port, Value::Int(2817));
     }
 
@@ -2542,83 +2629,107 @@ mod tests {
             )
             .unwrap(),
         ));
-        let name = registry.call("url_host", &vec![v.clone()]).unwrap();
+        let name = registry.call("url_host", std::slice::from_ref(&v)).unwrap();
         assert_eq!(name, Value::String("example.com".to_string().into()));
-        let port = registry.call("url_port", &vec![v.clone()]).unwrap();
+        let port = registry.call("url_port", std::slice::from_ref(&v)).unwrap();
         assert_eq!(port, Value::Int(8000));
-        let path = registry.call("url_path", &vec![v.clone()]).unwrap();
+        let path = registry.call("url_path", std::slice::from_ref(&v)).unwrap();
         assert_eq!(path, Value::String("/users/123".to_string().into()));
-        let fragment = registry.call("url_fragment", &vec![v.clone()]).unwrap();
+        let fragment = registry.call("url_fragment", std::slice::from_ref(&v)).unwrap();
         assert_eq!(fragment, Value::Null);
-        let query = registry.call("url_query", &vec![v.clone()]).unwrap();
+        let query = registry.call("url_query", std::slice::from_ref(&v)).unwrap();
         assert_eq!(query, Value::String("mode=json&after=&iteration=1".to_string().into()));
-        let path_segments = registry.call("url_path_segments", &vec![v.clone(), Value::Int(1)]).unwrap();
+        let path_segments = registry.call("url_path_segments", &[v.clone(), Value::Int(1)]).unwrap();
         assert_eq!(path_segments, Value::String("123".to_string().into()));
-        let mapped_path = registry.call(
-            "url_path_bucket",
-            &vec![v.clone(), Value::Int(1), Value::String("_".to_string().into())],
-        )
-        .unwrap();
+        let mapped_path = registry
+            .call(
+                "url_path_bucket",
+                &[v.clone(), Value::Int(1), Value::String("_".to_string().into())],
+            )
+            .unwrap();
         assert_eq!(mapped_path, Value::String("/users/_".to_string().into()));
     }
 
     #[test]
     fn test_evaluate() {
         let registry = test_registry();
-        let v = registry.call("Plus", &vec![Value::Int(1), Value::Int(2)]).unwrap();
+        let v = registry.call("Plus", &[Value::Int(1), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(3));
 
-        let v = registry.call("Minus", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        let v = registry.call("Minus", &[Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(0));
 
-        let v = registry.call("Times", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        let v = registry.call("Times", &[Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(4));
 
-        let v = registry.call("Divide", &vec![Value::Int(2), Value::Int(2)]).unwrap();
+        let v = registry.call("Divide", &[Value::Int(2), Value::Int(2)]).unwrap();
         assert_eq!(v, Value::Int(1));
 
         let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:35.000000Z").unwrap());
-        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 seconds".to_string().into()), dt.clone()]).unwrap();
+        let bucket_dt = registry
+            .call(
+                "time_bucket",
+                &[Value::String("5 seconds".to_string().into()), dt.clone()],
+            )
+            .unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:00.000000Z").unwrap());
-        let bucket_dt = registry.call("time_bucket", &vec![Value::String("5 minutes".to_string().into()), dt.clone()]).unwrap();
+        let bucket_dt = registry
+            .call(
+                "time_bucket",
+                &[Value::String("5 minutes".to_string().into()), dt.clone()],
+            )
+            .unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
         let expected_dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:00:00.000000Z").unwrap());
-        let bucket_dt = registry.call("time_bucket", &vec![Value::String("1 hour".to_string().into()), dt.clone()]).unwrap();
+        let bucket_dt = registry
+            .call("time_bucket", &[Value::String("1 hour".to_string().into()), dt.clone()])
+            .unwrap();
         assert_eq!(expected_dt, bucket_dt);
 
-        let hour = registry.call("date_part", &vec![Value::String("second".to_string().into()), dt.clone()]).unwrap();
+        let hour = registry
+            .call("date_part", &[Value::String("second".to_string().into()), dt.clone()])
+            .unwrap();
         assert_eq!(Value::Float(OrderedFloat::from(37.0)), hour);
     }
 
     #[test]
     fn test_arithmetic_null_propagation() {
         let registry = test_registry();
-        assert_eq!(registry.call("Plus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(registry.call("Plus", &vec![Value::Int(1), Value::Null]), Ok(Value::Null));
-        assert_eq!(registry.call("Plus", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
-        assert_eq!(registry.call("Minus", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(registry.call("Times", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(registry.call("Divide", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Plus", &[Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Plus", &[Value::Int(1), Value::Null]), Ok(Value::Null));
+        assert_eq!(
+            registry.call("Plus", &[Value::Missing, Value::Int(1)]),
+            Ok(Value::Missing)
+        );
+        assert_eq!(registry.call("Minus", &[Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Times", &[Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(registry.call("Divide", &[Value::Null, Value::Int(1)]), Ok(Value::Null));
     }
 
     #[test]
     fn test_float_arithmetic() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Plus", &vec![Value::Float(OrderedFloat::from(1.5f32)), Value::Float(OrderedFloat::from(2.5f32))]),
+            registry.call(
+                "Plus",
+                &[
+                    Value::Float(OrderedFloat::from(1.5f32)),
+                    Value::Float(OrderedFloat::from(2.5f32))
+                ]
+            ),
             Ok(Value::Float(OrderedFloat::from(4.0f32)))
         );
         // Mixed Int/Float promotion
         assert_eq!(
-            registry.call("Plus", &vec![Value::Int(1), Value::Float(OrderedFloat::from(2.5f32))]),
+            registry.call("Plus", &[Value::Int(1), Value::Float(OrderedFloat::from(2.5f32))]),
             Ok(Value::Float(OrderedFloat::from(3.5f32)))
         );
         assert_eq!(
-            registry.call("Plus", &vec![Value::Float(OrderedFloat::from(2.5f32)), Value::Int(1)]),
+            registry.call("Plus", &[Value::Float(OrderedFloat::from(2.5f32)), Value::Int(1)]),
             Ok(Value::Float(OrderedFloat::from(3.5f32)))
         );
     }
@@ -2810,7 +2921,13 @@ mod tests {
     fn test_string_concat_evaluation() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Concat", &vec![Value::String("foo".to_string().into()), Value::String("bar".to_string().into())]),
+            registry.call(
+                "Concat",
+                &[
+                    Value::String("foo".to_string().into()),
+                    Value::String("bar".to_string().into())
+                ]
+            ),
             Ok(Value::String("foobar".to_string().into()))
         );
     }
@@ -2819,11 +2936,11 @@ mod tests {
     fn test_string_concat_null_propagation() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Concat", &vec![Value::Null, Value::String("bar".to_string().into())]),
+            registry.call("Concat", &[Value::Null, Value::String("bar".to_string().into())]),
             Ok(Value::Null)
         );
         assert_eq!(
-            registry.call("Concat", &vec![Value::String("foo".to_string().into()), Value::Null]),
+            registry.call("Concat", &[Value::String("foo".to_string().into()), Value::Null]),
             Ok(Value::Null)
         );
     }
@@ -2832,11 +2949,11 @@ mod tests {
     fn test_string_concat_missing_propagation() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("Concat", &vec![Value::Missing, Value::String("bar".to_string().into())]),
+            registry.call("Concat", &[Value::Missing, Value::String("bar".to_string().into())]),
             Ok(Value::Missing)
         );
         assert_eq!(
-            registry.call("Concat", &vec![Value::String("foo".to_string().into()), Value::Missing]),
+            registry.call("Concat", &[Value::String("foo".to_string().into()), Value::Missing]),
             Ok(Value::Missing)
         );
     }
@@ -3083,12 +3200,12 @@ mod tests {
     fn test_upper() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("upper", &vec![Value::String("hello".to_string().into())]),
+            registry.call("upper", &[Value::String("hello".to_string().into())]),
             Ok(Value::String("HELLO".to_string().into()))
         );
         // Case-insensitive function name
         assert_eq!(
-            registry.call("UPPER", &vec![Value::String("hello".to_string().into())]),
+            registry.call("UPPER", &[Value::String("hello".to_string().into())]),
             Ok(Value::String("HELLO".to_string().into()))
         );
     }
@@ -3097,12 +3214,12 @@ mod tests {
     fn test_lower() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("lower", &vec![Value::String("HELLO".to_string().into())]),
+            registry.call("lower", &[Value::String("HELLO".to_string().into())]),
             Ok(Value::String("hello".to_string().into()))
         );
         // Case-insensitive function name
         assert_eq!(
-            registry.call("LOWER", &vec![Value::String("HELLO".to_string().into())]),
+            registry.call("LOWER", &[Value::String("HELLO".to_string().into())]),
             Ok(Value::String("hello".to_string().into()))
         );
     }
@@ -3111,15 +3228,15 @@ mod tests {
     fn test_char_length() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("char_length", &vec![Value::String("hello".to_string().into())]),
+            registry.call("char_length", &[Value::String("hello".to_string().into())]),
             Ok(Value::Int(5))
         );
         assert_eq!(
-            registry.call("character_length", &vec![Value::String("hello".to_string().into())]),
+            registry.call("character_length", &[Value::String("hello".to_string().into())]),
             Ok(Value::Int(5))
         );
         assert_eq!(
-            registry.call("CHAR_LENGTH", &vec![Value::String("hello".to_string().into())]),
+            registry.call("CHAR_LENGTH", &[Value::String("hello".to_string().into())]),
             Ok(Value::Int(5))
         );
     }
@@ -3128,16 +3245,19 @@ mod tests {
     fn test_substring() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("substring", &vec![Value::String("hello".to_string().into()), Value::Int(2)]),
+            registry.call("substring", &[Value::String("hello".to_string().into()), Value::Int(2)]),
             Ok(Value::String("ello".to_string().into()))
         );
         assert_eq!(
-            registry.call("substring", &vec![Value::String("hello".to_string().into()), Value::Int(2), Value::Int(3)]),
+            registry.call(
+                "substring",
+                &[Value::String("hello".to_string().into()), Value::Int(2), Value::Int(3)]
+            ),
             Ok(Value::String("ell".to_string().into()))
         );
         // Case-insensitive
         assert_eq!(
-            registry.call("SUBSTRING", &vec![Value::String("hello".to_string().into()), Value::Int(1)]),
+            registry.call("SUBSTRING", &[Value::String("hello".to_string().into()), Value::Int(1)]),
             Ok(Value::String("hello".to_string().into()))
         );
     }
@@ -3146,11 +3266,11 @@ mod tests {
     fn test_trim() {
         let registry = test_registry();
         assert_eq!(
-            registry.call("trim", &vec![Value::String("  hello  ".to_string().into())]),
+            registry.call("trim", &[Value::String("  hello  ".to_string().into())]),
             Ok(Value::String("hello".to_string().into()))
         );
         assert_eq!(
-            registry.call("TRIM", &vec![Value::String("  hello  ".to_string().into())]),
+            registry.call("TRIM", &[Value::String("  hello  ".to_string().into())]),
             Ok(Value::String("hello".to_string().into()))
         );
     }
@@ -3158,13 +3278,19 @@ mod tests {
     #[test]
     fn test_string_functions_null_propagation() {
         let registry = test_registry();
-        assert_eq!(registry.call("upper", &vec![Value::Null]), Ok(Value::Null));
-        assert_eq!(registry.call("lower", &vec![Value::Missing]), Ok(Value::Missing));
-        assert_eq!(registry.call("char_length", &vec![Value::Null]), Ok(Value::Null));
-        assert_eq!(registry.call("substring", &vec![Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(registry.call("substring", &vec![Value::Missing, Value::Int(1)]), Ok(Value::Missing));
-        assert_eq!(registry.call("trim", &vec![Value::Null]), Ok(Value::Null));
-        assert_eq!(registry.call("trim", &vec![Value::Missing]), Ok(Value::Missing));
+        assert_eq!(registry.call("upper", &[Value::Null]), Ok(Value::Null));
+        assert_eq!(registry.call("lower", &[Value::Missing]), Ok(Value::Missing));
+        assert_eq!(registry.call("char_length", &[Value::Null]), Ok(Value::Null));
+        assert_eq!(
+            registry.call("substring", &[Value::Null, Value::Int(1)]),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            registry.call("substring", &[Value::Missing, Value::Int(1)]),
+            Ok(Value::Missing)
+        );
+        assert_eq!(registry.call("trim", &[Value::Null]), Ok(Value::Null));
+        assert_eq!(registry.call("trim", &[Value::Missing]), Ok(Value::Missing));
     }
 
     #[test]
@@ -3172,27 +3298,27 @@ mod tests {
         let registry = test_registry();
         let dt = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2015-11-07T18:45:37.691548Z").unwrap());
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("second".to_string().into()), dt.clone()]),
+            registry.call("date_part", &[Value::String("second".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(37.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("minute".to_string().into()), dt.clone()]),
+            registry.call("date_part", &[Value::String("minute".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(45.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("hour".to_string().into()), dt.clone()]),
+            registry.call("date_part", &[Value::String("hour".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(18.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("day".to_string().into()), dt.clone()]),
+            registry.call("date_part", &[Value::String("day".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(7.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("month".to_string().into()), dt.clone()]),
+            registry.call("date_part", &[Value::String("month".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(11.0)))
         );
         assert_eq!(
-            registry.call("date_part", &vec![Value::String("year".to_string().into()), dt.clone()]),
+            registry.call("date_part", &[Value::String("year".to_string().into()), dt.clone()]),
             Ok(Value::Float(OrderedFloat::from(2015.0)))
         );
     }
@@ -3201,11 +3327,11 @@ mod tests {
     fn test_cast_int_to_string() {
         let vars = Variables::default();
         let registry = test_registry();
-        let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::Int(42))),
-            CastType::Varchar,
+        let expr = Expression::Cast(Box::new(Expression::Constant(Value::Int(42))), CastType::Varchar);
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Ok(Value::String("42".to_string().into()))
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("42".to_string().into())));
     }
 
     #[test]
@@ -3227,7 +3353,10 @@ mod tests {
             Box::new(Expression::Constant(Value::String("abc".to_string().into()))),
             CastType::Int,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Err(ExpressionError::TypeMismatch));
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Err(ExpressionError::TypeMismatch)
+        );
     }
 
     #[test]
@@ -3245,11 +3374,11 @@ mod tests {
     fn test_cast_int_to_float() {
         let vars = Variables::default();
         let registry = test_registry();
-        let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::Int(5))),
-            CastType::Float,
+        let expr = Expression::Cast(Box::new(Expression::Constant(Value::Int(5))), CastType::Float);
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Ok(Value::Float(OrderedFloat::from(5.0f32)))
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Float(OrderedFloat::from(5.0f32))));
     }
 
     #[test]
@@ -3260,23 +3389,20 @@ mod tests {
             Box::new(Expression::Constant(Value::String("3.14".to_string().into()))),
             CastType::Float,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Float(OrderedFloat::from(3.14f32))));
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Ok(Value::Float(OrderedFloat::from("3.14".parse::<f32>().unwrap())))
+        );
     }
 
     #[test]
     fn test_cast_bool_to_int() {
         let vars = Variables::default();
         let registry = test_registry();
-        let expr_true = Expression::Cast(
-            Box::new(Expression::Constant(Value::Boolean(true))),
-            CastType::Int,
-        );
+        let expr_true = Expression::Cast(Box::new(Expression::Constant(Value::Boolean(true))), CastType::Int);
         assert_eq!(expr_true.expression_value(&vars, &registry), Ok(Value::Int(1)));
 
-        let expr_false = Expression::Cast(
-            Box::new(Expression::Constant(Value::Boolean(false))),
-            CastType::Int,
-        );
+        let expr_false = Expression::Cast(Box::new(Expression::Constant(Value::Boolean(false))), CastType::Int);
         assert_eq!(expr_false.expression_value(&vars, &registry), Ok(Value::Int(0)));
     }
 
@@ -3284,11 +3410,11 @@ mod tests {
     fn test_cast_bool_to_string() {
         let vars = Variables::default();
         let registry = test_registry();
-        let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::Boolean(true))),
-            CastType::Varchar,
+        let expr = Expression::Cast(Box::new(Expression::Constant(Value::Boolean(true))), CastType::Varchar);
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Ok(Value::String("true".to_string().into()))
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("true".to_string().into())));
     }
 
     #[test]
@@ -3316,17 +3442,17 @@ mod tests {
             Box::new(Expression::Constant(Value::String("yes".to_string().into()))),
             CastType::Boolean,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Err(ExpressionError::TypeMismatch));
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Err(ExpressionError::TypeMismatch)
+        );
     }
 
     #[test]
     fn test_cast_null_propagation() {
         let vars = Variables::default();
         let registry = test_registry();
-        let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::Null)),
-            CastType::Int,
-        );
+        let expr = Expression::Cast(Box::new(Expression::Constant(Value::Null)), CastType::Int);
         assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Null));
     }
 
@@ -3334,10 +3460,7 @@ mod tests {
     fn test_cast_missing_propagation() {
         let vars = Variables::default();
         let registry = test_registry();
-        let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::Missing)),
-            CastType::Varchar,
-        );
+        let expr = Expression::Cast(Box::new(Expression::Constant(Value::Missing)), CastType::Varchar);
         assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Missing));
     }
 
@@ -3346,10 +3469,7 @@ mod tests {
         let vars = Variables::default();
         let registry = test_registry();
         // Casting Int to Int should be identity
-        let expr = Expression::Cast(
-            Box::new(Expression::Constant(Value::Int(42))),
-            CastType::Int,
-        );
+        let expr = Expression::Cast(Box::new(Expression::Constant(Value::Int(42))), CastType::Int);
         assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::Int(42)));
 
         // Casting String to Varchar should be identity
@@ -3357,7 +3477,10 @@ mod tests {
             Box::new(Expression::Constant(Value::String("hello".to_string().into()))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("hello".to_string().into())));
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Ok(Value::String("hello".to_string().into()))
+        );
     }
 
     #[test]
@@ -3368,7 +3491,10 @@ mod tests {
             Box::new(Expression::Constant(Value::Float(OrderedFloat::from(2.5f32)))),
             CastType::Varchar,
         );
-        assert_eq!(expr.expression_value(&vars, &registry), Ok(Value::String("2.5".to_string().into())));
+        assert_eq!(
+            expr.expression_value(&vars, &registry),
+            Ok(Value::String("2.5".to_string().into()))
+        );
     }
 
     #[test]
@@ -3380,19 +3506,20 @@ mod tests {
             return;
         }
         // Build: SELECT elb_status_code FROM elb WHERE elb_status_code = '200'
-        let data_source = Node::DataSource(
-            DataSource::File(path, "elb".to_string(), "it".to_string()),
-            vec![],
-        );
+        let data_source = Node::DataSource(DataSource::File(path, "elb".to_string(), "it".to_string()), vec![]);
         let formula = Box::new(Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "elb_status_code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         ));
         let filter = Node::Filter(Box::new(data_source), formula);
         let select = Node::Map(
             vec![Named::Expression(
-                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())])),
+                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                    "elb_status_code".to_string(),
+                )])),
                 Some("elb_status_code".to_string()),
             )],
             Box::new(filter),
@@ -3406,7 +3533,11 @@ mod tests {
             let tuples = record.to_tuples();
             for (key, value) in &tuples {
                 if key == "elb_status_code" {
-                    assert_eq!(value, &Value::String("200".to_string().into()), "all filtered rows should have status 200");
+                    assert_eq!(
+                        value,
+                        &Value::String("200".to_string().into()),
+                        "all filtered rows should have status 200"
+                    );
                 }
             }
             count += 1;
@@ -3417,37 +3548,39 @@ mod tests {
     #[test]
     fn test_batch_groupby_through_node_get() {
         let path = std::path::PathBuf::from("data/AWSELB.log");
-        if !path.exists() { return; }
+        if !path.exists() {
+            return;
+        }
 
         let registry = test_registry();
 
         // SELECT elb_status_code, count(*) FROM elb GROUP BY elb_status_code
-        let ds = Node::DataSource(
-            DataSource::File(path, "elb".to_string(), "elb".to_string()),
-            vec![],
-        );
+        let ds = Node::DataSource(DataSource::File(path, "elb".to_string(), "elb".to_string()), vec![]);
         let groupby = Node::GroupBy(
-            vec![PathExpr::new(vec![PathSegment::AttrName("elb_status_code".to_string())])],
+            vec![PathExpr::new(vec![PathSegment::AttrName(
+                "elb_status_code".to_string(),
+            )])],
             vec![NamedAggregate::new(
                 Aggregate::Count(CountAggregate::new(), Named::Star),
                 Some("cnt".to_string()),
             )],
             Box::new(ds),
         );
-        let map = Node::Map(vec![
-            Named::Expression(
-                Expression::Variable(PathExpr::new(vec![
-                    PathSegment::AttrName("elb_status_code".to_string()),
-                ])),
-                None,
-            ),
-            Named::Expression(
-                Expression::Variable(PathExpr::new(vec![
-                    PathSegment::AttrName("cnt".to_string()),
-                ])),
-                None,
-            ),
-        ], Box::new(groupby));
+        let map = Node::Map(
+            vec![
+                Named::Expression(
+                    Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                        "elb_status_code".to_string(),
+                    )])),
+                    None,
+                ),
+                Named::Expression(
+                    Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("cnt".to_string())])),
+                    None,
+                ),
+            ],
+            Box::new(groupby),
+        );
 
         let mut stream = map.get(Variables::new(), registry, 0).unwrap();
         let mut total_rows = 0;
@@ -3466,13 +3599,14 @@ mod tests {
         let time_bucket_expr = Expression::Function(
             "time_bucket".to_string(),
             vec![
-                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string().into())), None),
+                Named::Expression(
+                    Expression::Constant(Value::String("5 minutes".to_string().into())),
+                    None,
+                ),
                 Named::Expression(Expression::Variable(ts_path), None),
             ],
         );
-        let map_named = vec![
-            Named::Expression(time_bucket_expr, Some("bucket".to_string())),
-        ];
+        let map_named = vec![Named::Expression(time_bucket_expr, Some("bucket".to_string()))];
         let ds = Node::DataSource(
             DataSource::File(std::path::PathBuf::from("test.log"), "elb".to_string(), String::new()),
             vec![],
@@ -3507,15 +3641,20 @@ mod tests {
         let time_bucket_expr = Expression::Function(
             "time_bucket".to_string(),
             vec![
-                Named::Expression(Expression::Constant(Value::String("5 minutes".to_string().into())), None),
+                Named::Expression(
+                    Expression::Constant(Value::String("5 minutes".to_string().into())),
+                    None,
+                ),
                 Named::Expression(Expression::Variable(ts_path), None),
             ],
         );
-        let map_named = vec![
-            Named::Expression(time_bucket_expr, Some("bucket".to_string())),
-        ];
+        let map_named = vec![Named::Expression(time_bucket_expr, Some("bucket".to_string()))];
         let ds = Node::DataSource(
-            DataSource::File(std::path::PathBuf::from("test.json"), "jsonl".to_string(), String::new()),
+            DataSource::File(
+                std::path::PathBuf::from("test.json"),
+                "jsonl".to_string(),
+                String::new(),
+            ),
             vec![],
         );
         let map_node = Node::Map(map_named, Box::new(ds));
@@ -3757,10 +3896,7 @@ mod accumulator_tests {
         let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
         state.accumulate(&Value::Int(10)).unwrap();
         state.accumulate(&Value::Int(20)).unwrap();
-        assert_eq!(
-            state.finalize().unwrap(),
-            Value::Float(OrderedFloat(30.0))
-        );
+        assert_eq!(state.finalize().unwrap(), Value::Float(OrderedFloat(30.0)));
     }
 
     #[test]
@@ -3774,10 +3910,7 @@ mod accumulator_tests {
         let mut state = AccumulatorState::new(&AccumulatorKind::Avg);
         state.accumulate(&Value::Int(10)).unwrap();
         state.accumulate(&Value::Int(20)).unwrap();
-        assert_eq!(
-            state.finalize().unwrap(),
-            Value::Float(OrderedFloat(15.0))
-        );
+        assert_eq!(state.finalize().unwrap(), Value::Float(OrderedFloat(15.0)));
     }
 
     #[test]
@@ -3890,10 +4023,7 @@ mod accumulator_tests {
         let na = NamedAggregate::new(
             Aggregate::GroupAs(
                 GroupAsAggregate::new(),
-                Named::Expression(
-                    Expression::Constant(Value::Null),
-                    None,
-                ),
+                Named::Expression(Expression::Constant(Value::Null), None),
             ),
             Some("grp".to_string()),
         );
@@ -3908,10 +4038,7 @@ mod accumulator_tests {
         state.accumulate(&Value::Int(10)).unwrap();
         state.accumulate(&Value::Null).unwrap();
         state.accumulate(&Value::Int(20)).unwrap();
-        assert_eq!(
-            state.finalize().unwrap(),
-            Value::Float(OrderedFloat(30.0))
-        );
+        assert_eq!(state.finalize().unwrap(), Value::Float(OrderedFloat(30.0)));
     }
 
     #[test]
@@ -3921,10 +4048,7 @@ mod accumulator_tests {
         state.accumulate(&Value::Null).unwrap();
         state.accumulate(&Value::Int(20)).unwrap();
         // Average of 10 and 20 = 15 (null skipped)
-        assert_eq!(
-            state.finalize().unwrap(),
-            Value::Float(OrderedFloat(15.0))
-        );
+        assert_eq!(state.finalize().unwrap(), Value::Float(OrderedFloat(15.0)));
     }
 
     #[test]
@@ -3961,8 +4085,14 @@ mod accumulator_tests {
 
     #[test]
     fn test_accumulator_merge_avg() {
-        let mut a = AccumulatorState::Avg { sum: OrderedFloat(10.0f64), count: 2 };
-        let b = AccumulatorState::Avg { sum: OrderedFloat(20.0f64), count: 3 };
+        let mut a = AccumulatorState::Avg {
+            sum: OrderedFloat(10.0f64),
+            count: 2,
+        };
+        let b = AccumulatorState::Avg {
+            sum: OrderedFloat(20.0f64),
+            count: 3,
+        };
         a.merge(&b);
         assert_eq!(a.finalize().unwrap(), Value::Float(OrderedFloat(6.0f32)));
     }
@@ -4002,8 +4132,16 @@ mod accumulator_tests {
     #[test]
     fn test_group_state_merge() {
         let defs = vec![
-            AggregateDef { kind: AccumulatorKind::CountStar, extraction: ExtractionStrategy::None, name: Some("cnt".to_string()) },
-            AggregateDef { kind: AccumulatorKind::Sum, extraction: ExtractionStrategy::None, name: Some("total".to_string()) },
+            AggregateDef {
+                kind: AccumulatorKind::CountStar,
+                extraction: ExtractionStrategy::None,
+                name: Some("cnt".to_string()),
+            },
+            AggregateDef {
+                kind: AccumulatorKind::Sum,
+                extraction: ExtractionStrategy::None,
+                name: Some("total".to_string()),
+            },
         ];
         let mut gs_a = GroupState::new(&defs);
         gs_a.accumulators[0] = AccumulatorState::CountStar(3);
@@ -4015,7 +4153,10 @@ mod accumulator_tests {
 
         gs_a.merge(&gs_b);
         assert_eq!(gs_a.accumulators[0].finalize().unwrap(), Value::Int(5));
-        assert_eq!(gs_a.accumulators[1].finalize().unwrap(), Value::Float(OrderedFloat(15.0f32)));
+        assert_eq!(
+            gs_a.accumulators[1].finalize().unwrap(),
+            Value::Float(OrderedFloat(15.0f32))
+        );
     }
 
     #[test]
@@ -4024,7 +4165,9 @@ mod accumulator_tests {
             Box::new(Formula::Constant(true)),
             Box::new(Formula::Predicate(
                 Relation::Equal,
-                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]))),
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                    "x".to_string(),
+                )]))),
                 Box::new(Expression::Constant(Value::Int(1))),
             )),
         );
@@ -4038,7 +4181,9 @@ mod accumulator_tests {
             Box::new(Formula::Constant(false)),
             Box::new(Formula::Predicate(
                 Relation::Equal,
-                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]))),
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                    "x".to_string(),
+                )]))),
                 Box::new(Expression::Constant(Value::Int(1))),
             )),
         );
@@ -4051,7 +4196,9 @@ mod accumulator_tests {
             Box::new(Formula::Constant(true)),
             Box::new(Formula::Predicate(
                 Relation::Equal,
-                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".to_string())]))),
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                    "x".to_string(),
+                )]))),
                 Box::new(Expression::Constant(Value::Int(1))),
             )),
         );

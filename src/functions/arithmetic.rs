@@ -1,6 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 use ordered_float::OrderedFloat;
 
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
@@ -51,7 +51,11 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 { Ok(Value::Null) } else { Ok(Value::Int(a / b)) }
+                if *b == 0 {
+                    Ok(Value::Null)
+                } else {
+                    Ok(Value::Int(a / b))
+                }
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() / b.into_inner()))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(*a as f32 / b.into_inner()))),
@@ -157,10 +161,22 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::Int(v) => Ok(Value::Int(if *v > 0 { 1 } else if *v < 0 { -1 } else { 0 })),
+            Value::Int(v) => Ok(Value::Int(if *v > 0 {
+                1
+            } else if *v < 0 {
+                -1
+            } else {
+                0
+            })),
             Value::Float(v) => {
                 let f = v.into_inner();
-                Ok(Value::Float(OrderedFloat(if f > 0.0 { 1.0 } else if f < 0.0 { -1.0 } else { 0.0 })))
+                Ok(Value::Float(OrderedFloat(if f > 0.0 {
+                    1.0
+                } else if f < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                })))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -287,7 +303,11 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 { Ok(Value::Null) } else { Ok(Value::Int(a % b)) }
+                if *b == 0 {
+                    Ok(Value::Null)
+                } else {
+                    Ok(Value::Int(a % b))
+                }
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() % b.into_inner()))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(*a as f32 % b.into_inner()))),
@@ -303,7 +323,11 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::Int(a), Value::Int(b)) => {
-                if *b == 0 { Ok(Value::Null) } else { Ok(Value::Int(a % b)) }
+                if *b == 0 {
+                    Ok(Value::Null)
+                } else {
+                    Ok(Value::Int(a % b))
+                }
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() % b.into_inner()))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(*a as f32 % b.into_inner()))),
@@ -412,7 +436,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::Float(v) => Ok(Value::Float(OrderedFloat(v.into_inner() * std::f32::consts::PI / 180.0))),
+            Value::Float(v) => Ok(Value::Float(OrderedFloat(
+                v.into_inner() * std::f32::consts::PI / 180.0,
+            ))),
             Value::Int(v) => Ok(Value::Float(OrderedFloat(*v as f32 * std::f32::consts::PI / 180.0))),
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -424,7 +450,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::Float(v) => Ok(Value::Float(OrderedFloat(v.into_inner() * 180.0 / std::f32::consts::PI))),
+            Value::Float(v) => Ok(Value::Float(OrderedFloat(
+                v.into_inner() * 180.0 / std::f32::consts::PI,
+            ))),
             Value::Int(v) => Ok(Value::Float(OrderedFloat(*v as f32 * 180.0 / std::f32::consts::PI))),
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -583,7 +611,10 @@ mod tests {
     #[test]
     fn test_plus_float() {
         let r = make_registry();
-        let result = r.call("Plus", &[Value::Float(OrderedFloat(1.5)), Value::Float(OrderedFloat(2.5))]);
+        let result = r.call(
+            "Plus",
+            &[Value::Float(OrderedFloat(1.5)), Value::Float(OrderedFloat(2.5))],
+        );
         assert_eq!(result, Ok(Value::Float(OrderedFloat(4.0))));
     }
 
@@ -630,7 +661,10 @@ mod tests {
     #[test]
     fn test_abs_float() {
         let r = make_registry();
-        assert_eq!(r.call("abs", &[Value::Float(OrderedFloat(-3.14))]), Ok(Value::Float(OrderedFloat(3.14))));
+        assert_eq!(
+            r.call("abs", &[Value::Float(OrderedFloat(-std::f32::consts::PI))]),
+            Ok(Value::Float(OrderedFloat(std::f32::consts::PI)))
+        );
     }
 
     #[test]
@@ -679,8 +713,11 @@ mod tests {
     fn test_round_two_args() {
         let r = make_registry();
         assert_eq!(
-            r.call("round", &[Value::Float(OrderedFloat(3.14159)), Value::Int(2)]),
-            Ok(Value::Float(OrderedFloat(3.14)))
+            r.call(
+                "round",
+                &[Value::Float(OrderedFloat(std::f32::consts::PI)), Value::Int(2)],
+            ),
+            Ok(Value::Float(OrderedFloat(314.0 / 100.0)))
         );
     }
 
@@ -693,20 +730,29 @@ mod tests {
     #[test]
     fn test_power() {
         let r = make_registry();
-        assert_eq!(r.call("power", &[Value::Int(2), Value::Int(3)]), Ok(Value::Float(OrderedFloat(8.0))));
+        assert_eq!(
+            r.call("power", &[Value::Int(2), Value::Int(3)]),
+            Ok(Value::Float(OrderedFloat(8.0)))
+        );
     }
 
     #[test]
     fn test_pow_alias() {
         let r = make_registry();
-        assert_eq!(r.call("pow", &[Value::Int(2), Value::Int(3)]), Ok(Value::Float(OrderedFloat(8.0))));
+        assert_eq!(
+            r.call("pow", &[Value::Int(2), Value::Int(3)]),
+            Ok(Value::Float(OrderedFloat(8.0)))
+        );
     }
 
     #[test]
     fn test_power_float() {
         let r = make_registry();
         assert_eq!(
-            r.call("power", &[Value::Float(OrderedFloat(2.0)), Value::Float(OrderedFloat(0.5))]),
+            r.call(
+                "power",
+                &[Value::Float(OrderedFloat(2.0)), Value::Float(OrderedFloat(0.5))]
+            ),
             Ok(Value::Float(OrderedFloat(2.0_f32.powf(0.5))))
         );
     }
@@ -732,7 +778,10 @@ mod tests {
     #[test]
     fn test_sqrt() {
         let r = make_registry();
-        assert_eq!(r.call("sqrt", &[Value::Float(OrderedFloat(9.0))]), Ok(Value::Float(OrderedFloat(3.0))));
+        assert_eq!(
+            r.call("sqrt", &[Value::Float(OrderedFloat(9.0))]),
+            Ok(Value::Float(OrderedFloat(3.0)))
+        );
     }
 
     #[test]
@@ -752,16 +801,31 @@ mod tests {
     #[test]
     fn test_sign_float() {
         let r = make_registry();
-        assert_eq!(r.call("sign", &[Value::Float(OrderedFloat(-2.5))]), Ok(Value::Float(OrderedFloat(-1.0))));
-        assert_eq!(r.call("sign", &[Value::Float(OrderedFloat(0.0))]), Ok(Value::Float(OrderedFloat(0.0))));
-        assert_eq!(r.call("sign", &[Value::Float(OrderedFloat(2.5))]), Ok(Value::Float(OrderedFloat(1.0))));
+        assert_eq!(
+            r.call("sign", &[Value::Float(OrderedFloat(-2.5))]),
+            Ok(Value::Float(OrderedFloat(-1.0)))
+        );
+        assert_eq!(
+            r.call("sign", &[Value::Float(OrderedFloat(0.0))]),
+            Ok(Value::Float(OrderedFloat(0.0)))
+        );
+        assert_eq!(
+            r.call("sign", &[Value::Float(OrderedFloat(2.5))]),
+            Ok(Value::Float(OrderedFloat(1.0)))
+        );
     }
 
     #[test]
     fn test_truncate() {
         let r = make_registry();
-        assert_eq!(r.call("truncate", &[Value::Float(OrderedFloat(2.9))]), Ok(Value::Int(2)));
-        assert_eq!(r.call("truncate", &[Value::Float(OrderedFloat(-2.9))]), Ok(Value::Int(-2)));
+        assert_eq!(
+            r.call("truncate", &[Value::Float(OrderedFloat(2.9))]),
+            Ok(Value::Int(2))
+        );
+        assert_eq!(
+            r.call("truncate", &[Value::Float(OrderedFloat(-2.9))]),
+            Ok(Value::Int(-2))
+        );
     }
 
     #[test]
@@ -773,7 +837,10 @@ mod tests {
     #[test]
     fn test_ln() {
         let r = make_registry();
-        assert_eq!(r.call("ln", &[Value::Float(OrderedFloat(1.0))]), Ok(Value::Float(OrderedFloat(0.0))));
+        assert_eq!(
+            r.call("ln", &[Value::Float(OrderedFloat(1.0))]),
+            Ok(Value::Float(OrderedFloat(0.0)))
+        );
     }
 
     #[test]
@@ -792,19 +859,28 @@ mod tests {
     #[test]
     fn test_log2() {
         let r = make_registry();
-        assert_eq!(r.call("log2", &[Value::Float(OrderedFloat(8.0))]), Ok(Value::Float(OrderedFloat(3.0))));
+        assert_eq!(
+            r.call("log2", &[Value::Float(OrderedFloat(8.0))]),
+            Ok(Value::Float(OrderedFloat(3.0)))
+        );
     }
 
     #[test]
     fn test_log10() {
         let r = make_registry();
-        assert_eq!(r.call("log10", &[Value::Float(OrderedFloat(100.0))]), Ok(Value::Float(OrderedFloat(2.0))));
+        assert_eq!(
+            r.call("log10", &[Value::Float(OrderedFloat(100.0))]),
+            Ok(Value::Float(OrderedFloat(2.0)))
+        );
     }
 
     #[test]
     fn test_exp() {
         let r = make_registry();
-        assert_eq!(r.call("exp", &[Value::Float(OrderedFloat(0.0))]), Ok(Value::Float(OrderedFloat(1.0))));
+        assert_eq!(
+            r.call("exp", &[Value::Float(OrderedFloat(0.0))]),
+            Ok(Value::Float(OrderedFloat(1.0)))
+        );
     }
 
     #[test]
@@ -817,7 +893,10 @@ mod tests {
     fn test_atan2() {
         let r = make_registry();
         assert_eq!(
-            r.call("atan2", &[Value::Float(OrderedFloat(1.0)), Value::Float(OrderedFloat(1.0))]),
+            r.call(
+                "atan2",
+                &[Value::Float(OrderedFloat(1.0)), Value::Float(OrderedFloat(1.0))]
+            ),
             Ok(Value::Float(OrderedFloat(1.0_f32.atan2(1.0))))
         );
     }
@@ -853,24 +932,48 @@ mod tests {
     #[test]
     fn test_is_nan() {
         let r = make_registry();
-        assert_eq!(r.call("is_nan", &[Value::Float(OrderedFloat(f32::NAN))]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("is_nan", &[Value::Float(OrderedFloat(1.0))]), Ok(Value::Boolean(false)));
+        assert_eq!(
+            r.call("is_nan", &[Value::Float(OrderedFloat(f32::NAN))]),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call("is_nan", &[Value::Float(OrderedFloat(1.0))]),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]
     fn test_is_finite() {
         let r = make_registry();
-        assert_eq!(r.call("is_finite", &[Value::Float(OrderedFloat(1.0))]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("is_finite", &[Value::Float(OrderedFloat(f32::INFINITY))]), Ok(Value::Boolean(false)));
+        assert_eq!(
+            r.call("is_finite", &[Value::Float(OrderedFloat(1.0))]),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call("is_finite", &[Value::Float(OrderedFloat(f32::INFINITY))]),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]
     fn test_is_infinite() {
         let r = make_registry();
-        assert_eq!(r.call("is_infinite", &[Value::Float(OrderedFloat(f32::INFINITY))]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("is_infinite", &[Value::Float(OrderedFloat(f32::NEG_INFINITY))]), Ok(Value::Boolean(true)));
-        assert_eq!(r.call("is_infinite", &[Value::Float(OrderedFloat(1.0))]), Ok(Value::Boolean(false)));
-        assert_eq!(r.call("is_infinite", &[Value::Float(OrderedFloat(f32::NAN))]), Ok(Value::Boolean(false)));
+        assert_eq!(
+            r.call("is_infinite", &[Value::Float(OrderedFloat(f32::INFINITY))]),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call("is_infinite", &[Value::Float(OrderedFloat(f32::NEG_INFINITY))]),
+            Ok(Value::Boolean(true))
+        );
+        assert_eq!(
+            r.call("is_infinite", &[Value::Float(OrderedFloat(1.0))]),
+            Ok(Value::Boolean(false))
+        );
+        assert_eq!(
+            r.call("is_infinite", &[Value::Float(OrderedFloat(f32::NAN))]),
+            Ok(Value::Boolean(false))
+        );
     }
 
     #[test]
@@ -950,7 +1053,7 @@ mod tests {
         match result {
             Ok(Value::Float(v)) => {
                 let f = v.into_inner();
-                assert!(f >= 0.0 && f < 1.0, "rand() should return [0.0, 1.0), got {}", f);
+                assert!((0.0..1.0).contains(&f), "rand() should return [0.0, 1.0), got {}", f);
             }
             other => panic!("Expected Float, got {:?}", other),
         }
@@ -963,7 +1066,7 @@ mod tests {
         match result {
             Ok(Value::Float(v)) => {
                 let f = v.into_inner();
-                assert!(f >= 0.0 && f < 1.0, "random() should return [0.0, 1.0), got {}", f);
+                assert!((0.0..1.0).contains(&f), "random() should return [0.0, 1.0), got {}", f);
             }
             other => panic!("Expected Float, got {:?}", other),
         }

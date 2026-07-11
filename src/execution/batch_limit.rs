@@ -16,7 +16,11 @@ impl BatchLimitOperator {
             names: child.schema().names.clone(),
             types: child.schema().types.clone(),
         };
-        Self { child, remaining: limit as usize, schema }
+        Self {
+            child,
+            remaining: limit as usize,
+            schema,
+        }
     }
 }
 
@@ -73,8 +77,8 @@ mod tests {
 
     #[test]
     fn test_limit_truncates() {
-        let batches: Vec<ColumnBatch> = (0..3).map(|i| {
-            ColumnBatch {
+        let batches: Vec<ColumnBatch> = (0..3)
+            .map(|i| ColumnBatch {
                 columns: vec![TypedColumn::Int32 {
                     data: PaddedVec::from_vec(vec![i; 10]),
                     null: Bitmap::all_set(10),
@@ -83,10 +87,13 @@ mod tests {
                 names: vec!["x".to_string()],
                 selection: SelectionVector::All,
                 len: 10,
-            }
-        }).collect();
+            })
+            .collect();
 
-        struct MultiBatch { batches: Vec<ColumnBatch>, schema: BatchSchema }
+        struct MultiBatch {
+            batches: Vec<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for MultiBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 if !self.batches.is_empty() {
@@ -95,14 +102,17 @@ mod tests {
                     Ok(None)
                 }
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
-        let mut limit = BatchLimitOperator::new(
-            Box::new(MultiBatch { batches, schema }), 15,
-        );
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
+        let mut limit = BatchLimitOperator::new(Box::new(MultiBatch { batches, schema }), 15);
 
         // First batch: 10 rows, all pass (15 - 10 = 5 remaining)
         let b1 = limit.next_batch().unwrap().unwrap();
@@ -129,18 +139,30 @@ mod tests {
             len: 3,
         };
 
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 Ok(self.batch.take())
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
         let mut limit = BatchLimitOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }), 3,
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
+            3,
         );
 
         let b = limit.next_batch().unwrap().unwrap();
@@ -151,7 +173,9 @@ mod tests {
     #[test]
     fn test_limit_with_selection() {
         let mut sel = Bitmap::all_unset(6);
-        sel.set(0); sel.set(2); sel.set(4); // 3 active rows
+        sel.set(0);
+        sel.set(2);
+        sel.set(4); // 3 active rows
         let batch = ColumnBatch {
             columns: vec![TypedColumn::Int32 {
                 data: PaddedVec::from_vec(vec![10, 20, 30, 40, 50, 60]),
@@ -163,18 +187,30 @@ mod tests {
             len: 6,
         };
 
-        struct OneBatch { batch: Option<ColumnBatch>, schema: BatchSchema }
+        struct OneBatch {
+            batch: Option<ColumnBatch>,
+            schema: BatchSchema,
+        }
         impl BatchStream for OneBatch {
             fn next_batch(&mut self) -> crate::execution::types::StreamResult<Option<ColumnBatch>> {
                 Ok(self.batch.take())
             }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
-        let schema = BatchSchema { names: vec!["x".to_string()], types: vec![ColumnType::Int32] };
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
         let mut limit = BatchLimitOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }), 2,
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
+            2,
         );
 
         let b = limit.next_batch().unwrap().unwrap();

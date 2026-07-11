@@ -13,7 +13,7 @@ pub mod datasource;
 pub mod field_analysis;
 pub mod field_parser;
 pub mod log_schema;
-pub mod stream;
 pub(crate) mod parallel;
 pub mod prefix_sort;
+pub mod stream;
 pub mod types;

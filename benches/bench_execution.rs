@@ -30,21 +30,13 @@ fn bench_execution_tier_a(c: &mut Criterion) {
     ];
 
     for (name, query) in &queries {
-        let data_source = ctypes::DataSource::File(
-            path.clone(),
-            "elb".to_string(),
-            "elb".to_string(),
-        );
+        let data_source = ctypes::DataSource::File(path.clone(), "elb".to_string(), "elb".to_string());
         let data_sources: ctypes::DataSourceRegistry = vec![("elb".to_string(), data_source)].into_iter().collect();
         let reg = registry.clone();
         group.bench_function(*name, |b| {
             b.iter(|| {
-                let result = logq::app::run_to_records_with_registry(
-                    black_box(query),
-                    data_sources.clone(),
-                    reg.clone(),
-                    1,
-                );
+                let result =
+                    logq::app::run_to_records_with_registry(black_box(query), data_sources.clone(), reg.clone(), 1);
                 let _ = black_box(result);
             });
         });
@@ -55,11 +47,7 @@ fn bench_execution_tier_a(c: &mut Criterion) {
 
 /// Tier B: Isolated operator benchmarks with synthetic data
 fn bench_execution_tier_b(c: &mut Criterion) {
-    let sizes: &[(usize, &str)] = &[
-        (1_000, "1K"),
-        (10_000, "10K"),
-        (100_000, "100K"),
-    ];
+    let sizes: &[(usize, &str)] = &[(1_000, "1K"), (10_000, "10K"), (100_000, "100K")];
 
     let registry = Arc::new(functions::register_all().unwrap());
 
@@ -79,15 +67,11 @@ fn bench_execution_tier_b(c: &mut Criterion) {
                         let source = InMemoryStream::new(data);
                         let named_list = vec![
                             Named::Expression(
-                                Expression::Variable(PathExpr::new(vec![
-                                    PathSegment::AttrName("col_s1".to_string()),
-                                ])),
+                                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("col_s1".to_string())])),
                                 Some("col_s1".to_string()),
                             ),
                             Named::Expression(
-                                Expression::Variable(PathExpr::new(vec![
-                                    PathSegment::AttrName("col_i".to_string()),
-                                ])),
+                                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("col_i".to_string())])),
                                 Some("col_i".to_string()),
                             ),
                         ];
@@ -122,9 +106,9 @@ fn bench_execution_tier_b(c: &mut Criterion) {
                         let source = InMemoryStream::new(data);
                         let formula = Formula::Predicate(
                             Relation::MoreThan,
-                            Box::new(Expression::Variable(PathExpr::new(vec![
-                                PathSegment::AttrName("col_i".to_string()),
-                            ]))),
+                            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                                "col_i".to_string(),
+                            )]))),
                             Box::new(Expression::Constant(Value::Int(500))),
                         );
                         let variables = ctypes::Variables::default();
@@ -185,21 +169,13 @@ fn bench_execution_tier_c(c: &mut Criterion) {
     ];
 
     for (name, query) in &queries {
-        let data_source = ctypes::DataSource::File(
-            path.clone(),
-            "elb".to_string(),
-            "elb".to_string(),
-        );
+        let data_source = ctypes::DataSource::File(path.clone(), "elb".to_string(), "elb".to_string());
         let data_sources: ctypes::DataSourceRegistry = vec![("elb".to_string(), data_source)].into_iter().collect();
         let reg = registry.clone();
         group.bench_function(*name, |b| {
             b.iter(|| {
-                let result = logq::app::run_to_records_with_registry(
-                    black_box(query),
-                    data_sources.clone(),
-                    reg.clone(),
-                    1,
-                );
+                let result =
+                    logq::app::run_to_records_with_registry(black_box(query), data_sources.clone(), reg.clone(), 1);
                 let _ = black_box(result);
             });
         });
@@ -208,5 +184,10 @@ fn bench_execution_tier_c(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_execution_tier_a, bench_execution_tier_b, bench_execution_tier_c);
+criterion_group!(
+    benches,
+    bench_execution_tier_a,
+    bench_execution_tier_b,
+    bench_execution_tier_c
+);
 criterion_main!(benches);

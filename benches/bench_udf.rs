@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use logq::functions::{self, FunctionRegistry};
-use logq::common::types::Value;
-use ordered_float::OrderedFloat;
 use linked_hash_map::LinkedHashMap;
+use logq::common::types::Value;
+use logq::functions::{self, FunctionRegistry};
+use ordered_float::OrderedFloat;
 
 fn build_registry() -> FunctionRegistry {
     functions::register_all().unwrap()
@@ -14,7 +14,7 @@ fn bench_udfs(c: &mut Criterion) {
     let mut group = c.benchmark_group("udf");
 
     // U1: upper("hello world") -- String
-    let args_upper = vec![Value::String("hello world".to_string())];
+    let args_upper = vec![Value::String("hello world".into())];
     group.bench_function("upper", |b| {
         b.iter(|| {
             let _ = black_box(registry.call("upper", black_box(&args_upper)));
@@ -22,10 +22,7 @@ fn bench_udfs(c: &mut Criterion) {
     });
 
     // U2: round(3.14159, 2) -- Arithmetic
-    let args_round = vec![
-        Value::Float(OrderedFloat::from(3.14159f32)),
-        Value::Int(2),
-    ];
+    let args_round = vec![Value::Float(OrderedFloat::from(std::f32::consts::PI)), Value::Int(2)];
     group.bench_function("round", |b| {
         b.iter(|| {
             let _ = black_box(registry.call("round", black_box(&args_round)));
@@ -34,10 +31,7 @@ fn bench_udfs(c: &mut Criterion) {
 
     // U3: date_part("month", <fixed DateTime>) -- DateTime
     let fixed_dt = chrono::DateTime::parse_from_rfc3339("2024-06-15T10:30:00+00:00").unwrap();
-    let args_datepart = vec![
-        Value::String("month".to_string()),
-        Value::DateTime(fixed_dt),
-    ];
+    let args_datepart = vec![Value::String("month".into()), Value::DateTime(fixed_dt)];
     group.bench_function("date_part", |b| {
         b.iter(|| {
             let _ = black_box(registry.call("date_part", black_box(&args_datepart)));
@@ -47,8 +41,11 @@ fn bench_udfs(c: &mut Criterion) {
     // U4: array_contains([1,2,3,4,5], 3) -- Array
     let args_array = vec![
         Value::Array(vec![
-            Value::Int(1), Value::Int(2), Value::Int(3),
-            Value::Int(4), Value::Int(5),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4),
+            Value::Int(5),
         ]),
         Value::Int(3),
     ];
@@ -70,10 +67,7 @@ fn bench_udfs(c: &mut Criterion) {
     });
 
     // U6: regexp_like("foo123", "\d+") -- Regex (steady-state cached)
-    let args_regex = vec![
-        Value::String("foo123".to_string()),
-        Value::String(r"\d+".to_string()),
-    ];
+    let args_regex = vec![Value::String("foo123".into()), Value::String(r"\d+".into())];
     // Warm the cache
     let _ = registry.call("regexp_like", &args_regex);
     group.bench_function("regexp_like", |b| {

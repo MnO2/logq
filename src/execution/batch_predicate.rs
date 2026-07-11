@@ -8,8 +8,10 @@ use crate::simd::bitmap::Bitmap;
 use crate::simd::filter_cache::evaluate_cached_two_pass;
 use crate::simd::kernels;
 use crate::syntax::ast::{PathExpr, PathSegment};
-use std::sync::Arc;
 use regex::Regex;
+use std::sync::Arc;
+
+type BytePredicate<'a> = dyn Fn(&[u8]) -> bool + 'a;
 
 /// Evaluate a physical Formula against a ColumnBatch, returning a Bitmap
 /// of rows where the predicate is true.
@@ -112,9 +114,7 @@ fn evaluate_batch_predicate_masked(
         | Formula::IsNull(_)
         | Formula::IsNotNull(_)
         | Formula::IsMissing(_)
-        | Formula::IsNotMissing(_) => {
-            evaluate_batch_predicate(formula, batch, variables, registry)
-        }
+        | Formula::IsNotMissing(_) => evaluate_batch_predicate(formula, batch, variables, registry),
         // Fallback patterns (Like, In, ExpressionPredicate, etc.) benefit from masking
         _ => evaluate_scalar_fallback_masked(formula, batch, variables, registry, pre_mask),
     }
@@ -132,12 +132,7 @@ fn evaluate_comparison(
     if let (Expression::Variable(path), Expression::Constant(const_val)) = (left, right) {
         if let Some(col_name) = single_attr_name(path) {
             if let Some(col_idx) = batch.names.iter().position(|n| n == col_name) {
-                return evaluate_column_vs_constant(
-                    &batch.columns[col_idx],
-                    relation,
-                    const_val,
-                    batch.len,
-                );
+                return evaluate_column_vs_constant(&batch.columns[col_idx], relation, const_val, batch.len);
             }
         }
     }
@@ -146,22 +141,13 @@ fn evaluate_comparison(
         if let Some(col_name) = single_attr_name(path) {
             if let Some(col_idx) = batch.names.iter().position(|n| n == col_name) {
                 let flipped = flip_relation(relation);
-                return evaluate_column_vs_constant(
-                    &batch.columns[col_idx],
-                    &flipped,
-                    const_val,
-                    batch.len,
-                );
+                return evaluate_column_vs_constant(&batch.columns[col_idx], &flipped, const_val, batch.len);
             }
         }
     }
     // Fallback to scalar
     evaluate_scalar_fallback(
-        &Formula::Predicate(
-            relation.clone(),
-            Box::new(left.clone()),
-            Box::new(right.clone()),
-        ),
+        &Formula::Predicate(relation.clone(), Box::new(left.clone()), Box::new(right.clone())),
         batch,
         variables,
         registry,
@@ -176,12 +162,17 @@ fn evaluate_column_vs_constant(
 ) -> StreamResult<Bitmap> {
     match (col, constant) {
         // String equality -- use filter cache for dedup
-        (TypedColumn::Utf8 { data, offsets, null, missing }, Value::String(needle))
-            if matches!(relation, Relation::Equal) =>
-        {
+        (
+            TypedColumn::Utf8 {
+                data,
+                offsets,
+                null,
+                missing,
+            },
+            Value::String(needle),
+        ) if matches!(relation, Relation::Equal) => {
             let needle_bytes = needle.as_bytes();
-            let bm =
-                evaluate_cached_two_pass(data, offsets, &|field: &[u8]| field == needle_bytes, len);
+            let bm = evaluate_cached_two_pass(data, offsets, &|field: &[u8]| field == needle_bytes, len);
             if col.all_present(len) {
                 Ok(bm)
             } else {
@@ -190,12 +181,17 @@ fn evaluate_column_vs_constant(
             }
         }
         // String not-equal
-        (TypedColumn::Utf8 { data, offsets, null, missing }, Value::String(needle))
-            if matches!(relation, Relation::NotEqual) =>
-        {
+        (
+            TypedColumn::Utf8 {
+                data,
+                offsets,
+                null,
+                missing,
+            },
+            Value::String(needle),
+        ) if matches!(relation, Relation::NotEqual) => {
             let needle_bytes = needle.as_bytes();
-            let bm =
-                evaluate_cached_two_pass(data, offsets, &|field: &[u8]| field != needle_bytes, len);
+            let bm = evaluate_cached_two_pass(data, offsets, &|field: &[u8]| field != needle_bytes, len);
             if col.all_present(len) {
                 Ok(bm)
             } else {
@@ -204,17 +200,21 @@ fn evaluate_column_vs_constant(
             }
         }
         // String ordering comparisons -- use filter cache with byte comparison
-        (TypedColumn::Utf8 { data, offsets, null, missing }, Value::String(needle))
-            if matches!(
-                relation,
-                Relation::MoreThan
-                    | Relation::LessThan
-                    | Relation::GreaterEqual
-                    | Relation::LessEqual
-            ) =>
+        (
+            TypedColumn::Utf8 {
+                data,
+                offsets,
+                null,
+                missing,
+            },
+            Value::String(needle),
+        ) if matches!(
+            relation,
+            Relation::MoreThan | Relation::LessThan | Relation::GreaterEqual | Relation::LessEqual
+        ) =>
         {
             let needle_bytes = needle.as_bytes();
-            let cmp_fn: Box<dyn Fn(&[u8]) -> bool> = match relation {
+            let cmp_fn: Box<BytePredicate<'_>> = match relation {
                 Relation::MoreThan => Box::new(|field: &[u8]| field > needle_bytes),
                 Relation::LessThan => Box::new(|field: &[u8]| field < needle_bytes),
                 Relation::GreaterEqual => Box::new(|field: &[u8]| field >= needle_bytes),
@@ -230,7 +230,16 @@ fn evaluate_column_vs_constant(
             }
         }
         // DictUtf8: compare needle against dictionary entries, then broadcast via codes
-        (TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing }, Value::String(needle)) => {
+        (
+            TypedColumn::DictUtf8 {
+                dict_data,
+                dict_offsets,
+                codes,
+                null,
+                missing,
+            },
+            Value::String(needle),
+        ) => {
             let needle_bytes = needle.as_bytes();
             let dict_size = dict_offsets.len() - 1;
             let mut match_table = vec![0u8; dict_size];
@@ -265,9 +274,7 @@ fn evaluate_column_vs_constant(
                 Relation::Equal => kernels::filter_eq_i32(data, threshold, &mut result_bytes),
                 Relation::MoreThan => kernels::filter_gt_i32(data, threshold, &mut result_bytes),
                 Relation::LessThan => kernels::filter_lt_i32(data, threshold, &mut result_bytes),
-                Relation::GreaterEqual => {
-                    kernels::filter_ge_i32(data, threshold, &mut result_bytes)
-                }
+                Relation::GreaterEqual => kernels::filter_ge_i32(data, threshold, &mut result_bytes),
                 Relation::LessEqual => kernels::filter_le_i32(data, threshold, &mut result_bytes),
                 Relation::NotEqual => kernels::filter_ne_i32(data, threshold, &mut result_bytes),
             }
@@ -335,12 +342,8 @@ fn compare_values_ord(
     match (left, right) {
         (Value::Int(l), Value::Int(r)) => cmp(l.cmp(r), Ordering::Equal),
         (Value::Float(l), Value::Float(r)) => cmp(l.cmp(r), Ordering::Equal),
-        (Value::Int(l), Value::Float(r)) => {
-            cmp(OrderedFloat::from(*l as f32).cmp(r), Ordering::Equal)
-        }
-        (Value::Float(l), Value::Int(r)) => {
-            cmp(l.cmp(&OrderedFloat::from(*r as f32)), Ordering::Equal)
-        }
+        (Value::Int(l), Value::Float(r)) => cmp(OrderedFloat::from(*l as f32).cmp(r), Ordering::Equal),
+        (Value::Float(l), Value::Int(r)) => cmp(l.cmp(&OrderedFloat::from(*r as f32)), Ordering::Equal),
         (Value::String(l), Value::String(r)) => cmp(l.cmp(r), Ordering::Equal),
         (Value::DateTime(l), Value::DateTime(r)) => cmp(l.cmp(r), Ordering::Equal),
         _ => false,
@@ -377,8 +380,8 @@ fn try_dict_like_pushdown(
     pattern_expr: &Expression,
     is_not_like: bool,
     batch: &ColumnBatch,
-    variables: &Variables,
-    registry: &Arc<FunctionRegistry>,
+    _variables: &Variables,
+    _registry: &Arc<FunctionRegistry>,
 ) -> StreamResult<Option<Bitmap>> {
     let col_name = match expr_to_column_name(expr) {
         Some(name) => name,
@@ -402,7 +405,13 @@ fn try_dict_like_pushdown(
 
     let col = &batch.columns[col_idx];
     match col {
-        TypedColumn::DictUtf8 { dict_data, dict_offsets, codes, null, missing } => {
+        TypedColumn::DictUtf8 {
+            dict_data,
+            dict_offsets,
+            codes,
+            null,
+            missing,
+        } => {
             let dict_size = dict_offsets.len() - 1;
             let mut match_table = vec![0u8; dict_size];
             for c in 0..dict_size {
@@ -422,13 +431,27 @@ fn try_dict_like_pushdown(
                 Ok(Some(bm.and(&valid)))
             }
         }
-        TypedColumn::Utf8 { data, offsets, null, missing } => {
+        TypedColumn::Utf8 {
+            data,
+            offsets,
+            null,
+            missing,
+        } => {
             // Use filter cache for Utf8 LIKE
-            let bm = evaluate_cached_two_pass(data, offsets, &|field: &[u8]| {
-                let s = std::str::from_utf8(field).unwrap_or("");
-                let matched = re.is_match(s);
-                if is_not_like { !matched } else { matched }
-            }, batch.len);
+            let bm = evaluate_cached_two_pass(
+                data,
+                offsets,
+                &|field: &[u8]| {
+                    let s = std::str::from_utf8(field).unwrap_or("");
+                    let matched = re.is_match(s);
+                    if is_not_like {
+                        !matched
+                    } else {
+                        matched
+                    }
+                },
+                batch.len,
+            );
             if col.all_present(batch.len) {
                 Ok(Some(bm))
             } else {
@@ -453,9 +476,8 @@ fn evaluate_scalar_fallback(
             let val = BatchToRowAdapter::extract_value(col, row);
             row_vars.insert(batch.names[i].clone(), val);
         }
-        match formula.evaluate(&row_vars, registry) {
-            Ok(Some(true)) => result.set(row),
-            _ => {}
+        if let Ok(Some(true)) = formula.evaluate(&row_vars, registry) {
+            result.set(row)
         }
     }
     Ok(result)
@@ -481,9 +503,8 @@ fn evaluate_scalar_fallback_masked(
             let val = BatchToRowAdapter::extract_value(col, row);
             row_vars.insert(batch.names[i].clone(), val);
         }
-        match formula.evaluate(&row_vars, registry) {
-            Ok(Some(true)) => result.set(row),
-            _ => {}
+        if let Ok(Some(true)) = formula.evaluate(&row_vars, registry) {
+            result.set(row)
         }
     }
     Ok(result)
@@ -578,14 +599,13 @@ mod tests {
         let batch = make_string_batch(&["200", "404", "200", "500"]);
         let formula = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("status".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "status".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let result =
-            evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+        let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 2);
         assert!(result.is_set(0));
         assert!(!result.is_set(1));
@@ -598,14 +618,13 @@ mod tests {
         let batch = make_int_batch(&[100, 200, 300, 400]);
         let formula = Formula::Predicate(
             Relation::MoreThan,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("code".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(200))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let result =
-            evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+        let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 2); // 300, 400
         assert!(!result.is_set(0));
         assert!(!result.is_set(1));
@@ -618,22 +637,21 @@ mod tests {
         let batch = make_int_batch(&[100, 200, 300, 400]);
         let f1 = Formula::Predicate(
             Relation::GreaterEqual,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("code".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(200))),
         );
         let f2 = Formula::Predicate(
             Relation::LessEqual,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("code".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(300))),
         );
         let formula = Formula::And(Box::new(f1), Box::new(f2));
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let result =
-            evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+        let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 2); // 200, 300
     }
 
@@ -642,15 +660,14 @@ mod tests {
         let batch = make_int_batch(&[100, 200, 300]);
         let inner = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("code".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(200))),
         );
         let formula = Formula::Not(Box::new(inner));
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let result =
-            evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+        let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 2); // 100, 300
     }
 
@@ -658,13 +675,7 @@ mod tests {
     fn test_evaluate_constant_true() {
         let batch = make_int_batch(&[1, 2, 3]);
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let result = evaluate_batch_predicate(
-            &Formula::Constant(true),
-            &batch,
-            &Variables::new(),
-            &registry,
-        )
-        .unwrap();
+        let result = evaluate_batch_predicate(&Formula::Constant(true), &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 3);
     }
 
@@ -672,13 +683,7 @@ mod tests {
     fn test_evaluate_constant_false() {
         let batch = make_int_batch(&[1, 2, 3]);
         let registry = Arc::new(crate::functions::register_all().unwrap());
-        let result = evaluate_batch_predicate(
-            &Formula::Constant(false),
-            &batch,
-            &Variables::new(),
-            &registry,
-        )
-        .unwrap();
+        let result = evaluate_batch_predicate(&Formula::Constant(false), &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 0);
     }
 
@@ -689,16 +694,16 @@ mod tests {
         let batch = make_int_batch(&[100, 200, 300, 400]);
         let left = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("code".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(999))),
         );
         let right = Formula::Predicate(
             Relation::MoreThan,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("code".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "code".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::Int(0))),
         );
         let formula = Formula::And(Box::new(left), Box::new(right));
@@ -749,9 +754,9 @@ mod tests {
         let batch = make_dict_string_batch(&["200", "404", "200", "500", "200"]);
         let formula = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("status".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "status".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
@@ -769,9 +774,9 @@ mod tests {
         let batch = make_dict_string_batch(&["200", "404", "200", "500"]);
         let formula = Formula::Predicate(
             Relation::NotEqual,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("status".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "status".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("200".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
@@ -786,9 +791,9 @@ mod tests {
         let batch = make_dict_string_batch(&["apple", "banana", "cherry", "apple", "date"]);
         let formula = Formula::Predicate(
             Relation::MoreThan,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("status".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "status".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("banana".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());
@@ -803,9 +808,9 @@ mod tests {
         let batch = make_dict_string_batch(&["200", "404", "200"]);
         let formula = Formula::Predicate(
             Relation::Equal,
-            Box::new(Expression::Variable(PathExpr::new(vec![
-                PathSegment::AttrName("status".to_string()),
-            ]))),
+            Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                "status".to_string(),
+            )]))),
             Box::new(Expression::Constant(Value::String("999".to_string().into()))),
         );
         let registry = Arc::new(crate::functions::register_all().unwrap());

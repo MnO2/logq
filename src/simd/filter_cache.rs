@@ -7,12 +7,7 @@ use hashbrown::HashMap;
 /// Pass 1: Deduplicate — collect unique values, test each once.
 /// Pass 2: Broadcast — look up cached result per row.
 /// Falls back to direct evaluation if cardinality > len/10 (10%).
-pub fn evaluate_cached_two_pass(
-    data: &[u8],
-    offsets: &[u32],
-    filter_fn: &dyn Fn(&[u8]) -> bool,
-    len: usize,
-) -> Bitmap {
+pub fn evaluate_cached_two_pass(data: &[u8], offsets: &[u32], filter_fn: &dyn Fn(&[u8]) -> bool, len: usize) -> Bitmap {
     if len == 0 {
         return Bitmap::all_unset(0);
     }
@@ -60,9 +55,7 @@ mod tests {
     #[test]
     fn test_filter_cache_string_equality() {
         let (data, offsets) = make_utf8_column();
-        let bm = evaluate_cached_two_pass(
-            &data, &offsets, &|field| field == b"200", offsets.len() - 1,
-        );
+        let bm = evaluate_cached_two_pass(&data, &offsets, &|field| field == b"200", offsets.len() - 1);
         // Rows 0,2,4,6 are "200"
         assert!(bm.is_set(0));
         assert!(!bm.is_set(1));
@@ -85,9 +78,7 @@ mod tests {
             data.extend_from_slice(s.as_bytes());
             offsets.push(data.len() as u32);
         }
-        let bm = evaluate_cached_two_pass(
-            &data, &offsets, &|field| field == b"val_50", offsets.len() - 1,
-        );
+        let bm = evaluate_cached_two_pass(&data, &offsets, &|field| field == b"val_50", offsets.len() - 1);
         assert_eq!(bm.count_ones(), 1);
         assert!(bm.is_set(50));
     }

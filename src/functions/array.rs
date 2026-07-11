@@ -148,9 +148,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
             let parts: Vec<String> = arr
                 .iter()
                 .filter_map(|v| match v {
-                    Value::Null | Value::Missing => {
-                        null_replacement.clone()
-                    }
+                    Value::Null | Value::Missing => null_replacement.clone(),
                     Value::String(s) => Some(s.to_string()),
                     Value::Int(i) => Some(i.to_string()),
                     Value::Float(f) => Some(f.to_string()),
@@ -159,7 +157,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 })
                 .collect();
 
-            Ok(Value::String(parts.join(&*delimiter).into()))
+            Ok(Value::String(parts.join(delimiter).into()))
         }),
     })?;
 
@@ -465,10 +463,7 @@ mod tests {
     fn test_array_join() {
         let r = make_registry();
         assert_eq!(
-            r.call(
-                "array_join",
-                &[str_array(&["a", "b", "c"]), Value::String(",".into())]
-            ),
+            r.call("array_join", &[str_array(&["a", "b", "c"]), Value::String(",".into())]),
             Ok(Value::String("a,b,c".into()))
         );
     }
@@ -476,11 +471,7 @@ mod tests {
     #[test]
     fn test_array_join_with_nulls_skip() {
         let r = make_registry();
-        let arr = Value::Array(vec![
-            Value::String("a".into()),
-            Value::Null,
-            Value::String("c".into()),
-        ]);
+        let arr = Value::Array(vec![Value::String("a".into()), Value::Null, Value::String("c".into())]);
         assert_eq!(
             r.call("array_join", &[arr, Value::String(",".into())]),
             Ok(Value::String("a,c".into()))
@@ -490,11 +481,7 @@ mod tests {
     #[test]
     fn test_array_join_with_null_replacement() {
         let r = make_registry();
-        let arr = Value::Array(vec![
-            Value::String("a".into()),
-            Value::Null,
-            Value::String("c".into()),
-        ]);
+        let arr = Value::Array(vec![Value::String("a".into()), Value::Null, Value::String("c".into())]);
         assert_eq!(
             r.call(
                 "array_join",
@@ -507,36 +494,24 @@ mod tests {
     #[test]
     fn test_array_min() {
         let r = make_registry();
-        assert_eq!(
-            r.call("array_min", &[int_array(&[3, 1, 2])]),
-            Ok(Value::Int(1))
-        );
+        assert_eq!(r.call("array_min", &[int_array(&[3, 1, 2])]), Ok(Value::Int(1)));
     }
 
     #[test]
     fn test_array_max() {
         let r = make_registry();
-        assert_eq!(
-            r.call("array_max", &[int_array(&[3, 1, 2])]),
-            Ok(Value::Int(3))
-        );
+        assert_eq!(r.call("array_max", &[int_array(&[3, 1, 2])]), Ok(Value::Int(3)));
     }
 
     #[test]
     fn test_array_position() {
         let r = make_registry();
         assert_eq!(
-            r.call(
-                "array_position",
-                &[int_array(&[10, 20, 30]), Value::Int(20)]
-            ),
+            r.call("array_position", &[int_array(&[10, 20, 30]), Value::Int(20)]),
             Ok(Value::Int(2))
         );
         assert_eq!(
-            r.call(
-                "array_position",
-                &[int_array(&[10, 20, 30]), Value::Int(99)]
-            ),
+            r.call("array_position", &[int_array(&[10, 20, 30]), Value::Int(99)]),
             Ok(Value::Int(0))
         );
     }
@@ -544,10 +519,7 @@ mod tests {
     #[test]
     fn test_cardinality() {
         let r = make_registry();
-        assert_eq!(
-            r.call("cardinality", &[int_array(&[1, 2, 3])]),
-            Ok(Value::Int(3))
-        );
+        assert_eq!(r.call("cardinality", &[int_array(&[1, 2, 3])]), Ok(Value::Int(3)));
     }
 
     #[test]
@@ -566,34 +538,21 @@ mod tests {
     fn test_flatten() {
         let r = make_registry();
         let nested = Value::Array(vec![int_array(&[1, 2]), int_array(&[3, 4])]);
-        assert_eq!(
-            r.call("flatten", &[nested]),
-            Ok(int_array(&[1, 2, 3, 4]))
-        );
+        assert_eq!(r.call("flatten", &[nested]), Ok(int_array(&[1, 2, 3, 4])));
     }
 
     #[test]
     fn test_flatten_mixed() {
         let r = make_registry();
-        let nested = Value::Array(vec![
-            int_array(&[1, 2]),
-            Value::Int(3),
-            int_array(&[4, 5]),
-        ]);
-        assert_eq!(
-            r.call("flatten", &[nested]),
-            Ok(int_array(&[1, 2, 3, 4, 5]))
-        );
+        let nested = Value::Array(vec![int_array(&[1, 2]), Value::Int(3), int_array(&[4, 5])]);
+        assert_eq!(r.call("flatten", &[nested]), Ok(int_array(&[1, 2, 3, 4, 5])));
     }
 
     #[test]
     fn test_array_intersect() {
         let r = make_registry();
         assert_eq!(
-            r.call(
-                "array_intersect",
-                &[int_array(&[1, 2, 3]), int_array(&[2, 3, 4])]
-            ),
+            r.call("array_intersect", &[int_array(&[1, 2, 3]), int_array(&[2, 3, 4])]),
             Ok(int_array(&[2, 3]))
         );
     }
@@ -601,10 +560,7 @@ mod tests {
     #[test]
     fn test_array_union() {
         let r = make_registry();
-        let result = r.call(
-            "array_union",
-            &[int_array(&[1, 2, 3]), int_array(&[2, 3, 4])],
-        );
+        let result = r.call("array_union", &[int_array(&[1, 2, 3]), int_array(&[2, 3, 4])]);
         assert_eq!(result, Ok(int_array(&[1, 2, 3, 4])));
     }
 
@@ -612,10 +568,7 @@ mod tests {
     fn test_array_except() {
         let r = make_registry();
         assert_eq!(
-            r.call(
-                "array_except",
-                &[int_array(&[1, 2, 3, 4]), int_array(&[2, 4])]
-            ),
+            r.call("array_except", &[int_array(&[1, 2, 3, 4]), int_array(&[2, 4])]),
             Ok(int_array(&[1, 3]))
         );
     }
@@ -624,10 +577,7 @@ mod tests {
     fn test_array_remove() {
         let r = make_registry();
         assert_eq!(
-            r.call(
-                "array_remove",
-                &[int_array(&[1, 2, 3, 2, 1]), Value::Int(2)]
-            ),
+            r.call("array_remove", &[int_array(&[1, 2, 3, 2, 1]), Value::Int(2)]),
             Ok(int_array(&[1, 3, 1]))
         );
     }
@@ -638,11 +588,7 @@ mod tests {
         assert_eq!(
             r.call(
                 "slice",
-                &[
-                    int_array(&[10, 20, 30, 40, 50]),
-                    Value::Int(2),
-                    Value::Int(3)
-                ]
+                &[int_array(&[10, 20, 30, 40, 50]), Value::Int(2), Value::Int(3)]
             ),
             Ok(int_array(&[20, 30, 40]))
         );
@@ -652,10 +598,7 @@ mod tests {
     fn test_slice_out_of_bounds() {
         let r = make_registry();
         assert_eq!(
-            r.call(
-                "slice",
-                &[int_array(&[10, 20, 30]), Value::Int(2), Value::Int(10)]
-            ),
+            r.call("slice", &[int_array(&[10, 20, 30]), Value::Int(2), Value::Int(10)]),
             Ok(int_array(&[20, 30]))
         );
     }
@@ -664,10 +607,7 @@ mod tests {
     fn test_array_null_propagation() {
         let r = make_registry();
         assert_eq!(r.call("array_sort", &[Value::Null]), Ok(Value::Null));
-        assert_eq!(
-            r.call("array_sort", &[Value::Missing]),
-            Ok(Value::Missing)
-        );
+        assert_eq!(r.call("array_sort", &[Value::Missing]), Ok(Value::Missing));
     }
 
     #[test]

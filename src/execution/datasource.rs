@@ -29,7 +29,9 @@ pub(crate) fn is_time_ordered(format: &str) -> Option<&'static str> {
 /// Fast UTC ISO 8601 timestamp parser for the common AWS log format.
 /// Handles timestamps like "2019-06-07T18:45:33.559871Z".
 /// Falls back to chrono::DateTime::parse_from_rfc3339 for other formats.
-pub(crate) fn parse_utc_timestamp(s: &str) -> result::Result<chrono::DateTime<chrono::FixedOffset>, chrono::ParseError> {
+pub(crate) fn parse_utc_timestamp(
+    s: &str,
+) -> result::Result<chrono::DateTime<chrono::FixedOffset>, chrono::ParseError> {
     let b = s.as_bytes();
     // Fast path: YYYY-MM-DDTHH:MM:SS[.fraction]Z format
     if b.len() >= 20 && b[b.len() - 1] == b'Z' && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' {
@@ -40,16 +42,14 @@ pub(crate) fn parse_utc_timestamp(s: &str) -> result::Result<chrono::DateTime<ch
         let min = parse_2digit(b, 14);
         let sec = parse_2digit(b, 17);
 
-        if let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(s_val)) =
-            (year, month, day, hour, min, sec)
-        {
+        if let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(s_val)) = (year, month, day, hour, min, sec) {
             let nanos = if b.len() > 20 && b[19] == b'.' {
                 // Parse fractional seconds
                 let frac_str = &s[20..b.len() - 1]; // between '.' and 'Z'
                 let mut nanos: u32 = 0;
                 let mut multiplier = 100_000_000u32;
                 for &ch in frac_str.as_bytes().iter().take(9) {
-                    if ch >= b'0' && ch <= b'9' {
+                    if ch.is_ascii_digit() {
                         nanos += (ch - b'0') as u32 * multiplier;
                         multiplier /= 10;
                     } else {
@@ -137,7 +137,9 @@ impl<'a> Iterator for LogTokenizer<'a> {
                 while self.pos < len && bytes[self.pos] != b'"' {
                     self.pos += 1;
                 }
-                if self.pos < len { self.pos += 1; } // skip closing quote
+                if self.pos < len {
+                    self.pos += 1;
+                } // skip closing quote
                 Some(&self.input[start..self.pos])
             }
             b'\'' => {
@@ -147,7 +149,9 @@ impl<'a> Iterator for LogTokenizer<'a> {
                 while self.pos < len && bytes[self.pos] != b'\'' {
                     self.pos += 1;
                 }
-                if self.pos < len { self.pos += 1; }
+                if self.pos < len {
+                    self.pos += 1;
+                }
                 Some(&self.input[start..self.pos])
             }
             b'[' => {
@@ -157,7 +161,9 @@ impl<'a> Iterator for LogTokenizer<'a> {
                 while self.pos < len && bytes[self.pos] != b']' {
                     self.pos += 1;
                 }
-                if self.pos < len { self.pos += 1; }
+                if self.pos < len {
+                    self.pos += 1;
+                }
                 Some(&self.input[start..self.pos])
             }
             _ => {
@@ -495,14 +501,10 @@ impl ClassicLoadBalancerLogField {
         AWS_ELB_DATATYPES.clone()
     }
 
-    pub(crate) fn datatype(idx: usize) -> DataType {
-        AWS_ELB_DATATYPES[idx].clone()
-    }
-
     pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
-        fields.into_iter().zip(datatypes.into_iter()).collect()
+        fields.into_iter().zip(datatypes).collect()
     }
 }
 
@@ -583,14 +585,10 @@ impl ApplicationLoadBalancerLogField {
         AWS_ALB_DATATYPES.clone()
     }
 
-    pub(crate) fn datatype(idx: usize) -> DataType {
-        AWS_ALB_DATATYPES[idx].clone()
-    }
-
     pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
-        fields.into_iter().zip(datatypes.into_iter()).collect()
+        fields.into_iter().zip(datatypes).collect()
     }
 }
 
@@ -669,14 +667,10 @@ impl S3Field {
         AWS_S3_DATATYPES.clone()
     }
 
-    pub(crate) fn datatype(idx: usize) -> DataType {
-        AWS_S3_DATATYPES[idx].clone()
-    }
-
     pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
-        fields.into_iter().zip(datatypes.into_iter()).collect()
+        fields.into_iter().zip(datatypes).collect()
     }
 }
 
@@ -727,14 +721,10 @@ impl SquidLogField {
         SQUID_DATATYPES.clone()
     }
 
-    pub(crate) fn datatype(idx: usize) -> DataType {
-        SQUID_DATATYPES[idx].clone()
-    }
-
     pub fn schema() -> Vec<(String, DataType)> {
         let fields = Self::field_names().clone();
         let datatypes = Self::datatypes();
-        fields.into_iter().zip(datatypes.into_iter()).collect()
+        fields.into_iter().zip(datatypes).collect()
     }
 }
 
@@ -774,7 +764,7 @@ impl ReaderBuilder {
     pub fn new(file_format: String) -> Self {
         ReaderBuilder {
             capacity: 64 * (1 << 10),
-            file_format: file_format,
+            file_format,
         }
     }
 
@@ -796,7 +786,7 @@ fn json_to_data_model(parsed: &JsonValue) -> Value {
             Value::Object(Box::new(t))
         }
         json::JsonValue::Array(a) => {
-            let a: Vec<Value> = a.iter().map(|v| json_to_data_model(v)).collect();
+            let a: Vec<Value> = a.iter().map(json_to_data_model).collect();
             Value::Array(a)
         }
         json::JsonValue::Null => Value::Null,
@@ -839,8 +829,16 @@ impl LogFormat {
 
     pub(crate) fn field_info(self) -> (&'static Vec<String>, &'static Vec<DataType>, usize) {
         match self {
-            LogFormat::Elb => (ClassicLoadBalancerLogField::field_names(), &*AWS_ELB_DATATYPES, ClassicLoadBalancerLogField::len()),
-            LogFormat::Alb => (ApplicationLoadBalancerLogField::field_names(), &*AWS_ALB_DATATYPES, ApplicationLoadBalancerLogField::len()),
+            LogFormat::Elb => (
+                ClassicLoadBalancerLogField::field_names(),
+                &*AWS_ELB_DATATYPES,
+                ClassicLoadBalancerLogField::len(),
+            ),
+            LogFormat::Alb => (
+                ApplicationLoadBalancerLogField::field_names(),
+                &*AWS_ALB_DATATYPES,
+                ApplicationLoadBalancerLogField::len(),
+            ),
             LogFormat::S3 => (S3Field::field_names(), &*AWS_S3_DATATYPES, S3Field::len()),
             LogFormat::Squid => (SquidLogField::field_names(), &*SQUID_DATATYPES, SquidLogField::len()),
             LogFormat::Jsonl => unreachable!(),
@@ -1046,13 +1044,14 @@ mod tests {
             Value::String("200".to_string().into()),
             Value::Int(34),
             Value::Int(366),
-            Value::HttpRequest(Box::new(common::types::parse_http_request("GET http://www.example.com:80/ HTTP/1.1").unwrap())),
+            Value::HttpRequest(Box::new(
+                common::types::parse_http_request("GET http://www.example.com:80/ HTTP/1.1").unwrap(),
+            )),
             Value::String("\"curl/7.46.0\"".to_string().into()),
             Value::String("-".to_string().into()),
             Value::String("-".to_string().into()),
             Value::String(
-                "arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067"
-                    .into(),
+                "arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067".into(),
             ),
             Value::String("\"Root=1-58337262-36d228ad5d99923122bbe354\"".to_string().into()),
             Value::String("\"-\"".to_string().into()),
@@ -1075,11 +1074,19 @@ mod tests {
         let record = reader.read_record().unwrap();
         let fields = S3Field::field_names();
         let data = vec![
-            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string().into()),
+            Value::String(
+                "79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be"
+                    .to_string()
+                    .into(),
+            ),
             Value::String("awsexamplebucket".to_string().into()),
             Value::String("[06/Feb/2019:00:00:38 +0000]".to_string().into()),
             Value::String("192.0.2.3".to_string().into()),
-            Value::String("79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be".to_string().into()),
+            Value::String(
+                "79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be"
+                    .to_string()
+                    .into(),
+            ),
             Value::String("3E57427F3EXAMPLE".to_string().into()),
             Value::String("REST.GET.VERSIONING".to_string().into()),
             Value::String("-".to_string().into()),
@@ -1093,7 +1100,11 @@ mod tests {
             Value::String("\"-\"".to_string().into()),
             Value::String("\"S3Console/0.4\"".to_string().into()),
             Value::String("-".to_string().into()),
-            Value::String("s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234=".to_string().into()),
+            Value::String(
+                "s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234="
+                    .to_string()
+                    .into(),
+            ),
             Value::String("SigV2".to_string().into()),
             Value::String("ECDHE-RSA-AES128-GCM-SHA256".to_string().into()),
             Value::String("AuthHeader".to_string().into()),
@@ -1134,7 +1145,7 @@ mod tests {
         let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record();
 
-        assert_eq!(record.is_err(), true)
+        assert!(record.is_err())
     }
 
     #[test]
@@ -1143,7 +1154,7 @@ mod tests {
         let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
         let record = reader.read_record();
 
-        assert_eq!(record.is_err(), true)
+        assert!(record.is_err())
     }
 
     #[test]

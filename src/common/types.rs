@@ -48,9 +48,9 @@ pub struct Host {
 
 impl fmt::Display for Host {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str(&*self.hostname)?;
+        fmt.write_str(&self.hostname)?;
         fmt.write_str(":")?;
-        fmt.write_str(&*self.port.to_string())?;
+        fmt.write_str(&self.port.to_string())?;
         Ok(())
     }
 }
@@ -58,7 +58,10 @@ impl fmt::Display for Host {
 pub(crate) fn parse_host(s: &str) -> ParseHostResult<Host> {
     if let Some((hostname_str, port_str)) = s.rsplit_once(':') {
         let port: u16 = port_str.parse::<u16>()?;
-        let host = Host { hostname: hostname_str.to_string(), port };
+        let host = Host {
+            hostname: hostname_str.to_string(),
+            port,
+        };
         Ok(host)
     } else {
         Err(ParseHostError::ParseHost)
@@ -267,30 +270,26 @@ fn apply_path_to_value(path_expr: &ast::PathExpr, from: usize, value: &Value) ->
     }
 
     match &path_expr.path_segments[from] {
-        ast::PathSegment::AttrName(attr_name) => {
-            match value {
-                Value::Object(o) => {
-                    if let Some(v) = o.get(attr_name) {
-                        apply_path_to_value(path_expr, from + 1, v)
-                    } else {
-                        Value::Missing
-                    }
+        ast::PathSegment::AttrName(attr_name) => match value {
+            Value::Object(o) => {
+                if let Some(v) = o.get(attr_name) {
+                    apply_path_to_value(path_expr, from + 1, v)
+                } else {
+                    Value::Missing
                 }
-                _ => Value::Missing,
             }
-        }
-        ast::PathSegment::ArrayIndex(_attr_name, idx) => {
-            match value {
-                Value::Array(a) => {
-                    if *idx < a.len() {
-                        apply_path_to_value(path_expr, from + 1, &a[*idx])
-                    } else {
-                        Value::Missing
-                    }
+            _ => Value::Missing,
+        },
+        ast::PathSegment::ArrayIndex(_attr_name, idx) => match value {
+            Value::Array(a) => {
+                if *idx < a.len() {
+                    apply_path_to_value(path_expr, from + 1, &a[*idx])
+                } else {
+                    Value::Missing
                 }
-                _ => Value::Missing,
             }
-        }
+            _ => Value::Missing,
+        },
         ast::PathSegment::Wildcard => {
             // [*] — iterate all elements of an array
             match value {
@@ -340,10 +339,10 @@ pub(crate) fn get_value_by_path_expr_scoped(
         ast::PathSegment::AttrName(attr_name) => {
             if let Some(val) = scoped_get(variables, scope, attr_name) {
                 if i + 1 == path_expr.path_segments.len() {
-                    return val.clone();
+                    val.clone()
                 } else {
                     // Use apply_path_to_value for remaining segments (handles wildcards too)
-                    return apply_path_to_value(path_expr, i + 1, val);
+                    apply_path_to_value(path_expr, i + 1, val)
                 }
             } else {
                 Value::Missing
@@ -355,9 +354,9 @@ pub(crate) fn get_value_by_path_expr_scoped(
                     Value::Array(a) => {
                         if *idx < a.len() {
                             if i + 1 == path_expr.path_segments.len() {
-                                return a[*idx].clone();
+                                a[*idx].clone()
                             } else {
-                                return apply_path_to_value(path_expr, i + 1, &a[*idx]);
+                                apply_path_to_value(path_expr, i + 1, &a[*idx])
                             }
                         } else {
                             Value::Missing
@@ -398,12 +397,6 @@ pub(crate) fn empty_variables() -> Variables {
 
 pub(crate) fn merge(left: &Variables, right: &Variables) -> Variables {
     left.iter().chain(right).map(|(k, v)| (k.clone(), v.clone())).collect()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IndexBinding {
-    pub(crate) idx: usize,
-    pub(crate) name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

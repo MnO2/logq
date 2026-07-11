@@ -4,6 +4,7 @@
 /// Mirrors the existing LogTokenizer but works on &[u8] and returns
 /// byte offsets instead of string slices. Uses memchr for SIMD-accelerated
 /// delimiter scanning.
+#[cfg(test)]
 pub(crate) fn tokenize_line(line: &[u8]) -> Vec<(usize, usize)> {
     let mut fields = Vec::with_capacity(20);
     let mut pos = 0;
@@ -126,6 +127,7 @@ pub(crate) fn tokenize_line_into(line: &[u8], fields: &mut Vec<(usize, usize)>) 
 }
 
 /// Tokenize a batch of lines, returning field byte ranges for each line.
+#[cfg(test)]
 pub(crate) fn tokenize_batch_lines(lines: &[Vec<u8>]) -> Vec<Vec<(usize, usize)>> {
     lines.iter().map(|line| tokenize_line(line)).collect()
 }

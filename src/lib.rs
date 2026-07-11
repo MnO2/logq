@@ -10,8 +10,8 @@ pub mod common;
 pub mod execution;
 pub mod functions;
 pub mod logical;
-pub mod syntax;
 pub mod simd;
+pub mod syntax;
 
 #[cfg(feature = "bench-internals")]
 pub mod bench_internals {
@@ -27,34 +27,30 @@ pub mod bench_internals {
 
     // Stream types
     pub use crate::execution::stream::{
-        Record, RecordStream, InMemoryStream,
-        MapStream, FilterStream, GroupByStream, LimitStream,
+        FilterStream, GroupByStream, InMemoryStream, LimitStream, MapStream, Record, RecordStream,
     };
 
     // Execution plan types
     pub use crate::execution::types::{
-        Named, Formula, Expression, Relation, Node,
-        NamedAggregate, Aggregate, Ordering, StreamResult,
+        Aggregate, Expression, Formula, Named, NamedAggregate, Node, Ordering, Relation, StreamResult,
     };
 
     // Datasource
-    pub use crate::execution::datasource::{ReaderBuilder, RecordRead, Reader};
+    pub use crate::execution::datasource::{Reader, ReaderBuilder, RecordRead};
 
     // Common types
-    pub use crate::common::types::{Value, Variables, VariableName, DataSource, DataSourceRegistry};
+    pub use crate::common::types::{DataSource, DataSourceRegistry, Value, VariableName, Variables};
 
     // PrefixSort
     pub use crate::execution::prefix_sort::PrefixSortEncoder;
 
     // SIMD foundation types
     pub use crate::simd::bitmap::Bitmap;
+    pub use crate::simd::filter_cache::evaluate_cached_two_pass;
+    pub use crate::simd::kernels::*;
     pub use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
     pub use crate::simd::selection::SelectionVector;
-    pub use crate::simd::kernels::*;
-    pub use crate::simd::filter_cache::evaluate_cached_two_pass;
 
     // Batch execution types
-    pub use crate::execution::batch::{
-        TypedColumn, ColumnBatch, BatchSchema, ColumnType, BatchStream, BATCH_SIZE,
-    };
+    pub use crate::execution::batch::{BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn, BATCH_SIZE};
 }

@@ -1,6 +1,8 @@
-use std::collections::HashMap;
-use crate::execution::types::{ExpressionResult, ExpressionError};
 use crate::common::types::Value;
+use crate::execution::types::{ExpressionError, ExpressionResult};
+use std::collections::HashMap;
+
+pub type ScalarFunction = dyn Fn(&[Value]) -> ExpressionResult<Value> + Send + Sync;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NullHandling {
@@ -19,7 +21,7 @@ pub struct FunctionDef {
     pub name: String,
     pub arity: Arity,
     pub null_handling: NullHandling,
-    pub func: Box<dyn Fn(&[Value]) -> ExpressionResult<Value> + Send + Sync>,
+    pub func: Box<ScalarFunction>,
 }
 
 // Manual Debug impl because closures don't implement Debug
@@ -39,7 +41,11 @@ pub enum RegistryError {
     #[error("Unknown function: {0}")]
     UnknownFunction(String),
     #[error("Function {name} expects {expected} argument(s), got {actual}")]
-    ArityMismatch { name: String, expected: String, actual: usize },
+    ArityMismatch {
+        name: String,
+        expected: String,
+        actual: usize,
+    },
     #[error("Duplicate function registration: {0}")]
     DuplicateFunction(String),
 }
@@ -54,6 +60,12 @@ impl std::fmt::Debug for FunctionRegistry {
         f.debug_struct("FunctionRegistry")
             .field("functions", &format!("<{} functions>", self.functions.len()))
             .finish()
+    }
+}
+
+impl Default for FunctionRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -75,7 +87,9 @@ impl FunctionRegistry {
 
     pub fn validate(&self, name: &str, arg_count: usize) -> Result<(), RegistryError> {
         let key = name.to_ascii_lowercase();
-        let def = self.functions.get(&key)
+        let def = self
+            .functions
+            .get(&key)
             .ok_or_else(|| RegistryError::UnknownFunction(name.to_string()))?;
 
         let valid = match &def.arity {
@@ -107,8 +121,7 @@ impl FunctionRegistry {
         } else {
             // Fallback to lowercase for backwards compatibility (tests, etc.)
             let key = name.to_ascii_lowercase();
-            self.functions.get(&key)
-                .ok_or(ExpressionError::UnknownFunction)?
+            self.functions.get(&key).ok_or(ExpressionError::UnknownFunction)?
         };
 
         match def.null_handling {
@@ -126,9 +139,7 @@ impl FunctionRegistry {
                 }
                 (def.func)(args)
             }
-            NullHandling::Custom => {
-                (def.func)(args)
-            }
+            NullHandling::Custom => (def.func)(args),
         }
     }
 }
@@ -141,15 +152,17 @@ mod tests {
     #[test]
     fn test_register_and_call() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "test_add".to_string(),
-            arity: Arity::Exact(2),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|args| match (&args[0], &args[1]) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-                _ => Err(ExpressionError::InvalidArguments),
-            }),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "test_add".to_string(),
+                arity: Arity::Exact(2),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|args| match (&args[0], &args[1]) {
+                    (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                    _ => Err(ExpressionError::InvalidArguments),
+                }),
+            })
+            .unwrap();
 
         let result = registry.call("test_add", &[Value::Int(1), Value::Int(2)]);
         assert_eq!(result, Ok(Value::Int(3)));
@@ -158,12 +171,14 @@ mod tests {
     #[test]
     fn test_case_insensitive_lookup() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "MyFunc".to_string(),
-            arity: Arity::Exact(1),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|args| Ok(args[0].clone())),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "MyFunc".to_string(),
+                arity: Arity::Exact(1),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|args| Ok(args[0].clone())),
+            })
+            .unwrap();
 
         let result = registry.call("MYFUNC", &[Value::Int(1)]);
         assert_eq!(result, Ok(Value::Int(1)));
@@ -172,46 +187,38 @@ mod tests {
     #[test]
     fn test_null_propagation_missing_precedence() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "f".to_string(),
-            arity: Arity::Exact(2),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|_| Ok(Value::Int(99))),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "f".to_string(),
+                arity: Arity::Exact(2),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|_| Ok(Value::Int(99))),
+            })
+            .unwrap();
 
         // Missing takes precedence over Null
-        assert_eq!(
-            registry.call("f", &[Value::Missing, Value::Null]),
-            Ok(Value::Missing)
-        );
-        assert_eq!(
-            registry.call("f", &[Value::Null, Value::Missing]),
-            Ok(Value::Missing)
-        );
+        assert_eq!(registry.call("f", &[Value::Missing, Value::Null]), Ok(Value::Missing));
+        assert_eq!(registry.call("f", &[Value::Null, Value::Missing]), Ok(Value::Missing));
         // Null alone returns Null
-        assert_eq!(
-            registry.call("f", &[Value::Null, Value::Int(1)]),
-            Ok(Value::Null)
-        );
+        assert_eq!(registry.call("f", &[Value::Null, Value::Int(1)]), Ok(Value::Null));
         // No null/missing -> calls function
-        assert_eq!(
-            registry.call("f", &[Value::Int(1), Value::Int(2)]),
-            Ok(Value::Int(99))
-        );
+        assert_eq!(registry.call("f", &[Value::Int(1), Value::Int(2)]), Ok(Value::Int(99)));
     }
 
     #[test]
     fn test_custom_null_handling() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "custom".to_string(),
-            arity: Arity::Exact(1),
-            null_handling: NullHandling::Custom,
-            func: Box::new(|args| match &args[0] {
-                Value::Null => Ok(Value::String("was_null".to_string().into())),
-                other => Ok(other.clone()),
-            }),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "custom".to_string(),
+                arity: Arity::Exact(1),
+                null_handling: NullHandling::Custom,
+                func: Box::new(|args| match &args[0] {
+                    Value::Null => Ok(Value::String("was_null".to_string().into())),
+                    other => Ok(other.clone()),
+                }),
+            })
+            .unwrap();
 
         assert_eq!(
             registry.call("custom", &[Value::Null]),
@@ -228,12 +235,14 @@ mod tests {
     #[test]
     fn test_validate_arity_mismatch() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "f".to_string(),
-            arity: Arity::Exact(2),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|_| Ok(Value::Null)),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "f".to_string(),
+                arity: Arity::Exact(2),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|_| Ok(Value::Null)),
+            })
+            .unwrap();
 
         assert!(registry.validate("f", 2).is_ok());
         assert!(registry.validate("f", 3).is_err());
@@ -242,12 +251,14 @@ mod tests {
     #[test]
     fn test_validate_variadic_arity() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "f".to_string(),
-            arity: Arity::Variadic(1),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|_| Ok(Value::Null)),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "f".to_string(),
+                arity: Arity::Variadic(1),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|_| Ok(Value::Null)),
+            })
+            .unwrap();
 
         assert!(registry.validate("f", 0).is_err());
         assert!(registry.validate("f", 1).is_ok());
@@ -257,12 +268,14 @@ mod tests {
     #[test]
     fn test_validate_range_arity() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "f".to_string(),
-            arity: Arity::Range(2, 3),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|_| Ok(Value::Null)),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "f".to_string(),
+                arity: Arity::Range(2, 3),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|_| Ok(Value::Null)),
+            })
+            .unwrap();
 
         assert!(registry.validate("f", 1).is_err());
         assert!(registry.validate("f", 2).is_ok());
@@ -273,12 +286,14 @@ mod tests {
     #[test]
     fn test_duplicate_registration_error() {
         let mut registry = FunctionRegistry::new();
-        registry.register(FunctionDef {
-            name: "f".to_string(),
-            arity: Arity::Exact(1),
-            null_handling: NullHandling::Propagate,
-            func: Box::new(|_| Ok(Value::Null)),
-        }).unwrap();
+        registry
+            .register(FunctionDef {
+                name: "f".to_string(),
+                arity: Arity::Exact(1),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|_| Ok(Value::Null)),
+            })
+            .unwrap();
 
         let result = registry.register(FunctionDef {
             name: "f".to_string(),

@@ -4,7 +4,6 @@ use crate::common::types::Value;
 use crate::execution::batch::*;
 use crate::execution::types::{Ordering, StreamResult};
 use crate::simd::bitmap::Bitmap;
-use crate::simd::padded_vec::PaddedVec;
 use crate::simd::selection::SelectionVector;
 use crate::syntax::ast::{PathExpr, PathSegment};
 use ordered_float::OrderedFloat;
@@ -24,11 +23,7 @@ pub(crate) struct BatchOrderByOperator {
 }
 
 impl BatchOrderByOperator {
-    pub fn new(
-        child: Box<dyn BatchStream>,
-        sort_columns: Vec<PathExpr>,
-        orderings: Vec<Ordering>,
-    ) -> Self {
+    pub fn new(child: Box<dyn BatchStream>, sort_columns: Vec<PathExpr>, orderings: Vec<Ordering>) -> Self {
         let schema = BatchSchema {
             names: child.schema().names.clone(),
             types: child.schema().types.clone(),
@@ -70,13 +65,17 @@ impl BatchOrderByOperator {
         }
 
         // Phase 2: Resolve sort column indices
-        let sort_col_indices: Vec<Option<usize>> = self.sort_columns.iter().map(|path| {
-            if let Some(PathSegment::AttrName(name)) = path.path_segments.last() {
-                self.schema.names.iter().position(|n| n == name)
-            } else {
-                None
-            }
-        }).collect();
+        let sort_col_indices: Vec<Option<usize>> = self
+            .sort_columns
+            .iter()
+            .map(|path| {
+                if let Some(PathSegment::AttrName(name)) = path.path_segments.last() {
+                    self.schema.names.iter().position(|n| n == name)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Phase 3: Build permutation index and sort
         let mut indices: Vec<usize> = (0..total_rows).collect();
@@ -103,10 +102,10 @@ impl BatchOrderByOperator {
 
         // Phase 4: Scatter into sorted order and emit as batches
         let mut sorted_values: Vec<Vec<Value>> = Vec::with_capacity(num_cols);
-        for col_idx in 0..num_cols {
+        for values in all_values.iter().take(num_cols) {
             let mut col_data = Vec::with_capacity(total_rows);
             for &idx in &indices {
-                col_data.push(all_values[col_idx][idx].clone());
+                col_data.push(values[idx].clone());
             }
             sorted_values.push(col_data);
         }
@@ -116,8 +115,8 @@ impl BatchOrderByOperator {
         while offset < total_rows {
             let chunk_len = (total_rows - offset).min(BATCH_SIZE);
             let mut columns = Vec::with_capacity(num_cols);
-            for col_idx in 0..num_cols {
-                let chunk: Vec<Value> = sorted_values[col_idx][offset..offset + chunk_len].to_vec();
+            for values in sorted_values.iter().take(num_cols) {
+                let chunk: Vec<Value> = values[offset..offset + chunk_len].to_vec();
                 columns.push(TypedColumn::Mixed {
                     data: chunk,
                     null: Bitmap::all_set(chunk_len),
@@ -230,7 +229,10 @@ mod tests {
 
         let sort_col = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
         let mut op = BatchOrderByOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec![sort_col],
             vec![Ordering::Asc],
         );
@@ -267,7 +269,10 @@ mod tests {
 
         let sort_col = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
         let mut op = BatchOrderByOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec![sort_col],
             vec![Ordering::Desc],
         );
@@ -305,7 +310,10 @@ mod tests {
 
         let sort_col = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
         let mut op = BatchOrderByOperator::new(
-            Box::new(OneBatch { batch: Some(batch), schema }),
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
             vec![sort_col],
             vec![Ordering::Asc],
         );
@@ -326,19 +334,21 @@ mod tests {
             names: vec!["x".to_string()],
             types: vec![ColumnType::Int32],
         };
-        struct Empty { schema: BatchSchema }
+        struct Empty {
+            schema: BatchSchema,
+        }
         impl BatchStream for Empty {
-            fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> { Ok(None) }
-            fn schema(&self) -> &BatchSchema { &self.schema }
+            fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+                Ok(None)
+            }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
             fn close(&self) {}
         }
 
         let sort_col = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
-        let mut op = BatchOrderByOperator::new(
-            Box::new(Empty { schema }),
-            vec![sort_col],
-            vec![Ordering::Asc],
-        );
+        let mut op = BatchOrderByOperator::new(Box::new(Empty { schema }), vec![sort_col], vec![Ordering::Asc]);
 
         assert!(op.next_batch().unwrap().is_none());
     }

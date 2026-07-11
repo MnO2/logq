@@ -3,6 +3,10 @@
 ## Current Status
 Phase 4 complete. All phases done.
 
+## Improvement Roadmap (2026-07-11)
+
+- **WS1:** Cleared all compiler and Clippy warnings, restored all-target benchmark compilation, and modernized CI with current GitHub Actions, strict formatting/Clippy gates, an all-features check, and Linux/macOS/Windows tests.
+
 ## Completed Tasks
 
 ### Phase 0: Code Cleanup (2026-04-04)

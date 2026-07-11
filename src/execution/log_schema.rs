@@ -13,7 +13,11 @@ impl LogSchema {
     pub fn from_format(format_str: &str) -> Self {
         let format = LogFormat::from_str(format_str);
         let (field_names, datatypes, field_count) = format.field_info();
-        Self { field_names, datatypes, field_count }
+        Self {
+            field_names,
+            datatypes,
+            field_count,
+        }
     }
 
     pub fn field_count(&self) -> usize {
@@ -34,16 +38,9 @@ impl LogSchema {
 
     /// Returns true if this field type requires scalar per-row parsing
     /// (Host, HttpRequest) and cannot be used in pushed-down predicates.
+    #[cfg(test)]
     pub fn is_mixed_type(&self, idx: usize) -> bool {
         matches!(self.datatypes[idx], DataType::Host | DataType::HttpRequest)
-    }
-
-    pub fn field_names_slice(&self) -> &[String] {
-        self.field_names
-    }
-
-    pub fn datatypes_slice(&self) -> &[DataType] {
-        self.datatypes
     }
 }
 

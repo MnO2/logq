@@ -1,6 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
-use crate::functions::registry::{FunctionDef, FunctionRegistry, Arity, NullHandling, RegistryError};
+use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
     // bitwise_and(a, b) → a & b
@@ -98,19 +98,28 @@ mod tests {
     #[test]
     fn test_bitwise_and() {
         let r = make_registry();
-        assert_eq!(r.call("bitwise_and", &[Value::Int(0b1100), Value::Int(0b1010)]), Ok(Value::Int(0b1000)));
+        assert_eq!(
+            r.call("bitwise_and", &[Value::Int(0b1100), Value::Int(0b1010)]),
+            Ok(Value::Int(0b1000))
+        );
     }
 
     #[test]
     fn test_bitwise_or() {
         let r = make_registry();
-        assert_eq!(r.call("bitwise_or", &[Value::Int(0b1100), Value::Int(0b1010)]), Ok(Value::Int(0b1110)));
+        assert_eq!(
+            r.call("bitwise_or", &[Value::Int(0b1100), Value::Int(0b1010)]),
+            Ok(Value::Int(0b1110))
+        );
     }
 
     #[test]
     fn test_bitwise_xor() {
         let r = make_registry();
-        assert_eq!(r.call("bitwise_xor", &[Value::Int(0b1100), Value::Int(0b1010)]), Ok(Value::Int(0b0110)));
+        assert_eq!(
+            r.call("bitwise_xor", &[Value::Int(0b1100), Value::Int(0b1010)]),
+            Ok(Value::Int(0b0110))
+        );
     }
 
     #[test]
@@ -129,19 +138,28 @@ mod tests {
     #[test]
     fn test_bitwise_shift_left() {
         let r = make_registry();
-        assert_eq!(r.call("bitwise_shift_left", &[Value::Int(1), Value::Int(3)]), Ok(Value::Int(8)));
+        assert_eq!(
+            r.call("bitwise_shift_left", &[Value::Int(1), Value::Int(3)]),
+            Ok(Value::Int(8))
+        );
     }
 
     #[test]
     fn test_bitwise_shift_right() {
         let r = make_registry();
-        assert_eq!(r.call("bitwise_shift_right", &[Value::Int(8), Value::Int(2)]), Ok(Value::Int(2)));
+        assert_eq!(
+            r.call("bitwise_shift_right", &[Value::Int(8), Value::Int(2)]),
+            Ok(Value::Int(2))
+        );
     }
 
     #[test]
     fn test_bitwise_null_propagation() {
         let r = make_registry();
         assert_eq!(r.call("bitwise_and", &[Value::Null, Value::Int(1)]), Ok(Value::Null));
-        assert_eq!(r.call("bitwise_and", &[Value::Missing, Value::Int(1)]), Ok(Value::Missing));
+        assert_eq!(
+            r.call("bitwise_and", &[Value::Missing, Value::Int(1)]),
+            Ok(Value::Missing)
+        );
     }
 }

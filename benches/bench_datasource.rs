@@ -3,7 +3,11 @@ use logq::bench_internals::*;
 
 fn load_and_replicate(path: &str, min_lines: usize) -> (Vec<String>, usize) {
     let content = std::fs::read_to_string(path).unwrap();
-    let lines: Vec<String> = content.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
+    let lines: Vec<String> = content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
     let original_count = lines.len();
     if original_count >= min_lines {
         return (lines, original_count);
