@@ -225,7 +225,7 @@ pub fn run_to_records(
     data_sources: common::types::DataSourceRegistry,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
+    let (rest_of_str, q) = syntax::parser::query(query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }
@@ -253,7 +253,7 @@ pub fn run_to_records_with_registry(
     registry: Arc<functions::FunctionRegistry>,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let (rest_of_str, q) = syntax::parser::query(&query_str)?;
+    let (rest_of_str, q) = syntax::parser::query(query_str)?;
     if !rest_of_str.is_empty() {
         return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
     }

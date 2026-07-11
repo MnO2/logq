@@ -7,7 +7,7 @@ Phase 4 complete. All phases done.
 
 - **WS1:** Cleared all compiler and Clippy warnings, restored all-target benchmark compilation, and modernized CI with current GitHub Actions, strict formatting/Clippy gates, an all-features check, and Linux/macOS/Windows tests.
 - **WS2:** Added transparent gzip input plus deterministic glob and comma-list expansion for tables. Mixed compressed/plain shards are supported, while eligible plain files retain per-file mmap scanning.
-- **WS3:** Migrated from clap 2's YAML configuration to clap 4's derive API, with version metadata sourced directly from `Cargo.toml`. Replaced the unmaintained `json` crate with `serde_json`, preserving JSONL field order and making nested objects/arrays round-trip through JSON output. Adopted Rust edition 2024 with a documented and CI-tested Rust 1.85 MSRV.
+- **WS3:** Migrated from clap 2's YAML configuration to clap 4's derive API, with version metadata sourced directly from `Cargo.toml`. Replaced the unmaintained `json` crate with `serde_json`, preserving JSONL field order and making nested objects/arrays round-trip through JSON output. Adopted Rust edition 2024 with a documented and CI-tested Rust 1.85 MSRV. Updated the remaining dependency graph to the newest MSRV-compatible releases, removed an unused direct `ahash` dependency, and modernized chrono/criterion call sites.
 
 ## Completed Tasks
 

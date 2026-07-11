@@ -1,3 +1,6 @@
+// Not every benchmark binary uses the shared synthetic-record generator.
+#![allow(dead_code)]
+
 use logq::bench_internals::*;
 use ordered_float::OrderedFloat;
 use rand::prelude::*;

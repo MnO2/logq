@@ -325,9 +325,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
             Value::Int(epoch) => {
-                let naive = chrono::NaiveDateTime::from_timestamp_opt(*epoch as i64, 0)
-                    .ok_or(ExpressionError::InvalidArguments)?;
-                let fixed = chrono::DateTime::<chrono::FixedOffset>::from_utc(naive, chrono::FixedOffset::east(0));
+                let fixed = chrono::DateTime::from_timestamp(i64::from(*epoch), 0)
+                    .ok_or(ExpressionError::InvalidArguments)?
+                    .fixed_offset();
                 Ok(Value::DateTime(fixed))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -350,11 +350,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         name: "now".to_string(),
         arity: Arity::Exact(0),
         null_handling: NullHandling::Propagate,
-        func: Box::new(|_args| {
-            let utc_now = chrono::Utc::now();
-            let fixed = utc_now.with_timezone(&chrono::FixedOffset::east(0));
-            Ok(Value::DateTime(fixed))
-        }),
+        func: Box::new(|_args| Ok(Value::DateTime(chrono::Utc::now().fixed_offset()))),
     })?;
 
     Ok(())

@@ -1,8 +1,9 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use linked_hash_map::LinkedHashMap;
 use logq::common::types::Value;
 use logq::functions::{self, FunctionRegistry};
 use ordered_float::OrderedFloat;
+use std::hint::black_box;
 
 fn build_registry() -> FunctionRegistry {
     functions::register_all().unwrap()

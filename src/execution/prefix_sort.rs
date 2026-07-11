@@ -468,12 +468,12 @@ mod tests {
     fn test_encode_datetime_ordering() {
         use chrono::{FixedOffset, TimeZone};
 
-        let utc = FixedOffset::east(0);
+        let utc = FixedOffset::east_opt(0).unwrap();
 
-        let t0 = utc.ymd(1960, 1, 1).and_hms(0, 0, 0);
-        let t1 = utc.ymd(2020, 1, 1).and_hms(0, 0, 0);
-        let t2 = utc.ymd(2025, 6, 15).and_hms(12, 0, 0);
-        let t3 = utc.ymd(2026, 1, 1).and_hms(0, 0, 0);
+        let t0 = utc.with_ymd_and_hms(1960, 1, 1, 0, 0, 0).unwrap();
+        let t1 = utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+        let t2 = utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+        let t3 = utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
 
         let mut buf0 = [0u8; 8];
         let mut buf1 = [0u8; 8];

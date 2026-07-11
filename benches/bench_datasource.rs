@@ -1,5 +1,6 @@
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use logq::bench_internals::*;
+use std::hint::black_box;
 
 fn load_and_replicate(path: &str, min_lines: usize) -> (Vec<String>, usize) {
     let content = std::fs::read_to_string(path).unwrap();
@@ -12,7 +13,7 @@ fn load_and_replicate(path: &str, min_lines: usize) -> (Vec<String>, usize) {
     if original_count >= min_lines {
         return (lines, original_count);
     }
-    let reps = (min_lines + original_count - 1) / original_count;
+    let reps = min_lines.div_ceil(original_count);
     let mut replicated = Vec::with_capacity(reps * original_count);
     for _ in 0..reps {
         replicated.extend(lines.iter().cloned());

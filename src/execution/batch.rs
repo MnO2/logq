@@ -293,8 +293,9 @@ impl BatchToRowAdapter {
                 let micros = data[row];
                 let secs = micros / 1_000_000;
                 let nanos = ((micros % 1_000_000) * 1000) as u32;
-                let naive = chrono::NaiveDateTime::from_timestamp_opt(secs, nanos).expect("invalid timestamp");
-                let fixed = chrono::DateTime::<chrono::FixedOffset>::from_utc(naive, chrono::FixedOffset::east(0));
+                let fixed = chrono::DateTime::from_timestamp(secs, nanos)
+                    .expect("invalid timestamp")
+                    .fixed_offset();
                 Value::DateTime(fixed)
             }
             TypedColumn::Mixed { data, null, missing } => {

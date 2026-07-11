@@ -1,3 +1,6 @@
+// Each benchmark binary uses a different subset of the shared query catalog.
+#![allow(dead_code)]
+
 /// Parser benchmark queries -- graduated ladder
 pub const PARSE_L1: &str = "SELECT a FROM t";
 pub const PARSE_L2: &str = "SELECT a, b, c FROM t WHERE a > 10";
