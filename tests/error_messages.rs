@@ -28,42 +28,42 @@ fn representative_failures_have_stable_diagnostic_categories() {
         ErrorCase {
             name: "misspelled_select",
             query: "selec * from it",
-            expected: "Syntax Error",
+            expected: "error: could not parse query",
         },
         ErrorCase {
             name: "missing_projection",
             query: "select from it",
-            expected: "Syntax Error",
+            expected: "error: could not parse query",
         },
         ErrorCase {
             name: "missing_from",
             query: "select * it",
-            expected: "Syntax Error",
+            expected: "error: could not parse query",
         },
         ErrorCase {
             name: "unbalanced_parenthesis",
             query: "select (a from it",
-            expected: "Syntax Error",
+            expected: "error: could not parse query",
         },
         ErrorCase {
             name: "dangling_where",
             query: "select * from it where",
-            expected: "leftover",
+            expected: "error: unexpected input",
         },
         ErrorCase {
             name: "incomplete_order_by",
             query: "select * from it order by",
-            expected: "leftover",
+            expected: "error: unexpected input",
         },
         ErrorCase {
             name: "limit_overflow",
             query: "select * from it limit 999999999999999999999",
-            expected: "leftover",
+            expected: "error: unexpected input",
         },
         ErrorCase {
             name: "trailing_input",
             query: "select * from it trailing",
-            expected: "leftover",
+            expected: "error: unexpected input",
         },
         ErrorCase {
             name: "unknown_table",
@@ -113,7 +113,7 @@ fn representative_failures_have_stable_diagnostic_categories() {
         ErrorCase {
             name: "invalid_operator",
             query: "select * from it where a === 1",
-            expected: "leftover",
+            expected: "error: unexpected input",
         },
     ];
 
@@ -126,5 +126,20 @@ fn representative_failures_have_stable_diagnostic_categories() {
             case.expected,
             output
         );
+    }
+}
+
+#[test]
+fn syntax_failures_show_the_query_location_and_a_likely_fix() {
+    for (query, hint) in [
+        ("selec * from it", "did you mean `select`?"),
+        ("select * from it where", "add a boolean expression"),
+        ("select * from it where a === 1", "use `=` for equality"),
+        ("select (a from it", "unmatched parenthesis"),
+    ] {
+        let output = run_query(query);
+        assert!(output.contains("--> query:1:"), "missing location in {output:#?}");
+        assert!(output.contains('^'), "missing caret in {output:#?}");
+        assert!(output.contains(hint), "missing hint {hint:#?} in {output:#?}");
     }
 }

@@ -1,5 +1,4 @@
 use csv::Writer;
-use nom::error;
 use prettytable::{Row, Table};
 use std::result;
 use std::str::FromStr;
@@ -15,9 +14,9 @@ pub type AppResult<T> = result::Result<T, AppError>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AppError {
-    #[error("Syntax Error: {0}")]
+    #[error("{0}")]
     Syntax(String),
-    #[error("Input is fully consumed, the leftover are \"{0}\"")]
+    #[error("{0}")]
     InputNotAllConsumed(String),
     #[error("{0}")]
     Parse(#[from] logical::parser::ParseError),
@@ -72,20 +71,98 @@ impl PartialEq for AppError {
 
 impl Eq for AppError {}
 
-impl From<nom::Err<error::Error<&str>>> for AppError {
-    fn from(e: nom::Err<error::Error<&str>>) -> AppError {
-        match e {
-            nom::Err::Failure(v) => AppError::Syntax(v.input.to_string()),
-            nom::Err::Error(v) => AppError::Syntax(v.input.to_string()),
-            _ => AppError::Syntax(String::new()),
-        }
-    }
-}
-
 pub enum OutputMode {
     Table,
     Csv,
     Json,
+}
+
+fn parse_query_input(query_str: &str) -> AppResult<syntax::ast::Query> {
+    match syntax::parser::query(query_str) {
+        Ok((remaining, query)) if remaining.trim().is_empty() => Ok(syntax::desugar::desugar_query(query)),
+        Ok((remaining, _)) => {
+            let leading_whitespace = remaining.len() - remaining.trim_start().len();
+            let offset = refine_syntax_offset(query_str, query_str.len() - remaining.len() + leading_whitespace);
+            let hint = syntax_hint(query_str, offset);
+            Err(AppError::InputNotAllConsumed(crate::diagnostic::render(
+                query_str,
+                offset,
+                "unexpected input",
+                "query parsing stopped here",
+                hint.as_deref(),
+            )))
+        }
+        Err(error) => {
+            let remaining = match &error {
+                nom::Err::Failure(error) | nom::Err::Error(error) => error.input,
+                nom::Err::Incomplete(_) => "",
+            };
+            let leading_whitespace = remaining.len() - remaining.trim_start().len();
+            let offset = query_str.len() - remaining.len() + leading_whitespace;
+            let hint = syntax_hint(query_str, offset);
+            Err(AppError::Syntax(crate::diagnostic::render(
+                query_str,
+                offset,
+                "could not parse query",
+                "expected valid PartiQL syntax",
+                hint.as_deref(),
+            )))
+        }
+    }
+}
+
+fn refine_syntax_offset(query: &str, offset: usize) -> usize {
+    for invalid_operator in ["===", "!==", "=="] {
+        if let Some(position) = query[offset..].find(invalid_operator) {
+            return offset + position;
+        }
+    }
+    offset
+}
+
+fn syntax_hint(query: &str, offset: usize) -> Option<String> {
+    let remaining = &query[offset.min(query.len())..];
+    let token: String = remaining
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_' || "=<>!".contains(*ch))
+        .collect();
+    let lowered_query = query.to_ascii_lowercase();
+    let lowered_token = token.to_ascii_lowercase();
+
+    if lowered_query.starts_with("select from ") {
+        return Some("add an expression between `select` and `from`".to_string());
+    }
+    if lowered_query.starts_with("select ") && !lowered_query.contains(" from ") {
+        return Some("add `from <table>` after the select list".to_string());
+    }
+    match lowered_token.as_str() {
+        "where" => return Some("add a boolean expression after `where`".to_string()),
+        "order" | "by" => return Some("complete `order by` with a column or expression".to_string()),
+        "limit" => return Some("provide a LIMIT value between 0 and 4294967295".to_string()),
+        "===" | "==" => return Some("use `=` for equality comparisons".to_string()),
+        "!==" => return Some("use `!=` for inequality comparisons".to_string()),
+        _ => {}
+    }
+    if remaining.starts_with('(') || query[..offset.min(query.len())].matches('(').count() > query.matches(')').count()
+    {
+        return Some("check for an unmatched parenthesis".to_string());
+    }
+
+    const KEYWORDS: &[&str] = &[
+        "select",
+        "from",
+        "where",
+        "group",
+        "having",
+        "order",
+        "limit",
+        "join",
+        "union",
+        "intersect",
+        "except",
+    ];
+    crate::diagnostic::suggestion(&lowered_token, KEYWORDS.iter().copied())
+        .map(|candidate| format!("did you mean `{candidate}`?"))
 }
 
 fn value_to_json(value: common::types::Value) -> serde_json::Value {
@@ -123,11 +200,7 @@ impl FromStr for OutputMode {
 }
 
 pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry) -> AppResult<()> {
-    let (rest_of_str, q) = syntax::parser::query(query_str)?;
-    if !rest_of_str.is_empty() {
-        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
-    }
-    let q = syntax::desugar::desugar_query(q);
+    let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_sources, registry)?;
@@ -145,11 +218,7 @@ pub fn run(
     output_mode: OutputMode,
     threads: usize,
 ) -> AppResult<()> {
-    let (rest_of_str, q) = syntax::parser::query(query_str)?;
-    if !rest_of_str.is_empty() {
-        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
-    }
-    let q = syntax::desugar::desugar_query(q);
+    let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
@@ -198,11 +267,7 @@ pub(crate) fn run_to_vec(
     data_sources: common::types::DataSourceRegistry,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let (rest_of_str, q) = syntax::parser::query(query_str)?;
-    if !rest_of_str.is_empty() {
-        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
-    }
-    let q = syntax::desugar::desugar_query(q);
+    let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
@@ -225,11 +290,7 @@ pub fn run_to_records(
     data_sources: common::types::DataSourceRegistry,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let (rest_of_str, q) = syntax::parser::query(query_str)?;
-    if !rest_of_str.is_empty() {
-        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
-    }
-    let q = syntax::desugar::desugar_query(q);
+    let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
     let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
@@ -253,11 +314,7 @@ pub fn run_to_records_with_registry(
     registry: Arc<functions::FunctionRegistry>,
     threads: usize,
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
-    let (rest_of_str, q) = syntax::parser::query(query_str)?;
-    if !rest_of_str.is_empty() {
-        return Err(AppError::InputNotAllConsumed(rest_of_str.to_string()));
-    }
-    let q = syntax::desugar::desugar_query(q);
+    let q = parse_query_input(query_str)?;
 
     let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();

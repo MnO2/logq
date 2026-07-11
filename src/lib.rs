@@ -7,6 +7,7 @@ extern crate pdatastructs;
 
 pub mod app;
 pub mod common;
+mod diagnostic;
 pub mod execution;
 pub mod functions;
 pub mod logical;
