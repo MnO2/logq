@@ -174,6 +174,18 @@ select * from a, b where a.id = b.id
 
 -- Left outer join
 select a.name, b.value from a left join b on a.id = b.aid
+
+-- Inner join (`join` and `inner join` are equivalent)
+select a.name, b.value from a inner join b on a.id = b.aid
+
+-- Aliases and additional residual predicates
+select request.path, route.service
+from requests as request
+join routes as route
+  on request.route_id = route.id and request.status >= route.min_status
+
+-- Preserve every row from the right table
+select a.name, b.value from a right outer join b on a.id = b.aid
 ```
 
 ### Subqueries

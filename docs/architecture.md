@@ -105,7 +105,7 @@ Translates the desugared AST into a tree of logical plan nodes. This stage:
 - Resolves table references against the provided `DataSource`
 - Separates aggregate expressions from scalar expressions in SELECT
 - Builds the plan bottom-up: DataSource → Filter → Map → GroupBy → Having → OrderBy → Limit → Distinct
-- Handles JOIN planning (CrossJoin, LeftJoin)
+- Handles JOIN planning (cross, left, inner, and right joins, with hash joins for equality keys)
 - Recursively plans subqueries with shared DataSource context
 - Plans set operations (Union, Intersect, Except) over two sub-plans
 
@@ -258,7 +258,7 @@ trait RecordRead {
 | `regex` | Log line tokenization, LIKE patterns |
 | `prettytable-rs` | Table output |
 | `csv` | CSV output |
-| `json` | JSONL parsing and JSON output |
+| `serde_json` | JSONL parsing and JSON output |
 | `url` | URL parsing for HTTP request fields |
 | `tdigest` | Approximate percentile |
 | `pdatastructs` | HyperLogLog for approx_count_distinct |
@@ -268,8 +268,7 @@ trait RecordRead {
 ## Known Limitations
 
 - **No correlated subqueries** — only non-correlated scalar subqueries in WHERE and SELECT
-- **No INNER JOIN** — use CROSS JOIN + WHERE as a workaround
 - **No window functions** — no OVER/PARTITION BY support
-- **Nested-loop joins** — no hash join optimization; right side is re-scanned per left row
+- **Non-equality joins** — fall back to nested-loop execution; equality keys use hash joins
 - **Full materialization** — ORDER BY, GROUP BY, INTERSECT, and EXCEPT load all data into memory
 - **Single-threaded** — no parallel execution

@@ -404,6 +404,7 @@ pub(crate) struct Binding {
     pub(crate) path_expr: ast::PathExpr,
     pub(crate) name: String,
     pub(crate) idx_name: Option<String>,
+    pub(crate) preserve_source: bool,
 }
 
 #[derive(Clone)]

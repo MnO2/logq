@@ -1396,18 +1396,11 @@ impl Node {
             } => {
                 let left_stream = left.get(variables.clone(), registry.clone(), threads)?;
                 let right_stream = right.get(variables.clone(), registry.clone(), threads)?;
-                // Strip the table alias prefix from equi-key PathExprs.
-                // The equi-keys have paths like [alias, field] but the raw records
-                // from each side have just [field] as their top-level keys.
-                let strip_alias = |p: &PathExpr| -> PathExpr {
-                    if p.path_segments.len() > 1 {
-                        PathExpr::new(p.path_segments[1..].to_vec())
-                    } else {
-                        p.clone()
-                    }
-                };
-                let left_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(l, _)| strip_alias(l)).collect();
-                let right_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(_, r)| strip_alias(r)).collect();
+                // Keep qualified keys so residual predicates can evaluate against
+                // the same table scopes. HashJoinStream falls back to bare fields
+                // for unaliased source records.
+                let left_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(left, _)| left.clone()).collect();
+                let right_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(_, right)| right.clone()).collect();
                 // Default memory limit: 512 MB
                 let memory_limit = 512 * 1024 * 1024;
                 Ok(Box::new(HashJoinStream::new(

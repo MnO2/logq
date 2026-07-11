@@ -11,6 +11,7 @@ Phase 4 complete. All phases done.
 - **WS4:** Added a nightly parser-fuzz target with 221 source-derived seeds and a non-blocking CI smoke run, plus six proptest properties for numeric comparisons, three-valued logic, null arithmetic, and null ordering. Fuzzing found and fixed panics on overflowing integers and `LIMIT` values. Added a 54-case, source-attributed PartiQL execution subset with a reasoned skip list for unsupported upstream areas.
 - **WS5:** Added deterministic 100 MB/1 GB ELB, ALB, and JSONL dataset generation (including gzip), a hyperfine-based four-tool comparison harness, peak-RSS collection, and Markdown formatting. Published the 100 MiB JSONL results and recorded the scan, grouping, LIKE, and top-N gaps that feed WS8.
 - **WS6:** Added statement-level syntax locations and hand-rendered multi-line caret diagnostics, with targeted hints for malformed syntax. Planner errors now identify and suggest functions, tables, and fixed-schema columns while preserving PartiQL `MISSING` behavior for dynamic JSONL fields. Runtime type and argument failures retain query context and point to the failing expression.
+- **WS7a:** Audited INNER, bare, and RIGHT OUTER JOIN behavior across aliases, NULL keys, unmatched rows, aggregation, and residual predicates. Fixed qualified table scopes in hash and nested-loop joins and kept output columns in SELECT-list order.
 
 ## Completed Tasks
 
@@ -87,6 +88,5 @@ Phase 4 complete. All phases done.
 
 ## Known Limitations
 - No correlated subqueries (only non-correlated scalar subqueries supported)
-- No INNER JOIN (can simulate with CROSS JOIN + WHERE)
 - No window functions
 - No PIVOT, Ion literals, bag literals

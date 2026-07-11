@@ -791,6 +791,7 @@ mod test {
             path_expr,
             name: "e".to_string(),
             idx_name: None,
+            preserve_source: false,
         };
 
         let filter = Node::Filter(
@@ -821,6 +822,7 @@ mod test {
             path_expr,
             name: "e".to_string(),
             idx_name: None,
+            preserve_source: false,
         };
         let expected_source = execution::Node::Map(
             vec![
@@ -865,6 +867,7 @@ mod test {
             path_expr,
             name: "e".to_string(),
             idx_name: None,
+            preserve_source: false,
         };
         let filter = Node::Filter(
             Box::new(filtered_formula),
@@ -914,6 +917,7 @@ mod test {
             path_expr,
             name: "e".to_string(),
             idx_name: None,
+            preserve_source: false,
         };
 
         let expected_source = execution::Node::Map(

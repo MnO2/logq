@@ -62,7 +62,11 @@ impl Record {
 
     pub(crate) fn alias(&mut self, bindings: &[common::types::Binding]) {
         for binding in bindings.iter() {
-            let val = common::types::get_value_by_path_expr(&binding.path_expr, 0, &self.variables);
+            let val = if binding.path_expr.path_segments.is_empty() {
+                Value::Object(Box::new(self.variables.clone()))
+            } else {
+                common::types::get_value_by_path_expr(&binding.path_expr, 0, &self.variables)
+            };
             self.variables.insert(binding.name.clone(), val);
         }
     }
@@ -186,13 +190,13 @@ impl std::hash::Hash for JoinKey {
 /// since NULL != NULL in SQL semantics).
 pub(crate) fn extract_key(record: &Record, key_fields: &[ast::PathExpr]) -> JoinKey {
     if key_fields.len() == 1 {
-        match record.get(&key_fields[0]) {
+        match join_value(record, &key_fields[0]) {
             Value::String(s) => JoinKey::SingleString(s.to_string()),
             Value::Int(i) => JoinKey::SingleInt(i),
             other => JoinKey::Composite(vec![other]),
         }
     } else {
-        JoinKey::Composite(key_fields.iter().map(|f| record.get(f)).collect())
+        JoinKey::Composite(key_fields.iter().map(|field| join_value(record, field)).collect())
     }
 }
 
@@ -211,8 +215,6 @@ pub struct MapStream {
     is_star_only: bool,
     /// Pre-computed (source_field, output_column) pairs for simple_projection fast path
     projection_map: Vec<(String, String)>,
-    /// True when all projection entries keep the same field name (no rename)
-    projection_rename_free: bool,
 }
 
 impl MapStream {
@@ -260,7 +262,6 @@ impl MapStream {
         } else {
             Vec::new()
         };
-        let projection_rename_free = simple_projection && projection_map.iter().all(|(src, out)| src == out);
         MapStream {
             named_list,
             column_names,
@@ -270,7 +271,6 @@ impl MapStream {
             simple_projection,
             is_star_only,
             projection_map,
-            projection_rename_free,
         }
     }
 }
@@ -289,18 +289,7 @@ impl RecordStream for MapStream {
 
             // Fast path: all expressions are simple variable projections, no merge needed.
             if self.simple_projection {
-                if self.projection_rename_free {
-                    // Zero-clone path: iterate source, keep matching entries by owned key
-                    let map = &self.projection_map;
-                    let mut out = Variables::with_capacity(map.len());
-                    for (k, v) in record.into_variables().into_iter() {
-                        if map.iter().any(|(src, _)| src == &k) {
-                            out.insert(k, v);
-                        }
-                    }
-                    return Ok(Some(Record::new_with_variables(out)));
-                }
-                // Move values out of source record instead of cloning.
+                // Move values out of the source in SELECT-list order.
                 let mut source_vars = record.into_variables();
                 let mut out = Variables::with_capacity(self.projection_map.len());
                 for (src_field, out_name) in &self.projection_map {
@@ -692,6 +681,9 @@ impl RecordStream for ProjectionStream {
             if self.produced_records.is_none() {
                 if let Some(mut record) = self.source.next()? {
                     record.alias(&self.bindings);
+                    if self.bindings.iter().any(|binding| binding.preserve_source) {
+                        return Ok(Some(record));
+                    }
                     let binding_names: Vec<VariableName> = self.bindings.iter().map(|b| b.name.clone()).collect();
                     let projected_record = record.project(&binding_names);
 
@@ -1100,7 +1092,7 @@ impl HashJoinStream {
             let has_null_key = self
                 .right_key_fields
                 .iter()
-                .any(|f| matches!(record.get(f), Value::Null | Value::Missing));
+                .any(|field| matches!(join_value(&record, field), Value::Null | Value::Missing));
             if has_null_key {
                 continue;
             }
@@ -1148,6 +1140,33 @@ impl HashJoinStream {
         }
         Record::new_with_variables(variables)
     }
+
+    fn residual_variables(&self, left: &Record, right: &Record) -> Variables {
+        let mut variables = left.merge(right).into_variables();
+        add_join_scopes(&mut variables, left, &self.left_key_fields);
+        add_join_scopes(&mut variables, right, &self.right_key_fields);
+        variables
+    }
+}
+
+fn join_value(record: &Record, path: &ast::PathExpr) -> Value {
+    let value = record.get(path);
+    if value == Value::Missing && path.path_segments.len() > 1 {
+        record.get(&ast::PathExpr::new(path.path_segments[1..].to_vec()))
+    } else {
+        value
+    }
+}
+
+fn add_join_scopes(variables: &mut Variables, record: &Record, key_fields: &[ast::PathExpr]) {
+    for path in key_fields {
+        let [PathSegment::AttrName(scope), ..] = path.path_segments.as_slice() else {
+            continue;
+        };
+        if path.path_segments.len() > 1 && !variables.contains_key(scope) {
+            variables.insert(scope.clone(), Value::Object(Box::new(record.to_variables().clone())));
+        }
+    }
 }
 
 impl RecordStream for HashJoinStream {
@@ -1167,7 +1186,7 @@ impl RecordStream for HashJoinStream {
 
                     // Apply residual filter if present
                     if let Some(ref residual) = self.residual {
-                        let vars = merged.to_variables().clone();
+                        let vars = self.residual_variables(left, right);
                         let predicate = residual.evaluate(&vars, &self.registry)?;
                         if predicate != Some(true) {
                             continue;
@@ -1197,7 +1216,7 @@ impl RecordStream for HashJoinStream {
                     let has_null_key = self
                         .left_key_fields
                         .iter()
-                        .any(|f| matches!(left_record.get(f), Value::Null | Value::Missing));
+                        .any(|field| matches!(join_value(&left_record, field), Value::Null | Value::Missing));
 
                     if has_null_key {
                         // NULL keys never match

@@ -2049,6 +2049,54 @@ mod tests {
     }
 
     #[test]
+    fn test_e2e_bare_join_with_aliases_and_residual_predicate() {
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "score": 5, "x": "low"}"#,
+                r#"{"id": 1, "score": 10, "x": "high"}"#,
+                r#"{"id": 2, "score": 1, "x": "other"}"#,
+            ],
+            &[
+                r#"{"id": 1, "threshold": 7, "y": "matched"}"#,
+                r#"{"id": 3, "threshold": 20, "y": "unmatched"}"#,
+            ],
+            r#"SELECT left_side.x, right_side.y FROM a AS left_side JOIN b AS right_side ON left_side.id = right_side.id AND left_side.score < right_side.threshold"#,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 1, "results: {result:?}");
+        assert_eq!(result[0][0].1, common::types::Value::String("low".into()));
+        assert_eq!(result[0][1].1, common::types::Value::String("matched".into()));
+    }
+
+    #[test]
+    fn test_e2e_inner_join_with_explicit_aliases() {
+        let result = run_two_table_query(
+            &[r#"{"id": 1, "x": "left"}"#],
+            &[r#"{"id": 1, "y": "right"}"#],
+            r#"SELECT lhs.x, rhs.y FROM a AS lhs INNER JOIN b AS rhs ON lhs.id = rhs.id"#,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 1, "results: {result:?}");
+        assert_eq!(result[0][0].1, common::types::Value::String("left".into()));
+        assert_eq!(result[0][1].1, common::types::Value::String("right".into()));
+    }
+
+    #[test]
+    fn test_e2e_inner_join_with_only_a_residual_predicate() {
+        let result = run_two_table_query(
+            &[r#"{"score": 5, "x": "low"}"#, r#"{"score": 10, "x": "high"}"#],
+            &[r#"{"threshold": 7, "y": "limit"}"#],
+            r#"SELECT a.x, b.y FROM a INNER JOIN b ON a.score < b.threshold"#,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 1, "results: {result:?}");
+        assert_eq!(result[0][0].1, common::types::Value::String("low".into()));
+    }
+
+    #[test]
     fn test_e2e_left_join_with_hash() {
         let result = run_two_table_query(
             &[
@@ -2128,13 +2176,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.len(), 2, "results: {:?}", result);
-        // After swap: column order is y (probe/b), x (build/a)
-        // id=1 matched row
-        assert_eq!(result[0][0].1, common::types::Value::String("alpha".into()));
-        assert_eq!(result[0][1].1, common::types::Value::String("hello".into()));
+        // Projection order follows SELECT x, y even though RIGHT JOIN swaps
+        // the internal probe and build sides.
+        assert_eq!(result[0][0].1, common::types::Value::String("hello".into()));
+        assert_eq!(result[0][1].1, common::types::Value::String("alpha".into()));
         // id=2 unmatched: x=NULL (left side NULL-padded)
-        assert_eq!(result[1][0].1, common::types::Value::String("beta".into()));
-        assert_eq!(result[1][1].1, common::types::Value::Null);
+        assert_eq!(result[1][0].1, common::types::Value::Null);
+        assert_eq!(result[1][1].1, common::types::Value::String("beta".into()));
+    }
+
+    #[test]
+    fn test_e2e_right_join_with_residual_predicate() {
+        let result = run_two_table_query(
+            &[
+                r#"{"id": 1, "score": 5, "x": "low"}"#,
+                r#"{"id": 1, "score": 10, "x": "high"}"#,
+            ],
+            &[
+                r#"{"id": 1, "threshold": 7, "y": "matched"}"#,
+                r#"{"id": 2, "threshold": 7, "y": "unmatched"}"#,
+            ],
+            r#"SELECT x, y FROM a RIGHT OUTER JOIN b ON a.id = b.id AND a.score < b.threshold"#,
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 2, "results: {result:?}");
+        assert_eq!(result[0][0].1, common::types::Value::String("low".into()));
+        assert_eq!(result[0][1].1, common::types::Value::String("matched".into()));
+        assert_eq!(result[1][0].1, common::types::Value::Null);
+        assert_eq!(result[1][1].1, common::types::Value::String("unmatched".into()));
     }
 
     fn write_gzip_lines(path: &std::path::Path, lines: &[&str]) {

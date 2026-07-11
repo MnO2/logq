@@ -580,6 +580,7 @@ fn check_env(data_sources: &common::DataSourceRegistry, from_clause: &FromClause
 fn to_bindings_for_ref(
     data_sources: &common::DataSourceRegistry,
     table_reference: &TableReference,
+    include_base_name: bool,
 ) -> Vec<common::Binding> {
     let path_expr = match &table_reference.path_expr.path_segments[0] {
         PathSegment::AttrName(s) => {
@@ -600,11 +601,16 @@ fn to_bindings_for_ref(
         _ => table_reference.path_expr.clone(),
     };
 
-    if let Some(name) = table_reference.as_clause.clone() {
+    let name = table_reference
+        .as_clause
+        .clone()
+        .or_else(|| include_base_name.then(|| get_alias_for_ref(table_reference)));
+    if let Some(name) = name {
         vec![common::Binding {
             path_expr,
             name,
             idx_name: table_reference.at_clause.clone(),
+            preserve_source: table_reference.as_clause.is_none(),
         }]
     } else {
         vec![]
@@ -761,25 +767,29 @@ fn rebuild_and_tree(conjuncts: Vec<ast::Expression>) -> Option<ast::Expression> 
     }
 }
 
-fn build_from_node(ctx: &common::ParsingContext, from_clause: &FromClause) -> ParseResult<types::Node> {
+fn build_from_node(
+    ctx: &common::ParsingContext,
+    from_clause: &FromClause,
+    include_table_scopes: bool,
+) -> ParseResult<types::Node> {
     match from_clause {
         FromClause::Tables(table_references) => {
             if table_references.len() == 1 {
                 let ref0 = &table_references[0];
                 let ds = lookup_data_source(&ctx.data_sources, ref0)?;
-                let bindings = to_bindings_for_ref(&ctx.data_sources, ref0);
+                let bindings = to_bindings_for_ref(&ctx.data_sources, ref0, include_table_scopes);
                 Ok(types::Node::DataSource(ds, bindings))
             } else {
                 let ref0 = &table_references[0];
                 let ds0 = lookup_data_source(&ctx.data_sources, ref0)?;
-                let first_bindings = to_bindings_for_ref(&ctx.data_sources, ref0);
+                let first_bindings = to_bindings_for_ref(&ctx.data_sources, ref0, true);
                 let mut node = types::Node::DataSource(ds0, first_bindings);
                 for table_ref in table_references.iter().skip(1) {
                     let ds = lookup_data_source(&ctx.data_sources, table_ref)?;
                     if matches!(&ds, common::DataSource::Stdin(..)) {
                         return Err(ParseError::StdinInJoinRightSide);
                     }
-                    let ref_bindings = to_bindings_for_ref(&ctx.data_sources, table_ref);
+                    let ref_bindings = to_bindings_for_ref(&ctx.data_sources, table_ref, true);
                     let right = types::Node::DataSource(ds, ref_bindings);
                     node = types::Node::CrossJoin(Box::new(node), Box::new(right));
                 }
@@ -792,12 +802,12 @@ fn build_from_node(ctx: &common::ParsingContext, from_clause: &FromClause) -> Pa
             join_type,
             condition,
         } => {
-            let left_node = build_from_node(ctx, left)?;
+            let left_node = build_from_node(ctx, left, true)?;
             let ds_right = lookup_data_source(&ctx.data_sources, right)?;
             if matches!(&ds_right, common::DataSource::Stdin(..)) {
                 return Err(ParseError::StdinInJoinRightSide);
             }
-            let right_bindings = to_bindings_for_ref(&ctx.data_sources, right);
+            let right_bindings = to_bindings_for_ref(&ctx.data_sources, right, true);
             let right_node = types::Node::DataSource(ds_right, right_bindings);
             match join_type {
                 JoinType::Left | JoinType::Inner | JoinType::Right => {
@@ -942,7 +952,7 @@ pub(crate) fn parse_query(
         query_aliases,
     };
 
-    let mut root = build_from_node(&parsing_context, from_clause)?;
+    let mut root = build_from_node(&parsing_context, from_clause, false)?;
     let mut named_aggregates = Vec::new();
     let mut named_list: Vec<types::Named> = Vec::new();
     let mut non_aggregates: Vec<types::Named> = Vec::new();
@@ -1562,6 +1572,7 @@ mod test {
             path_expr,
             name: "e".to_string(),
             idx_name: None,
+            preserve_source: false,
         }];
 
         let expected = types::Node::Map(
@@ -1697,6 +1708,7 @@ mod test {
             path_expr,
             name: "e".to_string(),
             idx_name: None,
+            preserve_source: false,
         };
 
         let filter = types::Node::Map(
