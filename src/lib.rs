@@ -52,5 +52,5 @@ pub mod bench_internals {
     pub use crate::simd::selection::SelectionVector;
 
     // Batch execution types
-    pub use crate::execution::batch::{BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn, BATCH_SIZE};
+    pub use crate::execution::batch::{BATCH_SIZE, BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn};
 }

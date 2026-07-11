@@ -874,11 +874,12 @@ mod tests {
     #[test]
     fn test_hamming_distance_different_lengths() {
         let r = make_registry();
-        assert!(r
-            .call(
+        assert!(
+            r.call(
                 "hamming_distance",
                 &[Value::String("abc".into()), Value::String("ab".into())]
             )
-            .is_err());
+            .is_err()
+        );
     }
 }

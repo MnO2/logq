@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 
 use logq::bench_internals::*;
@@ -22,7 +22,7 @@ fn generate_string_records(count: usize) -> Vec<Record> {
     (0..count)
         .map(|_| {
             let s: String = (0..32).map(|_| rng.gen_range(b'a'..=b'z') as char).collect();
-            Record::new(&field_names, vec![Value::String(s)])
+            Record::new(&field_names, vec![Value::String(s.into())])
         })
         .collect()
 }
@@ -35,7 +35,7 @@ fn generate_url_records(count: usize) -> Vec<Record> {
         .map(|_| {
             let suffix: String = (0..16).map(|_| rng.gen_range(b'a'..=b'z') as char).collect();
             let url = format!("https://example.com/path/{}", suffix);
-            Record::new(&field_names, vec![Value::String(url)])
+            Record::new(&field_names, vec![Value::String(url.into())])
         })
         .collect()
 }
@@ -66,7 +66,7 @@ fn generate_multi_key_records(count: usize) -> Vec<Record> {
                 &field_names,
                 vec![
                     Value::Int(rng.gen_range(0..100)),
-                    Value::String(format!("str_{}", rng.gen_range(0..1000))),
+                    Value::String(format!("str_{}", rng.gen_range(0..1000)).into()),
                     Value::Int(rng.gen_range(0..10000)),
                 ],
             )

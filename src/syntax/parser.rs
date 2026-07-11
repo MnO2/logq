@@ -3,6 +3,7 @@ use ordered_float::OrderedFloat;
 use std::str::FromStr;
 
 use nom::{
+    AsChar, IResult, InputTakeAtPosition,
     branch::alt,
     bytes::complete::{escaped, tag, tag_no_case},
     character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
@@ -11,7 +12,6 @@ use nom::{
     multi::{many0, many1, separated_list0},
     number::complete,
     sequence::{delimited, pair, preceded, terminated, tuple},
-    AsChar, IResult, InputTakeAtPosition,
 };
 
 use crate::syntax::ast::{

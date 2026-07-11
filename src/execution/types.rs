@@ -11,8 +11,8 @@ use crate::execution::batch::{
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
 use crate::execution::batch_project::BatchProjectOperator;
-use crate::execution::batch_scan::datatype_to_column_type;
 use crate::execution::batch_scan::BatchScanOperator;
+use crate::execution::batch_scan::datatype_to_column_type;
 use crate::execution::log_schema::LogSchema;
 use crate::execution::parallel;
 use crate::execution::stream::ProjectionStream;
@@ -569,11 +569,7 @@ impl Formula {
                                 return Ok(Some(true));
                             }
                         }
-                        if has_null {
-                            Ok(None)
-                        } else {
-                            Ok(Some(false))
-                        }
+                        if has_null { Ok(None) } else { Ok(Some(false)) }
                     }
                 }
             }
@@ -593,11 +589,7 @@ impl Formula {
                                 return Ok(Some(false));
                             }
                         }
-                        if has_null {
-                            Ok(None)
-                        } else {
-                            Ok(Some(true))
-                        }
+                        if has_null { Ok(None) } else { Ok(Some(true)) }
                     }
                 }
             }

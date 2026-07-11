@@ -3,7 +3,7 @@
 use crate::common;
 use crate::common::types::{Tuple, Value, Variables};
 use crate::execution::batch::{BatchSchema, BatchStream, BatchToRowAdapter, ColumnBatch, TypedColumn};
-use crate::execution::types::{value_less_than, Aggregate, Expression, Named, NamedAggregate, StreamResult};
+use crate::execution::types::{Aggregate, Expression, Named, NamedAggregate, StreamResult, value_less_than};
 use crate::functions::FunctionRegistry;
 use crate::simd::bitmap::Bitmap;
 use crate::simd::selection::SelectionVector;
@@ -237,7 +237,7 @@ impl BatchGroupByOperator {
                                 None => {
                                     *slot = Some(val);
                                 }
-                                Some(ref current) => {
+                                Some(current) => {
                                     let replace = if is_min {
                                         value_less_than(&val, current)
                                     } else {
@@ -540,7 +540,7 @@ impl BatchGroupByOperator {
                                 None => {
                                     *slot = Some(val);
                                 }
-                                Some(ref current) => {
+                                Some(current) => {
                                     let replace = if is_min {
                                         value_less_than(&val, current)
                                     } else {
@@ -666,7 +666,7 @@ impl BatchGroupByOperator {
                 // Feed into each aggregate
                 for named_agg in self.aggregates.iter_mut() {
                     match &mut named_agg.aggregate {
-                        Aggregate::Count(ref mut inner, named) => match named {
+                        Aggregate::Count(inner, named) => match named {
                             Named::Star => {
                                 inner.add_row(&key)?;
                             }
@@ -677,7 +677,7 @@ impl BatchGroupByOperator {
                                 inner.add_record(&key, &val)?;
                             }
                         },
-                        Aggregate::Sum(ref mut inner, named) => {
+                        Aggregate::Sum(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -688,7 +688,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::Avg(ref mut inner, named) => {
+                        Aggregate::Avg(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -699,7 +699,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::Min(ref mut inner, named) => {
+                        Aggregate::Min(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -710,7 +710,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::Max(ref mut inner, named) => {
+                        Aggregate::Max(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -721,7 +721,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::First(ref mut inner, named) => {
+                        Aggregate::First(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -732,7 +732,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::Last(ref mut inner, named) => {
+                        Aggregate::Last(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -743,7 +743,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::ApproxCountDistinct(ref mut inner, named) => {
+                        Aggregate::ApproxCountDistinct(inner, named) => {
                             match named {
                                 Named::Expression(expr, _) => {
                                     let val = expr
@@ -754,7 +754,7 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::GroupAs(ref mut inner, named) => {
+                        Aggregate::GroupAs(inner, named) => {
                             match named {
                                 Named::Expression(_, _) => {
                                     let val = Value::Object(Box::new(row_vars.clone()));
@@ -763,13 +763,13 @@ impl BatchGroupByOperator {
                                 Named::Star => {} // no-op
                             }
                         }
-                        Aggregate::PercentileDisc(ref mut inner, col_name) => {
+                        Aggregate::PercentileDisc(inner, col_name) => {
                             let val = common::types::scoped_get(variables, scope, col_name)
                                 .cloned()
                                 .unwrap_or(Value::Missing);
                             inner.add_record(&key, &val)?;
                         }
-                        Aggregate::ApproxPercentile(ref mut inner, col_name) => {
+                        Aggregate::ApproxPercentile(inner, col_name) => {
                             let val = common::types::scoped_get(variables, scope, col_name)
                                 .cloned()
                                 .unwrap_or(Value::Missing);
@@ -819,7 +819,7 @@ impl BatchGroupByOperator {
 
         for key in &keys_vec {
             // Fill group key columns
-            if let Some(ref vals) = key {
+            if let Some(vals) = key {
                 for (col_idx, v) in vals.iter().enumerate() {
                     columns[col_idx].push(v.clone());
                 }

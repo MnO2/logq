@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use linked_hash_map::LinkedHashMap;
 use logq::common::types::Value;
 use logq::functions::{self, FunctionRegistry};

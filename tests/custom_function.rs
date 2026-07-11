@@ -1,5 +1,5 @@
 use logq::common::types::Value;
-use logq::functions::{register_all, Arity, FunctionDef, NullHandling};
+use logq::functions::{Arity, FunctionDef, NullHandling, register_all};
 
 #[test]
 fn test_custom_function_registration() {

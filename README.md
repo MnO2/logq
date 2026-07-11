@@ -16,6 +16,8 @@ logq is a command-line tool for querying and analyzing server log files using [P
 
 ## Installation
 
+Building from source requires Rust 1.85 or newer.
+
 ```
 cargo install logq
 ```

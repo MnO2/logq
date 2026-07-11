@@ -491,7 +491,7 @@ impl RecordStream for FilterStream {
 
             // Adaptive AND path: evaluate conjuncts in order, tracking stats
             self.rows_seen += 1;
-            if self.rows_seen.is_multiple_of(REORDER_INTERVAL) {
+            if self.rows_seen % REORDER_INTERVAL == 0 {
                 self.maybe_reorder();
             }
 

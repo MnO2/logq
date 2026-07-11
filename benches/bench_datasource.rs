@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use logq::bench_internals::*;
 
 fn load_and_replicate(path: &str, min_lines: usize) -> (Vec<String>, usize) {

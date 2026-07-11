@@ -276,8 +276,8 @@ pub fn run_to_records_with_registry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;

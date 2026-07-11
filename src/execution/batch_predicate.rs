@@ -444,11 +444,7 @@ fn try_dict_like_pushdown(
                 &|field: &[u8]| {
                     let s = std::str::from_utf8(field).unwrap_or("");
                     let matched = re.is_match(s);
-                    if is_not_like {
-                        !matched
-                    } else {
-                        matched
-                    }
+                    if is_not_like { !matched } else { matched }
                 },
                 batch.len,
             );

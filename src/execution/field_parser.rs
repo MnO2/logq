@@ -420,11 +420,7 @@ fn try_dict_encode(col: TypedColumn) -> TypedColumn {
             }
         }
 
-        if too_high {
-            None
-        } else {
-            Some((dict_spans, codes))
-        }
+        if too_high { None } else { Some((dict_spans, codes)) }
     }; // dict (with borrows into data) is dropped here
 
     match result {
@@ -618,7 +614,7 @@ mod tests {
                 assert_ne!(code_200, code_404);
                 assert_eq!(codes[2], code_200); // "200"
                 assert_eq!(codes[4], code_404); // "404"
-                                                // Verify dictionary entries
+                // Verify dictionary entries
                 for c in 0..2 {
                     let s = dict_offsets[c] as usize;
                     let e = dict_offsets[c + 1] as usize;
