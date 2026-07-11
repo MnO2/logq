@@ -1,0 +1,1 @@
+SELECT elb_status_code, count(*) FROM elb WHERE elb_status_code = "200" GROUP BY elb_status_code

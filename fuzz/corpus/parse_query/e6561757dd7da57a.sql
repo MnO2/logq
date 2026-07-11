@@ -1,0 +1,1 @@
+select a.id, b.val from it as a left join it as b on a.id = b.id limit 5

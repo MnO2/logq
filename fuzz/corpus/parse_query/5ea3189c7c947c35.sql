@@ -1,0 +1,1 @@
+select a from it where a like "%foo%" and b = 1

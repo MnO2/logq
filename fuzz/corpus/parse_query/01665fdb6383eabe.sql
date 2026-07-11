@@ -1,0 +1,1 @@
+select a from it where a not between 1 and 10

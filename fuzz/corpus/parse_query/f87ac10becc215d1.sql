@@ -1,0 +1,1 @@
+select a from it where nullif(a, 0) > 1

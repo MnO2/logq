@@ -1,0 +1,1 @@
+select * from it as a cross join it as b cross join it as c

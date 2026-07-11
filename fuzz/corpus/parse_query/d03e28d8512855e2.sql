@@ -1,0 +1,1 @@
+select a from it where a not in (1, 2, 3)

@@ -1,0 +1,1 @@
+SELECT timestamp FROM it ORDER BY timestamp ASC

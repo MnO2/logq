@@ -1,0 +1,1 @@
+select * from it where limit 1

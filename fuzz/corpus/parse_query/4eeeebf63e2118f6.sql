@@ -1,0 +1,1 @@
+SELECT a FROM it WHERE a = 1

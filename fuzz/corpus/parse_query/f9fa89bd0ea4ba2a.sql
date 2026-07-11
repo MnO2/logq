@@ -1,0 +1,1 @@
+select a from it union all select b from it

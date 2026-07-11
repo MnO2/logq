@@ -360,6 +360,7 @@ impl PrefixSortEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // ---- encode_i32 tests ----
 
@@ -782,6 +783,18 @@ mod tests {
         );
         assert_eq!(compare_values(&Value::Int(1), &Value::Null), std::cmp::Ordering::Less);
         assert_eq!(compare_values(&Value::Null, &Value::Missing), std::cmp::Ordering::Equal);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_nullish_values_sort_last_ascending_and_first_descending(value in -1_000_000i32..=1_000_000) {
+            let value = Value::Int(value);
+            for nullish in [Value::Null, Value::Missing] {
+                prop_assert_eq!(compare_values(&value, &nullish), std::cmp::Ordering::Less);
+                prop_assert_eq!(compare_values(&nullish, &value), std::cmp::Ordering::Greater);
+                prop_assert_eq!(compare_values(&nullish, &value).reverse(), std::cmp::Ordering::Less);
+            }
+        }
     }
 
     #[test]

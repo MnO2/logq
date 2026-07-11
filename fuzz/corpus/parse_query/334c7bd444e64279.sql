@@ -1,0 +1,1 @@
+select y || " " || x as combined from it

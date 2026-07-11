@@ -1,0 +1,1 @@
+select a.b.c as deep from it

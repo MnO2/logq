@@ -1,0 +1,1 @@
+select name from it where name not like "%a%" and age not between 30 and 40 and age not in (30)

@@ -1,0 +1,1 @@
+SELECT upper(operation) as op_upper, lower(bucket) as bucket_lower FROM it

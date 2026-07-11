@@ -1,0 +1,1 @@
+SELECT a.x, b.y FROM a RIGHT JOIN b ON a.id = b.id

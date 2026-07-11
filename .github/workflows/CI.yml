@@ -80,3 +80,15 @@ jobs:
         with:
           command: check advisories
           rust-version: "1.85"
+
+  parser-fuzz-smoke:
+    name: Parser fuzz smoke (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run parse_query -- -max_total_time=300

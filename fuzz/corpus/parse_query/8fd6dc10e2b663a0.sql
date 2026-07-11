@@ -1,0 +1,1 @@
+SELECT elbname, count(*) FROM elb GROUP BY elbname

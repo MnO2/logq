@@ -1,0 +1,1 @@
+select a, b from it where b is not missing

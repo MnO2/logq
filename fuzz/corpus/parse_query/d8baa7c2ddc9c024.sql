@@ -1,0 +1,1 @@
+select cast(x as int) as xi from it

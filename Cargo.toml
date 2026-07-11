@@ -46,6 +46,7 @@ criterion = "0.7"
 rand = "0.8"
 tempfile = "3.2"
 linked-hash-map = "0.5"
+proptest = "1"
 
 [[bench]]
 name = "bench_parser"

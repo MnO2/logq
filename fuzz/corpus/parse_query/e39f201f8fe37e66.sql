@@ -1,0 +1,1 @@
+SELECT code_and_status, count(*) as cnt FROM it GROUP BY code_and_status

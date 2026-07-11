@@ -1,0 +1,1 @@
+select a from it intersect select b from it

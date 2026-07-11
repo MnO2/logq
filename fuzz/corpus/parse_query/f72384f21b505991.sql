@@ -1,0 +1,1 @@
+SELECT error_code, refererr FROM it WHERE error_code = "-"

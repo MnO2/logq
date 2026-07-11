@@ -1,0 +1,1 @@
+SELECT http_status, count(*) as cnt FROM it GROUP BY http_status ORDER BY http_status ASC

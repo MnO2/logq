@@ -1,0 +1,1 @@
+SELECT elb_status_code, sum(request_processing_time) as total_rpt FROM it GROUP BY elb_status_code

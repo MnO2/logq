@@ -1,0 +1,1 @@
+SELECT url FROM it WHERE url LIKE "%dropbox%"

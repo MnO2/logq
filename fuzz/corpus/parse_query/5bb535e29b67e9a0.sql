@@ -1,0 +1,1 @@
+COALESCE in SELECT should parse, got: {:?}

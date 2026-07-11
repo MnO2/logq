@@ -1,0 +1,1 @@
+select d[0] as first, d[2] as third from it

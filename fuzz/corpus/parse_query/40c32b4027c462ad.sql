@@ -1,0 +1,1 @@
+select a.x, b.y from it as a cross join it as b where a.x = b.y

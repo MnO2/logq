@@ -1,0 +1,1 @@
+select a from it where cast(a as int) > 1

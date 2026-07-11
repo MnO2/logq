@@ -1,0 +1,1 @@
+CROSS JOIN with WHERE should parse, got: {:?}

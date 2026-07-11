@@ -1,0 +1,1 @@
+SELECT operation, http_status FROM it WHERE operation = "REST.GET.OBJECT"

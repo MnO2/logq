@@ -1,0 +1,1 @@
+SELECT * with GROUP BY is not supported for jsonl or multi-table queries (no fixed schema to expand)

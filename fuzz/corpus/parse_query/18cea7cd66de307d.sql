@@ -1,0 +1,1 @@
+SELECT a, CASE WHEN b > 10 THEN "high" WHEN b > 5 THEN "mid" ELSE "low" END AS tier, count(*) FROM t AS t1 LEFT JOIN t AS t2 ON t1.id = t2.id WHERE a BETWEEN 1 AND 100 GROUP BY a, tier

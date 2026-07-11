@@ -1,0 +1,1 @@
+select a as aa, foo( b ) as bb, 1+1 as cc from it

@@ -1,0 +1,1 @@
+select b, e.f.g as x from it limit 1

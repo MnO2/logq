@@ -1,0 +1,1 @@
+select a, c, percentile_disc(0.9) within group (order by b asc) from it group by a, c

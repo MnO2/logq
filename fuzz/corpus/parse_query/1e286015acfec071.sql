@@ -1,0 +1,1 @@
+SELECT elbname, elb_status_code FROM elb WHERE elb_status_code = "200" ORDER BY elbname

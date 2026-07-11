@@ -1,0 +1,1 @@
+select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t order by t asc limit 1

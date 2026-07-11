@@ -1,0 +1,1 @@
+select name from it where name like "%ob%"

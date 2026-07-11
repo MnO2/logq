@@ -1,0 +1,1 @@
+select distinct x from it order by x asc

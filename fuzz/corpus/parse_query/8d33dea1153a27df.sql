@@ -1,0 +1,1 @@
+SELECT a, sum(b) FROM t WHERE a > 10 AND c LIKE "%foo%" GROUP BY a HAVING sum(b) > 100 ORDER BY a

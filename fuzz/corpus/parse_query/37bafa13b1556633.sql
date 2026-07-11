@@ -1,0 +1,1 @@
+select a.x, b.x from it as a, it as b

@@ -1,0 +1,1 @@
+SELECT sent_bytes FROM it ORDER BY sent_bytes DESC LIMIT 2

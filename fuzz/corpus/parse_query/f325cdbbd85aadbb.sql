@@ -1,0 +1,1 @@
+select a, avg(b)   , c from it where a = 1

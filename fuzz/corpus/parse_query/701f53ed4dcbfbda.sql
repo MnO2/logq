@@ -1,0 +1,1 @@
+SELECT a.x, b.y FROM a INNER JOIN b ON a.id = b.id

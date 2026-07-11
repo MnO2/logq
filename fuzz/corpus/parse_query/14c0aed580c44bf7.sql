@@ -1,0 +1,1 @@
+SELECT count(*) as cnt FROM it WHERE method = "GET"

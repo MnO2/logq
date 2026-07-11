@@ -1,0 +1,1 @@
+select case when x < 3 then "low" when x < 8 then "mid" else "high" end as category from it

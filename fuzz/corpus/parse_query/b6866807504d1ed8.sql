@@ -1,0 +1,1 @@
+SELECT received_bytes FROM it ORDER BY received_bytes DESC LIMIT 3

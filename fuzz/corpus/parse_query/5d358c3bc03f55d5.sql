@@ -1,0 +1,1 @@
+select time_bucket("5 seconds", timestamp) as t, url_path_bucket(request, 1, "_") as s from it limit 1

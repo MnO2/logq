@@ -1,0 +1,1 @@
+select x from it where x = 1 union select x from it where x = 3

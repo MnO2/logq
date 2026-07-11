@@ -1,0 +1,1 @@
+select a, b, c from it where a = 1 group by a, b having c > 1

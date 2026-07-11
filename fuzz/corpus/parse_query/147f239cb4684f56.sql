@@ -1,0 +1,1 @@
+SELECT a FROM it order by a ASC LIMIT 1

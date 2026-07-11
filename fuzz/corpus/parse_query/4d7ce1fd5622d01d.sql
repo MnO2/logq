@@ -1,0 +1,1 @@
+select a, (select count(*) from it) as total from it

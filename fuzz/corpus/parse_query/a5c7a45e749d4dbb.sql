@@ -1,0 +1,1 @@
+SELECT a.x, b.y FROM a, b

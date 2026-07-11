@@ -1,0 +1,1 @@
+select a.x, b.x from it as a left outer join it as b on a.x = b.x

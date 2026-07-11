@@ -1,0 +1,1 @@
+select upper(name) as u, lower(name) as l, char_length(name) as len from it

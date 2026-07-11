@@ -1,0 +1,1 @@
+select coalesce(a, b) from it

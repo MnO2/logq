@@ -1,0 +1,1 @@
+select value a from it where a = 1

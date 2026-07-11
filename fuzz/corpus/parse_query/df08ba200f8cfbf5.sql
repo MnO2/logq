@@ -1,0 +1,1 @@
+select a from it where a in (1, 2, 3) and b = 1

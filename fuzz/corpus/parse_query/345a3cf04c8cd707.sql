@@ -1,0 +1,1 @@
+select x from it where x = (select max(x) from it)

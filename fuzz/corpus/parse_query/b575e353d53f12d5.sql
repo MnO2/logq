@@ -1,0 +1,1 @@
+select cast(a as int) from it

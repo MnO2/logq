@@ -1,0 +1,1 @@
+SELECT elbname, count(*), sum(received_bytes), avg(received_bytes) FROM elb GROUP BY elbname

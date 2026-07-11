@@ -1,0 +1,1 @@
+select b, count(e.f.g) as x from it group by b

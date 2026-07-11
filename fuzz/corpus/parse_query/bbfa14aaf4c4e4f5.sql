@@ -1,0 +1,1 @@
+SELECT method, url FROM it WHERE method = "GET"

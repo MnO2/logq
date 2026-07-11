@@ -1,0 +1,1 @@
+select a from it except select b from it

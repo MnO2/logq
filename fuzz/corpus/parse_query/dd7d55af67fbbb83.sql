@@ -1,0 +1,1 @@
+SELECT * FROM elb WHERE elb_status_code = "200"

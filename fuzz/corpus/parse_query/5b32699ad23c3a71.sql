@@ -1,0 +1,1 @@
+select nullif(a, b) as result from it

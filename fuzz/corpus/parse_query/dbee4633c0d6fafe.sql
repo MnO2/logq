@@ -1,0 +1,1 @@
+SELECT nonexistent_func(a) FROM it

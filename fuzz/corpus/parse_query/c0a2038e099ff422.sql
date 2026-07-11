@@ -1,0 +1,1 @@
+select a.x from it as a cross join it as b

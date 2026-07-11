@@ -1,0 +1,1 @@
+select a from it where a between 1 and 10 and b = 1

@@ -1,0 +1,1 @@
+SELECT type, elb_status_code FROM it WHERE type = "https"

@@ -1,0 +1,1 @@
+select a from it where coalesce(a, 0) > 1

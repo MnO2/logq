@@ -1,0 +1,1 @@
+select x, count(*) as x from it group by d[0] as x

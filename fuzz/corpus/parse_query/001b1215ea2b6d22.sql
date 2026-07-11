@@ -1,0 +1,1 @@
+select x from it except select x from it where x > 2

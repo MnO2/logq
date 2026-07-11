@@ -1,0 +1,1 @@
+Subquery in SELECT should parse, got: {:?}

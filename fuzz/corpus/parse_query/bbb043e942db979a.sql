@@ -1,0 +1,1 @@
+select a.x, b.x from it as a left join it as b on a.x != a.x

@@ -1,0 +1,1 @@
+Select a From it Where a = 1 Or b = 4

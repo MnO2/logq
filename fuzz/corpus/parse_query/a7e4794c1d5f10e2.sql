@@ -1,0 +1,1 @@
+select a from it where a IN (1, 2)

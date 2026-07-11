@@ -1,0 +1,1 @@
+select a.id, b.val from it as a cross join it as b limit 3

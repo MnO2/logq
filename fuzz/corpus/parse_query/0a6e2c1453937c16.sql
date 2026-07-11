@@ -1,0 +1,1 @@
+SELECT x, y FROM a, b WHERE a.id = b.id

@@ -1,0 +1,1 @@
+SELECT y, count(*) as cnt FROM a INNER JOIN b ON a.id = b.id GROUP BY y

@@ -1,0 +1,1 @@
+select coalesce(b, 0) as b_or_zero from it

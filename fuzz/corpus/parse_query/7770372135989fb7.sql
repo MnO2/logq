@@ -1,0 +1,1 @@
+SELECT a, b FROM it WHERE a > 0 AND b > 0 LIMIT 1

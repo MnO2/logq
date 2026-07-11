@@ -2537,9 +2537,89 @@ pub(crate) fn value_cmp(a: &Value, b: &Value, ordering: &Ordering) -> std::cmp::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn test_registry() -> Arc<FunctionRegistry> {
         Arc::new(crate::functions::register_all().unwrap())
+    }
+
+    fn numeric_value() -> impl Strategy<Value = Value> {
+        prop_oneof![
+            (-1_000_000i32..=1_000_000).prop_map(Value::Int),
+            (-1_000_000.0f32..=1_000_000.0f32).prop_map(|value| Value::Float(OrderedFloat(value))),
+        ]
+    }
+
+    fn truth_value() -> impl Strategy<Value = Option<bool>> {
+        prop_oneof![Just(None), any::<bool>().prop_map(Some)]
+    }
+
+    fn truth_formula(value: Option<bool>) -> Formula {
+        match value {
+            Some(value) => Formula::Constant(value),
+            None => Formula::ExpressionPredicate(Box::new(Expression::Constant(Value::Null))),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_numeric_comparison_is_antisymmetric(left in numeric_value(), right in numeric_value()) {
+            let left_lt_right = Relation::LessThan.compare_ref(&left, &right).unwrap();
+            let right_gt_left = Relation::MoreThan.compare_ref(&right, &left).unwrap();
+            prop_assert_eq!(left_lt_right, right_gt_left);
+        }
+
+        #[test]
+        fn prop_numeric_comparison_is_transitive(
+            first in numeric_value(),
+            second in numeric_value(),
+            third in numeric_value(),
+        ) {
+            let first_lt_second = Relation::LessThan.compare_ref(&first, &second).unwrap() == Some(true);
+            let second_lt_third = Relation::LessThan.compare_ref(&second, &third).unwrap() == Some(true);
+            if first_lt_second && second_lt_third {
+                prop_assert_eq!(Relation::LessThan.compare_ref(&first, &third).unwrap(), Some(true));
+            }
+        }
+
+        #[test]
+        fn prop_three_valued_not_preserves_unknown(value in truth_value()) {
+            let registry = test_registry();
+            let formula = Formula::Not(Box::new(truth_formula(value)));
+            prop_assert_eq!(formula.evaluate(&Variables::default(), &registry).unwrap(), value.map(|v| !v));
+        }
+
+        #[test]
+        fn prop_three_valued_de_morgan(left in truth_value(), right in truth_value()) {
+            let registry = test_registry();
+            let variables = Variables::default();
+            let not_and = Formula::Not(Box::new(Formula::And(
+                Box::new(truth_formula(left)),
+                Box::new(truth_formula(right)),
+            )));
+            let or_not = Formula::Or(
+                Box::new(Formula::Not(Box::new(truth_formula(left)))),
+                Box::new(Formula::Not(Box::new(truth_formula(right)))),
+            );
+            prop_assert_eq!(
+                not_and.evaluate(&variables, &registry).unwrap(),
+                or_not.evaluate(&variables, &registry).unwrap(),
+            );
+        }
+
+        #[test]
+        fn prop_arithmetic_propagates_nullish_values(
+            operator in prop::sample::select(vec!["Plus", "Minus", "Times", "Divide"]),
+            nullish in prop_oneof![Just(Value::Null), Just(Value::Missing)],
+            numeric in numeric_value(),
+        ) {
+            let registry = test_registry();
+            prop_assert_eq!(
+                registry.call(operator, &[nullish.clone(), numeric.clone()]),
+                Ok(nullish.clone()),
+            );
+            prop_assert_eq!(registry.call(operator, &[numeric, nullish.clone()]), Ok(nullish));
+        }
     }
 
     #[test]

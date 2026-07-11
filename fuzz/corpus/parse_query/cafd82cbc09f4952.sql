@@ -1,0 +1,1 @@
+SELECT elb_status_code, sent_bytes FROM it WHERE elb_status_code = "200"
