@@ -48,6 +48,9 @@ def render(results_dir: Path) -> str:
         measured = {item["command"]: item for item in benchmark["results"]}
         values = []
         for tool in tools:
+            if tool not in measured:
+                values.append("—")
+                continue
             item = measured[tool]
             wall_time = milliseconds(item["mean"], item["stddev"])
             values.append(wall_time)

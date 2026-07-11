@@ -4,6 +4,23 @@
 
 logq is a command-line tool for querying and analyzing server log files using [PartiQL](https://partiql.org/), a SQL-compatible query language designed for semi-structured data. It supports structured log formats (ELB, ALB, S3, Squid) and schema-free JSONL logs with nested field access, aggregations, JOINs, subqueries, and set operations.
 
+## Performance
+
+End-to-end CLI time on a reproducible 100 MiB JSONL file (Apple M4 Pro, warm
+filesystem cache, five measured runs; lower is better):
+
+| Query | logq | DuckDB | ClickHouse local | angle-grinder |
+| --- | ---: | ---: | ---: | ---: |
+| Full-file count | 671 ms | 50 ms | 246 ms | 426 ms |
+| Selective filter | 713 ms | 52 ms | 292 ms | 510 ms |
+| Group by status | 1,017 ms | 55 ms | 298 ms | 425 ms |
+| Top-10 latency | 848 ms | 59 ms | 295 ms | unsupported |
+| User-agent substring | 1,982 ms | 55 ms | 300 ms | 593 ms |
+
+logq's streaming queries used 8–9 MiB peak RSS in the same run. See the
+[full results and reproducible methodology](docs/benchmarks.md), including
+versions, memory measurements, limitations, and known optimization gaps.
+
 ## Supported Log Formats
 
 | Format | Description |

@@ -65,9 +65,9 @@ Add `--gzip` to compare compressed JSONL. Each query gets a hyperfine JSON file,
 and a separate `/usr/bin/time` run records peak RSS. The final Markdown fragment
 is written to `results/table.md`.
 
-All tools scan the same JSONL file and implement five equivalent operations:
-full count, selective filter, status-code grouping, top-10 latency, and a
-user-agent substring filter. Syntax is idiomatic to each tool. angle-grinder's
-`limit` is a pre-sort streaming operator, so its top-10 command performs the
-full sort and applies `head` to the rendered rows; this preserves top-N
-semantics while still measuring its full sort cost.
+All tools scan the same JSONL file and use idiomatic syntax for full count,
+selective filter, status-code grouping, top-10 latency, and a user-agent
+substring filter. angle-grinder is marked unsupported for top-N: its `limit`
+operator executes before `sort`, so it cannot express the same bounded result.
+The harness does not substitute a full-sort benchmark because that would
+measure materially different output and resource behavior.

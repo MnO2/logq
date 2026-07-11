@@ -138,6 +138,8 @@ WS1 and WS2 are independent and can run in parallel. Everything else should land
 
 **Done when:** `scripts/bench_e2e/run.sh` reproduces the table from a clean checkout (given competitor binaries), and README shows the results.
 
+**Execution note (2026-07-11):** The published 100 MiB JSONL run found that logq uses only 8–9 MiB RSS for streaming queries but trails DuckDB by 13–36×. Top-10 materializes 233 MiB and is the clearest WS8 target. angle-grinder is marked unsupported for top-N because its `limit` operator executes before `sort`; publishing a full-sort substitute would not be equivalent.
+
 ---
 
 ## WS6 — Error message quality
@@ -226,7 +228,7 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 - [x] WS2 Gzip + globs
 - [x] WS3 Dependency modernization
 - [x] WS4 Fuzzing + conformance
-- [ ] WS5 Competitor benchmarks
+- [x] WS5 Competitor benchmarks
 - [ ] WS6 Error messages
 - [ ] WS7a INNER JOIN
 - [ ] WS7b Custom regex format

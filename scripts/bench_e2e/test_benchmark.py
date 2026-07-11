@@ -33,11 +33,6 @@ class BenchmarkTest(unittest.TestCase):
         self.assertIn("JSONEachRow", benchmark.tool_command("clickhouse", "clickhouse", query, data))
         self.assertIn("| agrind", benchmark.tool_command("angle_grinder", "agrind", query, data))
 
-        top_query = json.loads((HERE / "queries.json").read_text())["queries"][3]
-        top_command = benchmark.tool_command("angle_grinder", "agrind", top_query, data)
-        self.assertIn("sort by latency desc", top_command)
-        self.assertIn("head -n 10", top_command)
-
     def test_formatter_combines_hyperfine_and_rss_results(self) -> None:
         queries = json.loads((HERE / "queries.json").read_text())["queries"]
         with tempfile.TemporaryDirectory() as directory:
@@ -51,24 +46,39 @@ class BenchmarkTest(unittest.TestCase):
                         "hardware": "Test CPU",
                         "runs": 5,
                         "warmup": 1,
-                        "versions": {"logq": "logq 0.1.0"},
+                        "versions": {
+                            "logq": "logq 0.1.0",
+                            "angle_grinder": "ag 0.19.5",
+                        },
                         "hyperfine": "hyperfine 1.20.0",
                     }
                 )
             )
             (results / "rss.json").write_text(
-                json.dumps({query["id"]: {"logq": 12.5} for query in queries})
+                json.dumps(
+                    {
+                        query["id"]: {
+                            "logq": 12.5,
+                            **({} if query["id"] == "top_latency" else {"angle_grinder": 8.0}),
+                        }
+                        for query in queries
+                    }
+                )
             )
             for query in queries:
-                (results / f"{query['id']}.json").write_text(
-                    json.dumps(
-                        {"results": [{"command": "logq", "mean": 0.1, "stddev": 0.01}]}
+                result = {"results": [{"command": "logq", "mean": 0.1, "stddev": 0.01}]}
+                if query["id"] != "top_latency":
+                    result["results"].append(
+                        {"command": "angle_grinder", "mean": 0.2, "stddev": 0.02}
                     )
+                (results / f"{query['id']}.json").write_text(
+                    json.dumps(result)
                 )
 
             rendered = formatter.render(results)
             self.assertIn("| Full-file count | 100.0 ± 10.0 ms |", rendered)
             self.assertIn("| Full-file count | logq | 100.0 ± 10.0 ms | 12.5 MiB |", rendered)
+            self.assertIn("| Top-10 latency | 100.0 ± 10.0 ms | — |", rendered)
 
 
 if __name__ == "__main__":

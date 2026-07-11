@@ -80,10 +80,8 @@ def tool_command(tool: str, binary: str, query: dict, data: Path) -> str:
         return f"{shell_join(command)} > /dev/null"
     if tool == "angle_grinder":
         reader = ["gzip", "-dc", str(data)] if data.suffix == ".gz" else ["cat", str(data)]
-        output = "logfmt" if query["id"] == "top_latency" else "json"
-        command = [binary, "--output", output, statement]
-        postprocess = " | head -n 10" if query["id"] == "top_latency" else ""
-        return f"{shell_join(reader)} | {shell_join(command)}{postprocess} > /dev/null"
+        command = [binary, "--output", "json", statement]
+        return f"{shell_join(reader)} | {shell_join(command)} > /dev/null"
     raise ValueError(f"unknown tool: {tool}")
 
 
@@ -164,6 +162,7 @@ def main() -> None:
         query["id"]: {
             tool: tool_command(tool, binary, query, data)
             for tool, binary in tools.items()
+            if tool in query
         }
         for query in queries
     }
