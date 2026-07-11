@@ -126,6 +126,39 @@ fn json_output_uses_the_shortest_f32_representation() {
 }
 
 #[test]
+fn ndjson_output_writes_one_object_per_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.jsonl");
+    std::fs::write(
+        &path,
+        b"{\"id\":1,\"nested\":{\"ok\":true}}\n{\"id\":2,\"nested\":null}\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_logq"))
+        .args([
+            "query",
+            "select id, nested from it",
+            "--table",
+            &format!("it:jsonl={}", path.display()),
+            "--output",
+            "ndjson",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "{\"id\":1,\"nested\":{\"ok\":true}}\n{\"id\":2,\"nested\":null}\n"
+    );
+}
+
+#[test]
 fn queries_a_typed_user_defined_regex_format() {
     let dir = tempfile::tempdir().unwrap();
     let log_path = dir.path().join("access.log");

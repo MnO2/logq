@@ -1,5 +1,6 @@
 use csv::Writer;
 use prettytable::{Row, Table};
+use std::io::Write;
 use std::result;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -47,6 +48,8 @@ pub enum AppError {
     #[error("{0}")]
     WriteJson(#[from] serde_json::Error),
     #[error("{0}")]
+    WriteIo(#[from] std::io::Error),
+    #[error("{0}")]
     Registry(#[from] functions::RegistryError),
 }
 
@@ -67,6 +70,7 @@ impl PartialEq for AppError {
                 | (AppError::InvalidTableSpecString, AppError::InvalidTableSpecString)
                 | (AppError::WriteCsv(_), AppError::WriteCsv(_))
                 | (AppError::WriteJson(_), AppError::WriteJson(_))
+                | (AppError::WriteIo(_), AppError::WriteIo(_))
                 | (AppError::Registry(_), AppError::Registry(_))
         ) || matches!((self, other),
             (AppError::NoFilesMatched(a), AppError::NoFilesMatched(b)) if a == b
@@ -84,6 +88,7 @@ pub enum OutputMode {
     Table,
     Csv,
     Json,
+    Ndjson,
 }
 
 fn parse_query_input(query_str: &str) -> AppResult<syntax::ast::Query> {
@@ -354,6 +359,7 @@ impl FromStr for OutputMode {
             "table" => Ok(OutputMode::Table),
             "csv" => Ok(OutputMode::Csv),
             "json" => Ok(OutputMode::Json),
+            "ndjson" => Ok(OutputMode::Ndjson),
             _ => Err("unknown output mode".to_string()),
         }
     }
@@ -415,6 +421,19 @@ pub fn run(
             }
             let s = serde_json::to_string(&data)?;
             println!("{}", s);
+        }
+        OutputMode::Ndjson => {
+            let stdout = std::io::stdout();
+            let mut writer = std::io::BufWriter::new(stdout.lock());
+            while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
+                let obj = record
+                    .into_tuples()
+                    .into_iter()
+                    .map(|(key, value)| (key, value_to_json(value)))
+                    .collect();
+                serde_json::to_writer(&mut writer, &serde_json::Value::Object(obj))?;
+                writeln!(writer)?;
+            }
         }
     }
 

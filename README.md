@@ -59,8 +59,9 @@ cat access.log | logq query 'select count(*) from it' --table it:elb=stdin
 # Query a sharded set of plain and gzipped logs (quote globs for logq to expand)
 logq query 'select count(*) from it' --table 'it:alb=logs/*'
 
-# Output as JSON or CSV
+# Output as JSON, newline-delimited JSON, or CSV
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output json
+logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output ndjson
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output csv
 ```
 
@@ -331,11 +332,12 @@ select nullif(a, 0) from it
 
 ## Output Formats
 
-logq supports three output modes via `--output`:
+logq supports four output modes via `--output`:
 
 - **`table`** (default) -- formatted ASCII table
 - **`csv`** -- comma-separated values, pipe-friendly
 - **`json`** -- JSON array of objects
+- **`ndjson`** -- one JSON object per line, streamed as rows are produced
 
 ### Piping to Visualization Tools
 
