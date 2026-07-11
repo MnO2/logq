@@ -85,6 +85,10 @@ impl FunctionRegistry {
         Ok(())
     }
 
+    pub(crate) fn function_names(&self) -> impl Iterator<Item = &str> {
+        self.functions.keys().map(String::as_str)
+    }
+
     pub fn validate(&self, name: &str, arg_count: usize) -> Result<(), RegistryError> {
         let key = name.to_ascii_lowercase();
         let def = self

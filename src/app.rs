@@ -21,6 +21,8 @@ pub enum AppError {
     #[error("{0}")]
     Parse(#[from] logical::parser::ParseError),
     #[error("{0}")]
+    Planning(String),
+    #[error("{0}")]
     PhysicalPlan(#[from] logical::types::PhysicalPlanError),
     #[error("{0}")]
     CreateStream(#[from] execution::types::CreateStreamError),
@@ -51,6 +53,7 @@ impl PartialEq for AppError {
             (AppError::Syntax(_), AppError::Syntax(_))
                 | (AppError::InputNotAllConsumed(_), AppError::InputNotAllConsumed(_))
                 | (AppError::Parse(_), AppError::Parse(_))
+                | (AppError::Planning(_), AppError::Planning(_))
                 | (AppError::PhysicalPlan(_), AppError::PhysicalPlan(_))
                 | (AppError::CreateStream(_), AppError::CreateStream(_))
                 | (AppError::Stream(_), AppError::Stream(_))
@@ -165,6 +168,93 @@ fn syntax_hint(query: &str, offset: usize) -> Option<String> {
         .map(|candidate| format!("did you mean `{candidate}`?"))
 }
 
+fn find_identifier(query: &str, identifier: &str) -> usize {
+    query
+        .to_ascii_lowercase()
+        .find(&identifier.to_ascii_lowercase())
+        .unwrap_or(0)
+}
+
+fn render_planning_error(
+    query: &str,
+    error: &logical::parser::ParseError,
+    table_names: &[String],
+    registry: &functions::FunctionRegistry,
+) -> String {
+    use logical::parser::ParseError;
+
+    let (offset, label, hint) = match error {
+        ParseError::UnknownFunction(name) => {
+            let hint = crate::diagnostic::suggestion(name, registry.function_names())
+                .map(|candidate| format!("did you mean `{candidate}`?"));
+            (find_identifier(query, name), "unknown function", hint)
+        }
+        ParseError::UnknownTable(name, _) => {
+            let hint = crate::diagnostic::suggestion(name, table_names.iter().map(String::as_str))
+                .map(|candidate| format!("did you mean `{candidate}`?"));
+            (find_identifier(query, name), "unknown table", hint)
+        }
+        ParseError::InvalidArguments(details) => {
+            let name = details.split_whitespace().next().unwrap_or("");
+            (
+                find_identifier(query, name),
+                "invalid function arguments",
+                Some("check the function's argument count and types".to_string()),
+            )
+        }
+        ParseError::HavingClauseWithoutGroupBy => (
+            find_identifier(query, "having"),
+            "HAVING requires GROUP BY",
+            Some("add a `group by` clause before `having`".to_string()),
+        ),
+        ParseError::GroupByWithoutAggregateFunction => (
+            find_identifier(query, "group"),
+            "GROUP BY has no aggregate",
+            Some("add an aggregate function such as `count(*)`".to_string()),
+        ),
+        ParseError::GroupByFieldsMismatch | ParseError::StarGroupByUnsupported => (
+            find_identifier(query, "group"),
+            "invalid GROUP BY projection",
+            Some("select only grouped fields and aggregate expressions".to_string()),
+        ),
+        ParseError::FromClausePathInvalidTableReference | ParseError::FromClauseMissingAsForPathExpr => (
+            find_identifier(query, "from"),
+            "invalid FROM clause",
+            Some("check the table name and alias".to_string()),
+        ),
+        ParseError::StdinInJoinRightSide | ParseError::UnsupportedJoinType(_) => (
+            find_identifier(query, "join"),
+            "invalid JOIN",
+            Some("check the join type and input tables".to_string()),
+        ),
+        ParseError::TypeMismatch | ParseError::NotAggregateFunction => (
+            0,
+            "query type mismatch",
+            Some("check expression and aggregate types".to_string()),
+        ),
+    };
+
+    crate::diagnostic::render(query, offset, &error.to_string(), label, hint.as_deref())
+}
+
+fn plan_query(
+    query_str: &str,
+    query: syntax::ast::Query,
+    data_sources: common::types::DataSourceRegistry,
+    registry: Arc<functions::FunctionRegistry>,
+) -> AppResult<logical::types::Node> {
+    let mut table_names: Vec<String> = data_sources.keys().cloned().collect();
+    table_names.sort();
+    logical::parser::parse_query_top(query, data_sources, registry.clone()).map_err(|error| {
+        AppError::Planning(render_planning_error(
+            query_str,
+            &error,
+            &table_names,
+            registry.as_ref(),
+        ))
+    })
+}
+
 fn value_to_json(value: common::types::Value) -> serde_json::Value {
     use common::types::Value;
     match value {
@@ -203,7 +293,7 @@ pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry)
     let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_sources, registry)?;
+    let node = plan_query(query_str, q, data_sources, registry)?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -221,7 +311,7 @@ pub fn run(
     let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
+    let node = plan_query(query_str, q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -270,7 +360,7 @@ pub(crate) fn run_to_vec(
     let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
+    let node = plan_query(query_str, q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -293,7 +383,7 @@ pub fn run_to_records(
     let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
-    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
+    let node = plan_query(query_str, q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
@@ -316,7 +406,7 @@ pub fn run_to_records_with_registry(
 ) -> AppResult<Vec<Vec<(String, common::types::Value)>>> {
     let q = parse_query_input(query_str)?;
 
-    let node = logical::parser::parse_query_top(q, data_sources, registry.clone())?;
+    let node = plan_query(query_str, q, data_sources, registry.clone())?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 

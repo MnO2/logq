@@ -22,7 +22,7 @@ pub enum ParseError {
     GroupByFieldsMismatch,
     #[error("Invalid Arguments: {0}")]
     InvalidArguments(String),
-    #[error("Invalid Arguments: {0}")]
+    #[error("Unknown function '{0}'")]
     UnknownFunction(String),
     #[error("Having clause but no Group By clause provided")]
     HavingClauseWithoutGroupBy,

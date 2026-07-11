@@ -143,3 +143,27 @@ fn syntax_failures_show_the_query_location_and_a_likely_fix() {
         assert!(output.contains(hint), "missing hint {hint:#?} in {output:#?}");
     }
 }
+
+#[test]
+fn planning_failures_point_to_the_invalid_name_and_suggest_a_fix() {
+    for (query, label, hint) in [
+        ("select uppre(a) from it", "unknown function", "did you mean `upper`?"),
+        ("select * from itt", "unknown table", "did you mean `it`?"),
+        (
+            "select upper(a, b) from it",
+            "invalid function arguments",
+            "check the function's argument count and types",
+        ),
+        (
+            "select a from it group by a",
+            "GROUP BY has no aggregate",
+            "add an aggregate function",
+        ),
+    ] {
+        let output = run_query(query);
+        assert!(output.contains("--> query:1:"), "missing location in {output:#?}");
+        assert!(output.contains('^'), "missing caret in {output:#?}");
+        assert!(output.contains(label), "missing label {label:#?} in {output:#?}");
+        assert!(output.contains(hint), "missing hint {hint:#?} in {output:#?}");
+    }
+}
