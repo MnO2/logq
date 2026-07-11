@@ -5,13 +5,16 @@ use json;
 use ordered_float::OrderedFloat;
 use url;
 
+use flate2::read::GzDecoder;
 use json::JsonValue;
 use linked_hash_map::LinkedHashMap;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
-use std::path::Path;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::result;
 use std::str::FromStr;
 
@@ -760,6 +763,56 @@ pub trait RecordRead {
     fn read_record(&mut self) -> ReaderResult<Option<Record>>;
 }
 
+pub(crate) fn path_is_gzip(path: &Path) -> io::Result<bool> {
+    let extension_hint = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"));
+    let mut file = File::open(path)?;
+    let mut magic = [0_u8; 2];
+    let bytes_read = file.read(&mut magic)?;
+    Ok(extension_hint || (bytes_read == magic.len() && magic == [0x1f, 0x8b]))
+}
+
+pub(crate) fn open_path(path: &Path) -> ReaderResult<Box<dyn Read>> {
+    let mut file = File::open(path)?;
+    let mut magic = [0_u8; 2];
+    let bytes_read = file.read(&mut magic)?;
+    file.seek(SeekFrom::Start(0))?;
+    let extension_hint = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"));
+    if extension_hint || (bytes_read == magic.len() && magic == [0x1f, 0x8b]) {
+        Ok(Box::new(GzDecoder::new(file)))
+    } else {
+        Ok(Box::new(file))
+    }
+}
+
+pub(crate) struct MultiFileReader {
+    paths: VecDeque<PathBuf>,
+    current: Option<Reader<Box<dyn Read>>>,
+    builder: ReaderBuilder,
+}
+
+impl RecordRead for MultiFileReader {
+    fn read_record(&mut self) -> ReaderResult<Option<Record>> {
+        loop {
+            if self.current.is_none() {
+                let Some(path) = self.paths.pop_front() else {
+                    return Ok(None);
+                };
+                self.current = Some(self.builder.with_path(path)?);
+            }
+            if let Some(record) = self.current.as_mut().unwrap().read_record()? {
+                return Ok(Some(record));
+            }
+            self.current = None;
+        }
+    }
+}
+
 impl ReaderBuilder {
     pub fn new(file_format: String) -> Self {
         ReaderBuilder {
@@ -768,8 +821,16 @@ impl ReaderBuilder {
         }
     }
 
-    pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<File>> {
-        Ok(Reader::new(self, File::open(path)?, self.file_format.clone()))
+    pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<Box<dyn Read>>> {
+        Ok(Reader::new(self, open_path(path.as_ref())?, self.file_format.clone()))
+    }
+
+    pub(crate) fn with_paths(&self, paths: &[PathBuf]) -> MultiFileReader {
+        MultiFileReader {
+            paths: paths.iter().cloned().collect(),
+            current: None,
+            builder: ReaderBuilder::new(self.file_format.clone()),
+        }
     }
 
     #[allow(dead_code)]

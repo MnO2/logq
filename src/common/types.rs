@@ -423,6 +423,7 @@ impl std::fmt::Debug for ParsingContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataSource {
     File(PathBuf, String, String),
+    Files(Vec<PathBuf>, String, String),
     Stdin(String, String),
 }
 

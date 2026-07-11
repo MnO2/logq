@@ -34,10 +34,33 @@ logq query 'select e.f.g, d[0] from it where a > 1' \
 # Read from stdin
 cat access.log | logq query 'select count(*) from it' --table it:elb=stdin
 
+# Query a sharded set of plain and gzipped logs (quote globs for logq to expand)
+logq query 'select count(*) from it' --table 'it:alb=logs/*'
+
 # Output as JSON or CSV
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output json
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output csv
 ```
+
+## Compressed and sharded logs
+
+Gzip input is transparent for every supported format. logq recognizes gzip magic bytes, so a
+compressed file does not need a `.gz` suffix. Compressed files use the sequential reader; plain
+files retain mmap-based parallel scanning when eligible.
+
+A table can combine a glob or a comma-separated list of files. Paths are sorted before scanning,
+which makes results deterministic across runs:
+
+```bash
+# Glob (quote it so the shell does not expand it into separate arguments)
+logq query 'select count(*) from it' --table 'it:alb=logs/2026-07-*.log.gz'
+
+# Explicit mixture of compressed and uncompressed shards
+logq query 'select * from it limit 20' \
+  --table 'it:jsonl=logs/part-1.jsonl,logs/part-2.jsonl.gz'
+```
+
+An unmatched glob is reported as an error that includes the original pattern.
 
 ## SQL Feature Reference
 

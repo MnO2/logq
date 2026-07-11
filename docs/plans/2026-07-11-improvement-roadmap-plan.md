@@ -221,7 +221,7 @@ Add `clf` and `combined` as built-in formats implemented *as* predefined regex-f
 When you finish a workstream: update `CHANGELOG.md`, check the box in the table below (edit this file), and note anything you discovered that changes a later workstream's assumptions.
 
 - [x] WS1 Clippy + CI
-- [ ] WS2 Gzip + globs
+- [x] WS2 Gzip + globs
 - [ ] WS3 Dependency modernization
 - [ ] WS4 Fuzzing + conformance
 - [ ] WS5 Competitor benchmarks

@@ -26,6 +26,9 @@ pub(crate) enum ScanStrategy {
 }
 
 pub(crate) fn choose_strategy(path: &Path) -> ScanStrategy {
+    if crate::execution::datasource::path_is_gzip(path).unwrap_or(true) {
+        return ScanStrategy::Sequential;
+    }
     let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
 
     if file_size < PARALLEL_THRESHOLD || file_size == 0 {

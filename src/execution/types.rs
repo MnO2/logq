@@ -5,7 +5,9 @@ use super::stream::{
 };
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
-use crate::execution::batch::{BatchSchema, BatchStream, BatchToRowAdapter, ColumnType, PrecomputedBatchStream};
+use crate::execution::batch::{
+    BatchSchema, BatchStream, BatchToRowAdapter, ColumnType, ConcatBatchStream, PrecomputedBatchStream,
+};
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
 use crate::execution::batch_project::BatchProjectOperator;
@@ -745,6 +747,9 @@ impl Node {
     fn find_datasource_format(&self) -> Option<(String, std::path::PathBuf)> {
         match self {
             Node::DataSource(DataSource::File(path, format, _), _) => Some((format.clone(), path.clone())),
+            Node::DataSource(DataSource::Files(paths, format, _), _) => {
+                paths.first().map(|path| (format.clone(), path.clone()))
+            }
             Node::Filter(source, _)
             | Node::Map(_, source)
             | Node::Limit(_, source)
@@ -852,7 +857,7 @@ impl Node {
 
         // Skip parallel path for aggregation pushdown — sequential is fine
         // since we're not constructing full column batches
-        match std::fs::File::open(path) {
+        match crate::execution::datasource::open_path(path) {
             Ok(file) => {
                 let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
                 // Use filter_fields as both projected and filter fields
@@ -932,6 +937,7 @@ impl Node {
             Node::DataSource(DataSource::File(_, format, _), _) => {
                 crate::execution::datasource::is_time_ordered(format).is_some()
             }
+            Node::DataSource(DataSource::Files(_, _, _), _) => false,
             Node::Filter(child, _) => Self::source_is_time_ordered(child),
             _ => false,
         }
@@ -1001,7 +1007,7 @@ impl Node {
                             }
                         }
                         // Sequential fallback
-                        match std::fs::File::open(path) {
+                        match crate::execution::datasource::open_path(path) {
                             Ok(file) => {
                                 let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
                                 let scan = BatchScanOperator::new(reader, schema, fields, vec![], None);
@@ -1009,6 +1015,33 @@ impl Node {
                             }
                             Err(_) => Some(Err(CreateStreamError::Io)),
                         }
+                    }
+                    DataSource::Files(paths, file_format, table_name) => {
+                        if paths.is_empty() || file_format == "jsonl" {
+                            return None;
+                        }
+                        let mut streams = Vec::with_capacity(paths.len());
+                        let mut batch_schema = None;
+                        for path in paths {
+                            let node = Node::DataSource(
+                                DataSource::File(path.clone(), file_format.clone(), table_name.clone()),
+                                vec![],
+                            );
+                            match node.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                                Some(Ok(stream)) => {
+                                    if batch_schema.is_none() {
+                                        batch_schema = Some(stream.schema().clone());
+                                    }
+                                    streams.push(stream);
+                                }
+                                Some(Err(error)) => return Some(Err(error)),
+                                None => return None,
+                            }
+                        }
+                        Some(Ok(Box::new(ConcatBatchStream::new(
+                            streams,
+                            batch_schema.expect("non-empty path list has a schema"),
+                        ))))
                     }
                     _ => None,
                 }
@@ -1068,7 +1101,7 @@ impl Node {
                                 }
 
                                 // Sequential fallback
-                                match std::fs::File::open(path) {
+                                match crate::execution::datasource::open_path(path) {
                                     Ok(file) => {
                                         let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
                                         let scan = BatchScanOperator::new(
@@ -1280,6 +1313,17 @@ impl Node {
                     if !bindings.is_empty() {
                         let stream = ProjectionStream::new(Box::new(file_stream), bindings.clone());
 
+                        Ok(Box::new(stream))
+                    } else {
+                        Ok(Box::new(file_stream))
+                    }
+                }
+                DataSource::Files(paths, file_format, _table_name) => {
+                    let reader = ReaderBuilder::new(file_format.clone()).with_paths(paths);
+                    let file_stream = LogFileStream::new(Box::new(reader));
+
+                    if !bindings.is_empty() {
+                        let stream = ProjectionStream::new(Box::new(file_stream), bindings.clone());
                         Ok(Box::new(stream))
                     } else {
                         Ok(Box::new(file_stream))

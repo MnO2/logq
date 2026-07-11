@@ -104,6 +104,7 @@ pub struct ColumnBatch {
 }
 
 /// Schema information for a batch.
+#[derive(Clone)]
 pub struct BatchSchema {
     pub names: Vec<String>,
     pub types: Vec<ColumnType>,
@@ -153,6 +154,46 @@ impl BatchStream for PrecomputedBatchStream {
     }
 
     fn close(&self) {}
+}
+
+/// A sequence of batch streams, used to scan sharded tables in path order.
+pub struct ConcatBatchStream {
+    streams: VecDeque<Box<dyn BatchStream>>,
+    batch_schema: BatchSchema,
+}
+
+impl ConcatBatchStream {
+    pub fn new(streams: Vec<Box<dyn BatchStream>>, batch_schema: BatchSchema) -> Self {
+        Self {
+            streams: streams.into(),
+            batch_schema,
+        }
+    }
+}
+
+impl BatchStream for ConcatBatchStream {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        loop {
+            let Some(stream) = self.streams.front_mut() else {
+                return Ok(None);
+            };
+            if let Some(batch) = stream.next_batch()? {
+                return Ok(Some(batch));
+            }
+            stream.close();
+            self.streams.pop_front();
+        }
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.batch_schema
+    }
+
+    fn close(&self) {
+        for stream in &self.streams {
+            stream.close();
+        }
+    }
 }
 
 /// Converts a [`BatchStream`] into a [`RecordStream`] by materializing each

@@ -31,6 +31,12 @@ pub enum AppError {
     InvalidLogFileFormat,
     #[error("Invalid Table Spec String")]
     InvalidTableSpecString,
+    #[error("No files matched pattern: {0}")]
+    NoFilesMatched(String),
+    #[error("Invalid glob pattern: {0}")]
+    InvalidGlobPattern(String),
+    #[error("Duplicate table name: {0}")]
+    DuplicateTableName(String),
     #[error("{0}")]
     WriteCsv(#[from] csv::Error),
     #[error("{0}")]
@@ -54,6 +60,12 @@ impl PartialEq for AppError {
                 | (AppError::WriteCsv(_), AppError::WriteCsv(_))
                 | (AppError::WriteJson(_), AppError::WriteJson(_))
                 | (AppError::Registry(_), AppError::Registry(_))
+        ) || matches!((self, other),
+            (AppError::NoFilesMatched(a), AppError::NoFilesMatched(b)) if a == b
+        ) || matches!((self, other),
+            (AppError::InvalidGlobPattern(a), AppError::InvalidGlobPattern(b)) if a == b
+        ) || matches!((self, other),
+            (AppError::DuplicateTableName(a), AppError::DuplicateTableName(b)) if a == b
         )
     }
 }
@@ -276,6 +288,8 @@ pub fn run_to_records_with_registry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
@@ -1919,5 +1933,48 @@ mod tests {
         // id=2 unmatched: x=NULL (left side NULL-padded)
         assert_eq!(result[1][0].1, common::types::Value::String("beta".into()));
         assert_eq!(result[1][1].1, common::types::Value::Null);
+    }
+
+    fn write_gzip_lines(path: &std::path::Path, lines: &[&str]) {
+        let file = File::create(path).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        for line in lines {
+            writeln!(encoder, "{line}").unwrap();
+        }
+        encoder.finish().unwrap();
+    }
+
+    #[test]
+    fn test_gzip_magic_bytes_with_non_gz_extension() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("renamed.log");
+        write_gzip_lines(&file_path, &[r#"{"x": 1}"#, r#"{"x": 2}"#]);
+        let sources = vec![(
+            "it".to_string(),
+            common::types::DataSource::File(file_path, "jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let rows = run_to_vec("select count(*) as n from it", sources, 1).unwrap();
+        assert_eq!(rows[0][0].1, common::types::Value::Int(2));
+    }
+
+    #[test]
+    fn test_mixed_plain_and_gzip_files() {
+        let dir = tempdir().unwrap();
+        let plain = dir.path().join("a.jsonl");
+        let gzip = dir.path().join("b.jsonl.gz");
+        std::fs::write(&plain, "{\"x\": 1}\n").unwrap();
+        write_gzip_lines(&gzip, &[r#"{"x": 2}"#, r#"{"x": 3}"#]);
+        let sources = vec![(
+            "it".to_string(),
+            common::types::DataSource::Files(vec![plain, gzip], "jsonl".to_string(), "it".to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let rows = run_to_vec("select count(*) as n from it", sources, 2).unwrap();
+        assert_eq!(rows[0][0].1, common::types::Value::Int(3));
     }
 }

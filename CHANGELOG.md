@@ -6,6 +6,7 @@ Phase 4 complete. All phases done.
 ## Improvement Roadmap (2026-07-11)
 
 - **WS1:** Cleared all compiler and Clippy warnings, restored all-target benchmark compilation, and modernized CI with current GitHub Actions, strict formatting/Clippy gates, an all-features check, and Linux/macOS/Windows tests.
+- **WS2:** Added transparent gzip input plus deterministic glob and comma-list expansion for tables. Mixed compressed/plain shards are supported, while eligible plain files retain per-file mmap scanning.
 
 ## Completed Tasks
 

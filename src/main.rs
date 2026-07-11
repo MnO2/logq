@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate lazy_static;
-
 use logq::app::{self, AppError, OutputMode};
 use logq::common;
 use logq::execution;
@@ -8,15 +5,9 @@ use logq::execution;
 use clap::load_yaml;
 use clap::App;
 use prettytable::{Cell, Row, Table};
-use regex::Regex;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
-
-lazy_static! {
-    //FIXME: use different type for string hostname and Ipv4
-    static ref TABLE_SPEC_REGEX: Regex = Regex::new(r#"([0-9a-zA-Z]+):([a-zA-Z]+)=([^=\s"':]+)"#).unwrap();
-}
 
 fn parse_table_specs<'a, I>(values: I) -> Result<common::types::DataSourceRegistry, AppError>
 where
@@ -26,31 +17,54 @@ where
     let mut seen_names = HashSet::new();
 
     for table_spec_string in values {
-        if let Some(cap) = TABLE_SPEC_REGEX.captures(table_spec_string) {
-            let table_name = cap.get(1).map_or("", |m| m.as_str()).to_string();
-            let file_format = cap.get(2).map_or("", |m| m.as_str()).to_string();
-            let file_path = cap.get(3).map_or("", |m| m.as_str()).to_string();
-
-            if !["elb", "alb", "squid", "s3", "jsonl"].contains(&&*file_format) {
-                return Err(AppError::InvalidLogFileFormat);
-            }
-
-            if !seen_names.insert(table_name.clone()) {
-                eprintln!("Error: duplicate table name '{}'", table_name);
-                std::process::exit(1);
-            }
-
-            let data_source = if file_path == "stdin" {
-                common::types::DataSource::Stdin(file_format, table_name.clone())
-            } else {
-                let path = Path::new(&file_path);
-                common::types::DataSource::File(path.to_path_buf(), file_format, table_name.clone())
-            };
-
-            data_sources.insert(table_name, data_source);
-        } else {
+        let (table_and_format, path_spec) = table_spec_string
+            .split_once('=')
+            .ok_or(AppError::InvalidTableSpecString)?;
+        let (table_name, file_format) = table_and_format
+            .split_once(':')
+            .ok_or(AppError::InvalidTableSpecString)?;
+        if table_name.is_empty() || !table_name.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(AppError::InvalidTableSpecString);
         }
+        if !["elb", "alb", "squid", "s3", "jsonl"].contains(&file_format) {
+            return Err(AppError::InvalidLogFileFormat);
+        }
+        if !seen_names.insert(table_name.to_string()) {
+            return Err(AppError::DuplicateTableName(table_name.to_string()));
+        }
+
+        let data_source = if path_spec == "stdin" {
+            common::types::DataSource::Stdin(file_format.to_string(), table_name.to_string())
+        } else {
+            let mut paths: Vec<PathBuf> = Vec::new();
+            for item in path_spec.split(',') {
+                if item.is_empty() || item == "stdin" {
+                    return Err(AppError::InvalidTableSpecString);
+                }
+                if item.bytes().any(|b| matches!(b, b'*' | b'?' | b'[')) {
+                    let entries = glob::glob(item).map_err(|_| AppError::InvalidGlobPattern(item.to_string()))?;
+                    let mut matched = Vec::new();
+                    for entry in entries {
+                        matched.push(entry.map_err(|_| AppError::InvalidGlobPattern(item.to_string()))?);
+                    }
+                    if matched.is_empty() {
+                        return Err(AppError::NoFilesMatched(item.to_string()));
+                    }
+                    paths.extend(matched);
+                } else {
+                    paths.push(PathBuf::from(item));
+                }
+            }
+            paths.sort();
+            paths.dedup();
+            if paths.len() == 1 {
+                common::types::DataSource::File(paths.pop().unwrap(), file_format.to_string(), table_name.to_string())
+            } else {
+                common::types::DataSource::Files(paths, file_format.to_string(), table_name.to_string())
+            }
+        };
+
+        data_sources.insert(table_name.to_string(), data_source);
     }
 
     Ok(data_sources)
@@ -176,5 +190,59 @@ fn main() {
         _ => {
             println!("{}", app_m.usage());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn parse_table_specs_expands_globs_in_sorted_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let second = dir.path().join("b.log");
+        let first = dir.path().join("a.log");
+        fs::write(&second, "b").unwrap();
+        fs::write(&first, "a").unwrap();
+        let spec = format!("it:jsonl={}/*.log", dir.path().display());
+
+        let sources = parse_table_specs(std::iter::once(spec.as_str())).unwrap();
+        assert_eq!(
+            sources["it"],
+            common::types::DataSource::Files(vec![first, second], "jsonl".to_string(), "it".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_specs_accepts_sorted_comma_lists() {
+        let spec = "it:jsonl=z.log,a.log";
+        let sources = parse_table_specs(std::iter::once(spec)).unwrap();
+        assert_eq!(
+            sources["it"],
+            common::types::DataSource::Files(
+                vec!["a.log".into(), "z.log".into()],
+                "jsonl".to_string(),
+                "it".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn parse_table_specs_names_empty_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let pattern = format!("{}/*.missing", dir.path().display());
+        let spec = format!("it:jsonl={pattern}");
+        let error = parse_table_specs(std::iter::once(spec.as_str())).unwrap_err();
+        assert_eq!(error, AppError::NoFilesMatched(pattern));
+    }
+
+    #[test]
+    fn parse_table_specs_preserves_stdin() {
+        let sources = parse_table_specs(std::iter::once("it:jsonl=stdin")).unwrap();
+        assert_eq!(
+            sources["it"],
+            common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string())
+        );
     }
 }

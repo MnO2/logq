@@ -873,6 +873,7 @@ pub(crate) fn parse_query(
     let primary_ds = data_sources.get(&primary_table_name).unwrap();
     let file_format = match primary_ds {
         common::DataSource::File(_, fmt, _) => fmt.clone(),
+        common::DataSource::Files(_, fmt, _) => fmt.clone(),
         common::DataSource::Stdin(fmt, _) => fmt.clone(),
     };
 
