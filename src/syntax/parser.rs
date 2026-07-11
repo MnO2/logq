@@ -615,10 +615,10 @@ fn group_by_expression(i: &str) -> IResult<&str, ast::GroupByExpression, nom::er
 }
 
 fn limit_expression(i: &str) -> IResult<&str, ast::LimitExpression, nom::error::Error<&str>> {
-    map(preceded(tuple((tag_no_case("limit"), space1)), digit1), |s: &str| {
-        let v = s.parse::<u32>().unwrap();
-        ast::LimitExpression::new(v)
-    })(i)
+    map_res(
+        preceded(tuple((tag_no_case("limit"), space1)), digit1),
+        |limit: &str| limit.parse::<u32>().map(ast::LimitExpression::new),
+    )(i)
 }
 
 fn ordering_term(i: &str) -> IResult<&str, ast::OrderingTerm, nom::error::Error<&str>> {
@@ -1537,6 +1537,13 @@ mod test {
         );
 
         assert_eq!(select_query("select a, b, c from it limit 1"), Ok(("", ans)));
+    }
+
+    #[test]
+    fn test_limit_overflow_is_a_parse_error() {
+        assert!(limit_expression("limit 4294967295").is_ok());
+        assert!(limit_expression("limit 4294967296").is_err());
+        assert!(limit_expression("limit 166666666666666666666666666666666666666").is_err());
     }
 
     #[test]
