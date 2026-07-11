@@ -3,3 +3,5 @@
 .idea
 *.log
 program.md
+scripts/bench_e2e/data/
+scripts/bench_e2e/results/
