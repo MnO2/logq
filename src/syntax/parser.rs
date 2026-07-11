@@ -7,7 +7,7 @@ use nom::{
     branch::alt,
     bytes::complete::{escaped, tag, tag_no_case},
     character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
-    combinator::{cut, map, map_res, not, opt},
+    combinator::{cut, map, map_res, not, opt, recognize},
     error::{Error, ErrorKind, context},
     multi::{many0, many1, separated_list0},
     number::complete,
@@ -172,15 +172,10 @@ fn float(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
 }
 
 fn integral(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
-    alt((
-        map_res(terminated(digit1, not(char('.'))), |digit_str: &str| {
-            digit_str.parse::<i32>().map(ast::Value::Integral)
-        }),
-        map(
-            terminated(preceded(tag("-"), digit1), not(char('.'))),
-            |digit_str: &str| ast::Value::Integral(-digit_str.parse::<i32>().unwrap()),
-        ),
-    ))(i)
+    map_res(
+        terminated(recognize(pair(opt(tag("-")), digit1)), not(char('.'))),
+        |integer: &str| integer.parse::<i32>().map(ast::Value::Integral),
+    )(i)
 }
 
 fn null_literal(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
@@ -1141,6 +1136,9 @@ mod test {
     fn test_integral() {
         assert_eq!(integral("123"), Ok(("", ast::Value::Integral(123))));
         assert_eq!(integral("-123"), Ok(("", ast::Value::Integral(-123))));
+        assert_eq!(integral("-2147483648"), Ok(("", ast::Value::Integral(i32::MIN))));
+        assert!(integral("2147483648").is_err());
+        assert!(integral("-2147483649").is_err());
     }
 
     #[test]
