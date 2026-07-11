@@ -23,6 +23,8 @@ pub enum AppError {
     #[error("{0}")]
     Planning(String),
     #[error("{0}")]
+    Runtime(String),
+    #[error("{0}")]
     PhysicalPlan(#[from] logical::types::PhysicalPlanError),
     #[error("{0}")]
     CreateStream(#[from] execution::types::CreateStreamError),
@@ -54,6 +56,7 @@ impl PartialEq for AppError {
                 | (AppError::InputNotAllConsumed(_), AppError::InputNotAllConsumed(_))
                 | (AppError::Parse(_), AppError::Parse(_))
                 | (AppError::Planning(_), AppError::Planning(_))
+                | (AppError::Runtime(_), AppError::Runtime(_))
                 | (AppError::PhysicalPlan(_), AppError::PhysicalPlan(_))
                 | (AppError::CreateStream(_), AppError::CreateStream(_))
                 | (AppError::Stream(_), AppError::Stream(_))
@@ -194,6 +197,11 @@ fn render_planning_error(
                 .map(|candidate| format!("did you mean `{candidate}`?"));
             (find_identifier(query, name), "unknown table", hint)
         }
+        ParseError::UnknownColumn(name, available) => {
+            let hint = crate::diagnostic::suggestion(name, available.split(", "))
+                .map(|candidate| format!("did you mean `{candidate}`?"));
+            (find_identifier(query, name), "unknown column", hint)
+        }
         ParseError::InvalidArguments(details) => {
             let name = details.split_whitespace().next().unwrap_or("");
             (
@@ -235,6 +243,65 @@ fn render_planning_error(
     };
 
     crate::diagnostic::render(query, offset, &error.to_string(), label, hint.as_deref())
+}
+
+fn expression_error(error: &execution::types::StreamError) -> Option<&execution::types::ExpressionError> {
+    use execution::types::{EvaluateError, StreamError};
+    match error {
+        StreamError::Evaluate(EvaluateError::Expression(error)) | StreamError::Expression(error) => Some(error),
+        _ => None,
+    }
+}
+
+fn expression_offset(query: &str) -> usize {
+    let lowered = query.to_ascii_lowercase();
+    if let Some(offset) = lowered.find("cast") {
+        return offset;
+    }
+    ["||", "+", "-", "*", "/"]
+        .into_iter()
+        .filter_map(|operator| query.find(operator))
+        .min()
+        .unwrap_or(0)
+}
+
+fn render_runtime_error(query: &str, error: execution::types::StreamError) -> AppError {
+    use execution::types::ExpressionError;
+
+    let (offset, label, hint) = match expression_error(&error) {
+        Some(ExpressionError::InvalidArguments) => (
+            expression_offset(query),
+            "invalid expression arguments",
+            Some("check the operand and function argument types"),
+        ),
+        Some(ExpressionError::TypeMismatch) => (
+            expression_offset(query),
+            "expression type mismatch",
+            Some("check the value and target types"),
+        ),
+        Some(ExpressionError::UnknownFunction) => (
+            expression_offset(query),
+            "unknown function",
+            Some("check the function name"),
+        ),
+        Some(ExpressionError::KeyNotFound) => (
+            expression_offset(query),
+            "unknown column",
+            Some("check the column name"),
+        ),
+        _ => (
+            0,
+            "query execution failed",
+            Some("check the input data and expression types"),
+        ),
+    };
+    AppError::Runtime(crate::diagnostic::render(
+        query,
+        offset,
+        &error.to_string(),
+        label,
+        hint,
+    ))
 }
 
 fn plan_query(
@@ -321,21 +388,21 @@ pub fn run(
         OutputMode::Table => {
             let mut table = Table::new();
 
-            while let Some(record) = stream.next()? {
+            while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
                 table.add_row(Row::new(record.to_row()));
             }
             table.printstd();
         }
         OutputMode::Csv => {
             let mut wtr = Writer::from_writer(std::io::stdout());
-            while let Some(record) = stream.next()? {
+            while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
                 let csv_record = record.to_csv_record();
                 wtr.write_record(csv_record)?;
             }
         }
         OutputMode::Json => {
             let mut data = Vec::new();
-            while let Some(record) = stream.next()? {
+            while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
                 let obj = record
                     .into_tuples()
                     .into_iter()
@@ -367,7 +434,7 @@ pub(crate) fn run_to_vec(
     let mut stream = physical_plan.get(variables, registry, threads)?;
     let mut results = Vec::new();
 
-    while let Some(record) = stream.next()? {
+    while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
         results.push(record.to_tuples());
     }
 
@@ -390,7 +457,7 @@ pub fn run_to_records(
     let mut stream = physical_plan.get(variables, registry, threads)?;
     let mut results = Vec::new();
 
-    while let Some(record) = stream.next()? {
+    while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
         results.push(record.to_tuples());
     }
 
@@ -413,7 +480,7 @@ pub fn run_to_records_with_registry(
     let mut stream = physical_plan.get(variables, registry, threads)?;
     let mut results = Vec::new();
 
-    while let Some(record) = stream.next()? {
+    while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
         results.push(record.into_tuples());
     }
 

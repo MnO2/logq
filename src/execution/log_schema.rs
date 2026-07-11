@@ -36,6 +36,10 @@ impl LogSchema {
         self.field_names.iter().position(|n| n == name)
     }
 
+    pub fn field_names(&self) -> impl Iterator<Item = &str> {
+        self.field_names.iter().map(String::as_str)
+    }
+
     /// Returns true if this field type requires scalar per-row parsing
     /// (Host, HttpRequest) and cannot be used in pushed-down predicates.
     #[cfg(test)]

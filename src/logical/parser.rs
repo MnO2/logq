@@ -32,6 +32,8 @@ pub enum ParseError {
     FromClauseMissingAsForPathExpr,
     #[error("Unknown table '{0}'. Available tables: {1}")]
     UnknownTable(String, String),
+    #[error("unknown column `{0}`. Available columns: {1}")]
+    UnknownColumn(String, String),
     #[error("Stdin cannot be used as the right side of a join (it can only be read once)")]
     StdinInJoinRightSide,
     #[error("SELECT * with GROUP BY is not supported for jsonl or multi-table queries (no fixed schema to expand)")]
@@ -270,7 +272,10 @@ fn parse_value_expression(
             let expr = parse_value(v)?;
             Ok(expr)
         }
-        ast::Expression::Column(path_expr) => Ok(Box::new(types::Expression::Variable(path_expr.clone()))),
+        ast::Expression::Column(path_expr) => {
+            validate_fixed_schema_column(ctx, path_expr)?;
+            Ok(Box::new(types::Expression::Variable(path_expr.clone())))
+        }
         ast::Expression::BinaryOperator(_, _, _) => parse_binary_operator(ctx, value_expr),
         ast::Expression::UnaryOperator(_, _) => parse_unary_operator(ctx, value_expr),
         ast::Expression::FuncCall(func_name, select_exprs, _) => {
@@ -353,6 +358,41 @@ fn parse_value_expression(
             Ok(Box::new(types::Expression::Subquery(Box::new(inner_node))))
         }
     }
+}
+
+fn validate_fixed_schema_column(ctx: &common::ParsingContext, path_expr: &PathExpr) -> ParseResult<()> {
+    let [PathSegment::AttrName(column)] = path_expr.path_segments.as_slice() else {
+        // Qualified and nested paths can involve FROM aliases, so validate only
+        // unambiguous bare columns here.
+        return Ok(());
+    };
+    if ctx.query_aliases.contains(column) {
+        return Ok(());
+    }
+    let Some(data_source) = (ctx.data_sources.len() == 1)
+        .then(|| ctx.data_sources.values().next())
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let format = match data_source {
+        common::DataSource::File(_, format, _)
+        | common::DataSource::Files(_, format, _)
+        | common::DataSource::Stdin(format, _) => format,
+    };
+    if format == "jsonl" {
+        // JSONL is schema-free. An absent field is PartiQL MISSING, not an error.
+        return Ok(());
+    }
+
+    let schema = execution::log_schema::LogSchema::from_format(format);
+    if schema.field_index(column).is_none() {
+        return Err(ParseError::UnknownColumn(
+            column.clone(),
+            schema.field_names().collect::<Vec<_>>().join(", "),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_relation(op: &ast::BinaryOperator) -> ParseResult<types::Relation> {
@@ -877,9 +917,29 @@ pub(crate) fn parse_query(
         common::DataSource::Stdin(fmt, _) => fmt.clone(),
     };
 
+    let mut query_aliases = std::collections::HashSet::new();
+    if let ast::SelectClause::SelectExpressions(expressions) = &query.select_clause {
+        for expression in expressions {
+            if let ast::SelectExpression::Expression(_, Some(alias)) = expression {
+                query_aliases.insert(alias.clone());
+            }
+        }
+    }
+    if let Some(group_by) = &query.group_by_exprs_opt {
+        for reference in &group_by.exprs {
+            if let Some(alias) = &reference.as_clause {
+                query_aliases.insert(alias.clone());
+            }
+        }
+        if let Some(alias) = &group_by.group_as_clause {
+            query_aliases.insert(alias.clone());
+        }
+    }
+
     let parsing_context = common::ParsingContext {
         data_sources: data_sources.clone(),
         registry: registry.clone(),
+        query_aliases,
     };
 
     let mut root = build_from_node(&parsing_context, from_clause)?;
@@ -1317,6 +1377,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let expected = Box::new(types::Expression::Logic(Box::new(types::Formula::InfixOperator(
             types::LogicInfixOp::And,
@@ -1345,6 +1406,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let ans = parse_logic_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1387,6 +1449,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let ans = parse_value_expression(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1419,6 +1482,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let ans = parse_aggregate(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1447,6 +1511,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let ans = parse_condition(&parsing_context, &before).unwrap();
         assert_eq!(expected, ans);
@@ -1781,6 +1846,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let result = parse_logic(&parsing_context, &func_call);
         assert!(result.is_ok());
@@ -1811,6 +1877,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let result = parse_logic(&parsing_context, &column_expr);
         assert!(result.is_ok());
@@ -1851,6 +1918,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let result = parse_logic(&parsing_context, &case_when);
         assert!(result.is_ok());
@@ -1883,6 +1951,7 @@ mod test {
             .into_iter()
             .collect(),
             registry: Arc::new(crate::functions::register_all().unwrap()),
+            query_aliases: Default::default(),
         };
         let result = parse_condition(&parsing_context, &column_expr);
         assert!(result.is_ok());

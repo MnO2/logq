@@ -5,7 +5,7 @@ use chrono;
 use compact_str::CompactString;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::result;
@@ -410,6 +410,7 @@ pub(crate) struct Binding {
 pub(crate) struct ParsingContext {
     pub(crate) data_sources: DataSourceRegistry,
     pub(crate) registry: Arc<FunctionRegistry>,
+    pub(crate) query_aliases: HashSet<String>,
 }
 
 impl std::fmt::Debug for ParsingContext {

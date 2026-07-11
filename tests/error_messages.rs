@@ -167,3 +167,47 @@ fn planning_failures_point_to_the_invalid_name_and_suggest_a_fix() {
         assert!(output.contains(hint), "missing hint {hint:#?} in {output:#?}");
     }
 }
+
+#[test]
+fn fixed_schema_columns_are_checked_without_rejecting_dynamic_jsonl_fields() {
+    let output = Command::new(env!("CARGO_BIN_EXE_logq"))
+        .args([
+            "query",
+            "--output",
+            "csv",
+            "--table",
+            "it:elb=data/AWSELB.log",
+            "select timestmp from it",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("unknown column `timestmp`"), "{stdout:#?}");
+    assert!(stdout.contains("did you mean `timestamp`?"), "{stdout:#?}");
+    assert!(stdout.contains("--> query:1:8"), "{stdout:#?}");
+
+    let output = run_query("select field_not_present from it");
+    assert!(!output.contains("unknown column"), "{output:#?}");
+}
+
+#[test]
+fn runtime_type_failures_point_to_the_failing_expression() {
+    for (query, label, hint) in [
+        (
+            "select 1 + \"x\" from it",
+            "invalid expression arguments",
+            "check the operand and function argument types",
+        ),
+        (
+            "select cast(\"x\" as int) from it",
+            "expression type mismatch",
+            "check the value and target types",
+        ),
+    ] {
+        let output = run_query(query);
+        assert!(output.contains("--> query:1:"), "missing location in {output:#?}");
+        assert!(output.contains('^'), "missing caret in {output:#?}");
+        assert!(output.contains(label), "missing label {label:#?} in {output:#?}");
+        assert!(output.contains(hint), "missing hint {hint:#?} in {output:#?}");
+    }
+}
