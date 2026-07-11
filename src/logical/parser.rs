@@ -380,8 +380,8 @@ fn validate_fixed_schema_column(ctx: &common::ParsingContext, path_expr: &PathEx
         | common::DataSource::Files(_, format, _)
         | common::DataSource::Stdin(format, _) => format,
     };
-    if format == "jsonl" {
-        // JSONL is schema-free. An absent field is PartiQL MISSING, not an error.
+    if execution::datasource::is_dynamic_format(format) {
+        // JSONL and user regex formats do not expose a static planner schema.
         return Ok(());
     }
 
@@ -1258,7 +1258,7 @@ pub(crate) fn parse_query(
 
             // SELECT * with GROUP BY is not supported for jsonl or multi-table queries
             if non_aggregates.iter().any(|n| matches!(n, types::Named::Star))
-                && (data_sources.len() > 1 || file_format == "jsonl")
+                && (data_sources.len() > 1 || execution::datasource::is_dynamic_format(&file_format))
             {
                 return Err(ParseError::StarGroupByUnsupported);
             }

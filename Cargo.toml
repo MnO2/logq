@@ -28,6 +28,8 @@ url = "2.2"
 csv = "1.1"
 lazy_static = "1.4.0"
 serde_json = { version = "1", features = ["preserve_order"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
 tdigest = "0.2.3"
 pdatastructs = "0.7"
 linked-hash-map = "0.5"

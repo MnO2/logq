@@ -15,5 +15,6 @@ pub mod field_parser;
 pub mod log_schema;
 pub(crate) mod parallel;
 pub mod prefix_sort;
+pub(crate) mod regex_format;
 pub mod stream;
 pub mod types;

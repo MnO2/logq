@@ -756,7 +756,7 @@ impl Node {
     /// Returns an empty vec for JSONL or when the format is unknown.
     fn compute_required_fields_for_batch(&self) -> Vec<usize> {
         if let Some((format, _)) = self.find_datasource_format() {
-            if format != "jsonl" {
+            if !crate::execution::datasource::is_dynamic_format(&format) {
                 let schema = LogSchema::from_format(&format);
                 return crate::execution::field_analysis::extract_required_fields(self, &schema);
             }
@@ -816,7 +816,7 @@ impl Node {
 
         let (path, _file_format, schema) = match inner_source {
             Node::DataSource(DataSource::File(path, file_format, _), bindings) => {
-                if !bindings.is_empty() || file_format == "jsonl" {
+                if !bindings.is_empty() || crate::execution::datasource::is_dynamic_format(file_format) {
                     return None;
                 }
                 (path, file_format, LogSchema::from_format(file_format))
@@ -965,8 +965,8 @@ impl Node {
                 }
                 match data_source {
                     DataSource::File(path, file_format, _) => {
-                        if file_format == "jsonl" {
-                            return None; // JSONL has no fixed schema
+                        if crate::execution::datasource::is_dynamic_format(file_format) {
+                            return None; // Dynamic formats have no batch schema.
                         }
                         let schema = LogSchema::from_format(file_format);
                         let fields = if required_fields.is_empty() {
@@ -1009,7 +1009,7 @@ impl Node {
                         }
                     }
                     DataSource::Files(paths, file_format, table_name) => {
-                        if paths.is_empty() || file_format == "jsonl" {
+                        if paths.is_empty() || crate::execution::datasource::is_dynamic_format(file_format) {
                             return None;
                         }
                         let mut streams = Vec::with_capacity(paths.len());
@@ -1043,7 +1043,7 @@ impl Node {
                 if let Node::DataSource(ds, bindings) = &**source {
                     if bindings.is_empty() {
                         if let DataSource::File(path, file_format, _) = ds {
-                            if file_format != "jsonl" {
+                            if !crate::execution::datasource::is_dynamic_format(file_format) {
                                 let schema = LogSchema::from_format(file_format);
                                 let filter_fields =
                                     crate::execution::field_analysis::extract_fields_from_formula(formula, &schema);
@@ -1322,7 +1322,7 @@ impl Node {
                     }
                 }
                 DataSource::Stdin(file_format, _table_name) => {
-                    let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin());
+                    let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin())?;
                     let stream = LogFileStream::new(Box::new(reader));
 
                     Ok(Box::new(stream))

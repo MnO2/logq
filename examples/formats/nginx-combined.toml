@@ -1,0 +1,6 @@
+pattern = '^(?P<remote_addr>\S+) \S+ (?P<remote_user>\S+) \[(?P<timestamp>[^]]+)\] "(?P<method>\S+) (?P<path>\S+) (?P<protocol>[^"]+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+) "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)"$'
+
+[types]
+timestamp = "datetime:%d/%b/%Y:%H:%M:%S %z"
+status = "int"
+body_bytes_sent = "int"

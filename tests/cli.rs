@@ -18,10 +18,12 @@ fn query_help_preserves_public_options() {
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("--table"));
     assert!(stdout.contains("--threads"));
+    assert!(stdout.contains("--format-file"));
 }
 
 #[test]
 fn explain_help_preserves_table_option() {
     let stdout = output(&["explain", "--help"]);
     assert!(stdout.contains("--table"));
+    assert!(stdout.contains("--format-file"));
 }

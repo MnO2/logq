@@ -15,7 +15,11 @@ fn run_query(query: &str, table: &str) -> String {
         .args(["query", query, "--table", table, "--output", "json"])
         .output()
         .unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -119,4 +123,44 @@ fn json_output_uses_the_shortest_f32_representation() {
     let output = run_query("select * from it", &format!("it:jsonl={}", path.display()));
 
     assert_eq!(output.trim(), r#"[{"value":1.2}]"#);
+}
+
+#[test]
+fn queries_a_typed_user_defined_regex_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("access.log");
+    let format_path = dir.path().join("access.toml");
+    std::fs::write(&log_path, b"10.0.0.1 GET /ok 200 123\n10.0.0.2 POST /failed 503 42\n").unwrap();
+    std::fs::write(
+        &format_path,
+        r#"
+pattern = '^(?P<remote_addr>\S+) (?P<method>\S+) (?P<path>\S+) (?P<status>\d+) (?P<bytes>\d+)$'
+
+[types]
+status = "int"
+bytes = "int"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_logq"))
+        .args([
+            "query",
+            "select path, status, bytes from it where status >= 500",
+            "--table",
+            &format!("it:regex={}", log_path.display()),
+            "--format-file",
+            format_path.to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.trim(), r#"[{"path":"/failed","status":503,"bytes":42}]"#);
 }

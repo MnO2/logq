@@ -33,7 +33,7 @@ src/
   execution/
     types.rs                Physical plan nodes, expression evaluation
     stream.rs               RecordStream trait and all stream implementations
-    datasource.rs           Log format readers (ELB, ALB, S3, Squid, JSONL)
+    datasource.rs           Log format readers (ELB, ALB, S3, Squid, JSONL, custom regex)
 ```
 
 ## Pipeline Stages
@@ -221,7 +221,7 @@ A `Record` (`execution/stream.rs`) wraps a `LinkedHashMap<String, Value>`, prese
 
 ## Log Format Readers (`execution/datasource.rs`)
 
-Each log format is defined by:
+Built-in structured log formats are defined by:
 1. A list of `(field_name, DataType)` pairs describing the schema
 2. A regex (`SPLIT_READER_LINE_REGEX`) that tokenizes each log line into fields
 3. Type-specific parsing for each field (DateTime, Host, HttpRequest, Float, Int, String)
@@ -237,6 +237,8 @@ trait RecordRead {
 ```
 
 `ReaderBuilder` constructs the appropriate reader from a format string and file path (or stdin).
+User-defined regex formats are loaded from TOML; named captures become fields and are parsed by
+the same row-reader layer.
 
 ## Output
 

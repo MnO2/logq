@@ -42,7 +42,7 @@ fn bench_datasource(c: &mut Criterion) {
             b.iter(|| {
                 let reader_builder = ReaderBuilder::new(format.to_string());
                 let cursor = std::io::Cursor::new(concatenated.as_bytes());
-                let mut reader = reader_builder.with_reader(cursor);
+                let mut reader = reader_builder.with_reader(cursor).unwrap();
                 let mut count = 0u64;
                 while let Ok(Some(_record)) = reader.read_record() {
                     count += 1;

@@ -32,6 +32,8 @@ pub enum AppError {
     Stream(#[from] execution::types::StreamError),
     #[error("Invalid Log File Format")]
     InvalidLogFileFormat,
+    #[error("--format-file is required for regex tables")]
+    RegexFormatFileRequired,
     #[error("Invalid Table Spec String")]
     InvalidTableSpecString,
     #[error("No files matched pattern: {0}")]
@@ -61,6 +63,7 @@ impl PartialEq for AppError {
                 | (AppError::CreateStream(_), AppError::CreateStream(_))
                 | (AppError::Stream(_), AppError::Stream(_))
                 | (AppError::InvalidLogFileFormat, AppError::InvalidLogFileFormat)
+                | (AppError::RegexFormatFileRequired, AppError::RegexFormatFileRequired)
                 | (AppError::InvalidTableSpecString, AppError::InvalidTableSpecString)
                 | (AppError::WriteCsv(_), AppError::WriteCsv(_))
                 | (AppError::WriteJson(_), AppError::WriteJson(_))

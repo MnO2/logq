@@ -30,6 +30,7 @@ versions, memory measurements, limitations, and known optimization gaps.
 | `s3` | AWS S3 access logs |
 | `squid` | Squid proxy native format |
 | `jsonl` | Newline-delimited JSON (schema-free, nested data) |
+| `regex` | User-defined named-capture regex from a TOML format file |
 
 ## Installation
 
@@ -80,6 +81,33 @@ logq query 'select * from it limit 20' \
 ```
 
 An unmatched glob is reported as an error that includes the original pattern.
+
+## User-defined regex formats
+
+Use `regex` when a line-oriented log has fields that are not covered by a built-in format. The
+TOML file supplies a Rust regex with named capture groups; each capture name becomes a queryable
+column. Captures default to strings. The optional `types` table accepts `int`, `float`, and
+`datetime:<chrono format>`.
+
+The repository includes an [nginx combined-log example](examples/formats/nginx-combined.toml):
+
+```bash
+logq query 'select path, status, body_bytes_sent from it where status >= 500' \
+  --table 'it:regex=/var/log/nginx/access.log' \
+  --format-file examples/formats/nginx-combined.toml
+```
+
+```toml
+pattern = '^(?P<remote_addr>\S+) ... (?P<status>\d{3}) ...$'
+
+[types]
+status = "int"
+timestamp = "datetime:%d/%b/%Y:%H:%M:%S %z"
+```
+
+Every capture must have a unique name. A non-matching line or a typed value that cannot be parsed
+stops the query with a descriptive error. Regex tables support stdin, gzip, globs, and comma lists
+through the same input layer as built-in formats.
 
 ## SQL Feature Reference
 

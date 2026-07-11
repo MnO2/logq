@@ -5,7 +5,7 @@ use logq::execution;
 use clap::{CommandFactory, Parser, Subcommand};
 use prettytable::{Cell, Row, Table};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 #[derive(Parser)]
@@ -28,6 +28,9 @@ enum Commands {
         /// Number of threads for parallel scanning (0 = auto, 1 = sequential).
         #[arg(long)]
         threads: Option<usize>,
+        /// TOML definition for tables using the regex format.
+        #[arg(long = "format-file")]
+        format_file: Option<PathBuf>,
         /// Query string.
         query: Option<String>,
     },
@@ -36,6 +39,9 @@ enum Commands {
         /// Table-to-file mapping. May be provided more than once.
         #[arg(long = "table")]
         tables: Vec<String>,
+        /// TOML definition for tables using the regex format.
+        #[arg(long = "format-file")]
+        format_file: Option<PathBuf>,
         /// Query string.
         query: Option<String>,
     },
@@ -56,7 +62,10 @@ fn print_help(command: Option<&str>) {
     println!();
 }
 
-fn parse_table_specs<'a, I>(values: I) -> Result<common::types::DataSourceRegistry, AppError>
+fn parse_table_specs<'a, I>(
+    values: I,
+    format_file: Option<&Path>,
+) -> Result<common::types::DataSourceRegistry, AppError>
 where
     I: Iterator<Item = &'a str>,
 {
@@ -73,15 +82,21 @@ where
         if table_name.is_empty() || !table_name.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(AppError::InvalidTableSpecString);
         }
-        if !["elb", "alb", "squid", "s3", "jsonl"].contains(&file_format) {
+        if !["elb", "alb", "squid", "s3", "jsonl", "regex"].contains(&file_format) {
             return Err(AppError::InvalidLogFileFormat);
         }
+        let file_format = if file_format == "regex" {
+            let path = format_file.ok_or(AppError::RegexFormatFileRequired)?;
+            format!("regex:{}", path.display())
+        } else {
+            file_format.to_string()
+        };
         if !seen_names.insert(table_name.to_string()) {
             return Err(AppError::DuplicateTableName(table_name.to_string()));
         }
 
         let data_source = if path_spec == "stdin" {
-            common::types::DataSource::Stdin(file_format.to_string(), table_name.to_string())
+            common::types::DataSource::Stdin(file_format.clone(), table_name.to_string())
         } else {
             let mut paths: Vec<PathBuf> = Vec::new();
             for item in path_spec.split(',') {
@@ -105,9 +120,9 @@ where
             paths.sort();
             paths.dedup();
             if paths.len() == 1 {
-                common::types::DataSource::File(paths.pop().unwrap(), file_format.to_string(), table_name.to_string())
+                common::types::DataSource::File(paths.pop().unwrap(), file_format.clone(), table_name.to_string())
             } else {
-                common::types::DataSource::Files(paths, file_format.to_string(), table_name.to_string())
+                common::types::DataSource::Files(paths, file_format.clone(), table_name.to_string())
             }
         };
 
@@ -123,6 +138,7 @@ fn main() {
             output,
             tables,
             threads,
+            format_file,
             query,
         }) => {
             if let Some(query_str) = query {
@@ -143,7 +159,7 @@ fn main() {
                 let result = if tables.is_empty() {
                     Err(AppError::InvalidTableSpecString)
                 } else {
-                    match parse_table_specs(tables.iter().map(String::as_str)) {
+                    match parse_table_specs(tables.iter().map(String::as_str), format_file.as_deref()) {
                         Ok(data_sources) => app::run(&query_str, data_sources, output_mode, threads),
                         Err(e) => Err(e),
                     }
@@ -156,7 +172,11 @@ fn main() {
                 print_help(Some("query"));
             }
         }
-        Some(Commands::Explain { tables, query }) => {
+        Some(Commands::Explain {
+            tables,
+            format_file,
+            query,
+        }) => {
             if let Some(query_str) = query {
                 let data_sources = if tables.is_empty() {
                     let mut ds = common::types::DataSourceRegistry::new();
@@ -166,7 +186,7 @@ fn main() {
                     );
                     ds
                 } else {
-                    match parse_table_specs(tables.iter().map(String::as_str)) {
+                    match parse_table_specs(tables.iter().map(String::as_str), format_file.as_deref()) {
                         Ok(ds) => ds,
                         Err(e) => {
                             println!("{}", e);
@@ -254,7 +274,7 @@ mod tests {
         fs::write(&first, "a").unwrap();
         let spec = format!("it:jsonl={}/*.log", dir.path().display());
 
-        let sources = parse_table_specs(std::iter::once(spec.as_str())).unwrap();
+        let sources = parse_table_specs(std::iter::once(spec.as_str()), None).unwrap();
         assert_eq!(
             sources["it"],
             common::types::DataSource::Files(vec![first, second], "jsonl".to_string(), "it".to_string())
@@ -264,7 +284,7 @@ mod tests {
     #[test]
     fn parse_table_specs_accepts_sorted_comma_lists() {
         let spec = "it:jsonl=z.log,a.log";
-        let sources = parse_table_specs(std::iter::once(spec)).unwrap();
+        let sources = parse_table_specs(std::iter::once(spec), None).unwrap();
         assert_eq!(
             sources["it"],
             common::types::DataSource::Files(
@@ -280,16 +300,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pattern = format!("{}/*.missing", dir.path().display());
         let spec = format!("it:jsonl={pattern}");
-        let error = parse_table_specs(std::iter::once(spec.as_str())).unwrap_err();
+        let error = parse_table_specs(std::iter::once(spec.as_str()), None).unwrap_err();
         assert_eq!(error, AppError::NoFilesMatched(pattern));
     }
 
     #[test]
     fn parse_table_specs_preserves_stdin() {
-        let sources = parse_table_specs(std::iter::once("it:jsonl=stdin")).unwrap();
+        let sources = parse_table_specs(std::iter::once("it:jsonl=stdin"), None).unwrap();
         assert_eq!(
             sources["it"],
             common::types::DataSource::Stdin("jsonl".to_string(), "it".to_string())
+        );
+    }
+
+    #[test]
+    fn regex_table_specs_require_and_encode_the_format_file() {
+        assert_eq!(
+            parse_table_specs(std::iter::once("it:regex=access.log"), None).unwrap_err(),
+            AppError::RegexFormatFileRequired
+        );
+
+        let format_path = Path::new("formats/access.toml");
+        let sources = parse_table_specs(std::iter::once("it:regex=access.log"), Some(format_path)).unwrap();
+        assert_eq!(
+            sources["it"],
+            common::types::DataSource::File(
+                PathBuf::from("access.log"),
+                "regex:formats/access.toml".to_string(),
+                "it".to_string(),
+            )
         );
     }
 }

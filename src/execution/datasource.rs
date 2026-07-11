@@ -1,3 +1,4 @@
+use super::regex_format::{RegexFormat, RegexFormatError};
 use super::stream::Record;
 use crate::common;
 use crate::common::types::Value;
@@ -27,6 +28,10 @@ pub(crate) fn is_time_ordered(format: &str) -> Option<&'static str> {
         "alb" => Some("timestamp"),
         _ => None,
     }
+}
+
+pub(crate) fn is_dynamic_format(format: &str) -> bool {
+    format == "jsonl" || format.starts_with("regex:")
 }
 
 /// Fast UTC ISO 8601 timestamp parser for the common AWS log format.
@@ -751,6 +756,8 @@ pub enum ReaderError {
     ParseHttpRequest(#[from] common::types::ParseHttpRequestError),
     #[error("{0}")]
     ParseJson(#[from] serde_json::Error),
+    #[error("{0}")]
+    RegexFormat(#[from] RegexFormatError),
 }
 
 #[derive(Debug)]
@@ -822,7 +829,7 @@ impl ReaderBuilder {
     }
 
     pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<Box<dyn Read>>> {
-        Ok(Reader::new(self, open_path(path.as_ref())?, self.file_format.clone()))
+        Reader::new(self, open_path(path.as_ref())?, self.file_format.clone())
     }
 
     pub(crate) fn with_paths(&self, paths: &[PathBuf]) -> MultiFileReader {
@@ -834,7 +841,7 @@ impl ReaderBuilder {
     }
 
     #[allow(dead_code)]
-    pub fn with_reader<R: io::Read>(&self, rdr: R) -> Reader<R> {
+    pub fn with_reader<R: io::Read>(&self, rdr: R) -> ReaderResult<Reader<R>> {
         Reader::new(self, rdr, self.file_format.clone())
     }
 }
@@ -870,6 +877,7 @@ pub(crate) enum LogFormat {
     S3,
     Squid,
     Jsonl,
+    Regex,
 }
 
 impl LogFormat {
@@ -880,6 +888,7 @@ impl LogFormat {
             "s3" => LogFormat::S3,
             "squid" => LogFormat::Squid,
             "jsonl" => LogFormat::Jsonl,
+            value if value.starts_with("regex:") => LogFormat::Regex,
             _ => LogFormat::Squid, // default fallback
         }
     }
@@ -898,7 +907,7 @@ impl LogFormat {
             ),
             LogFormat::S3 => (S3Field::field_names(), &*AWS_S3_DATATYPES, S3Field::len()),
             LogFormat::Squid => (SquidLogField::field_names(), &*SQUID_DATATYPES, SquidLogField::len()),
-            LogFormat::Jsonl => unreachable!(),
+            LogFormat::Jsonl | LogFormat::Regex => unreachable!(),
         }
     }
 }
@@ -909,28 +918,34 @@ pub struct Reader<R> {
     format: LogFormat,
     buf: String,
     /// Cached field info to avoid per-record match dispatch
-    field_names: &'static Vec<String>,
-    datatypes: &'static Vec<DataType>,
+    field_names: Vec<String>,
+    datatypes: Vec<DataType>,
     field_count: usize,
+    regex_format: Option<RegexFormat>,
 }
 
 impl<R: io::Read> Reader<R> {
-    pub fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> Reader<R> {
+    pub fn new(builder: &ReaderBuilder, rdr: R, file_format: String) -> ReaderResult<Reader<R>> {
         let format = LogFormat::from_str(&file_format);
-        let (field_names, datatypes, field_count) = if !matches!(format, LogFormat::Jsonl) {
-            format.field_info()
+        let (field_names, datatypes, field_count) = if !matches!(format, LogFormat::Jsonl | LogFormat::Regex) {
+            let (field_names, datatypes, field_count) = format.field_info();
+            (field_names.clone(), datatypes.clone(), field_count)
         } else {
-            // Dummy values for JSONL — not used in the JSONL path
-            (&*AWS_ELB_FIELD_NAMES, &*AWS_ELB_DATATYPES, 0)
+            (Vec::new(), Vec::new(), 0)
         };
-        Reader {
+        let regex_format = file_format
+            .strip_prefix("regex:")
+            .map(|path| RegexFormat::from_file(Path::new(path)))
+            .transpose()?;
+        Ok(Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
             format,
             buf: String::with_capacity(512),
             field_names,
             datatypes,
             field_count,
-        }
+            regex_format,
+        })
     }
 
     #[allow(dead_code)]
@@ -942,9 +957,12 @@ impl<R: io::Read> RecordRead for Reader<R> {
         self.buf.clear();
         let more_data = self.rdr.read_line(&mut self.buf)?;
 
-        if more_data > 0 && !matches!(self.format, LogFormat::Jsonl) {
-            let field_names = self.field_names;
-            let datatypes = self.datatypes;
+        if more_data > 0 && matches!(self.format, LogFormat::Regex) {
+            let variables = self.regex_format.as_ref().unwrap().parse_line(&self.buf)?;
+            Ok(Some(Record::new_with_variables(variables)))
+        } else if more_data > 0 && !matches!(self.format, LogFormat::Jsonl) {
+            let field_names = &self.field_names;
+            let datatypes = &self.datatypes;
             let field_count = self.field_count;
 
             let mut record_vars = common::types::Variables::with_capacity(field_count);
@@ -1028,7 +1046,9 @@ mod tests {
     #[test]
     fn test_aws_elb_reader() {
         let content = r#"2015-11-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#;
-        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
@@ -1055,7 +1075,9 @@ mod tests {
         assert_eq!(expected, record);
 
         let content = r#"2015-11-07T18:45:37.691548Z elb1 176.219.166.226:48384 10.0.2.143:80 0.000023 0.000348 0.000025 200 200 0 41690 "GET http://example.com:80/?mode=json&after=&iteration=1 HTTP/1.1" "Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48I; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]" - - arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354""#;
-        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record().unwrap();
         let fields = ClassicLoadBalancerLogField::field_names();
         let data = vec![
@@ -1085,7 +1107,9 @@ mod tests {
     #[test]
     fn test_aws_alb_reader() {
         let content = r#"http 2018-07-02T22:23:00.186641Z app/my-loadbalancer/50dc6c495c0c9188 192.168.131.39:2817 10.0.0.1:80 0.000 0.001 0.000 200 200 34 366 "GET http://www.example.com:80/ HTTP/1.1" "curl/7.46.0" - - arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354" "-" "-" 0 2018-07-02T22:22:48.364000Z "forward" "-" "-""#;
-        let mut reader = ReaderBuilder::new("alb".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("alb".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record().unwrap();
         let fields = ApplicationLoadBalancerLogField::field_names();
         let data = vec![
@@ -1127,7 +1151,9 @@ mod tests {
     #[test]
     fn test_aws_s3_reader() {
         let content = r#"79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be awsexamplebucket [06/Feb/2019:00:00:38 +0000] 192.0.2.3 79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be 3E57427F3EXAMPLE REST.GET.VERSIONING - "GET /awsexamplebucket?versioning HTTP/1.1" 200 - 113 - 7 - "-" "S3Console/0.4" - s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234= SigV2 ECDHE-RSA-AES128-GCM-SHA256 AuthHeader awsexamplebucket.s3.amazonaws.com TLSV1.1"#;
-        let mut reader = ReaderBuilder::new("s3".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("s3".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record().unwrap();
         let fields = S3Field::field_names();
         let data = vec![
@@ -1176,7 +1202,9 @@ mod tests {
     #[test]
     fn test_squid_reader() {
         let content = r#"1515734740.494      1 [MASKEDIPADDRESS] TCP_DENIED/407 3922 CONNECT d.dropbox.com:443 - HIER_NONE/- text/html"#;
-        let mut reader = ReaderBuilder::new("squid".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("squid".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record().unwrap();
         let fields = SquidLogField::field_names();
         let data = vec![
@@ -1199,7 +1227,9 @@ mod tests {
     #[test]
     fn test_reader_on_empty_input() {
         let content = r#"                   \n          "#;
-        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record();
 
         assert!(record.is_err())
@@ -1208,7 +1238,9 @@ mod tests {
     #[test]
     fn test_reader_on_malformed_input() {
         let content = r#"2015-11-07T18:45:37.691548Z elb1 176.219.166.226:48384 10.0.2.143:80 0.000 on=1 HTTP/1.1" "Mozilla/5.0 (Linux; Android 5.137.36 (KHTML, like Gecko) Version/4.0 Chrome/46.0.2490.76 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/52.0.0.12.18;]" - - arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/my-targets/73e2d6bc24d8a067 "Root=1-58337262-36d228ad5d99923122bbe354""#;
-        let mut reader = ReaderBuilder::new("elb".to_string()).with_reader(BufReader::new(content.as_bytes()));
+        let mut reader = ReaderBuilder::new("elb".to_string())
+            .with_reader(BufReader::new(content.as_bytes()))
+            .unwrap();
         let record = reader.read_record();
 
         assert!(record.is_err())
