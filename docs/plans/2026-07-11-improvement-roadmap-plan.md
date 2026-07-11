@@ -222,7 +222,7 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 
 - [x] WS1 Clippy + CI
 - [x] WS2 Gzip + globs
-- [ ] WS3 Dependency modernization
+- [x] WS3 Dependency modernization
 - [ ] WS4 Fuzzing + conformance
 - [ ] WS5 Competitor benchmarks
 - [ ] WS6 Error messages

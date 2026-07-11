@@ -26,10 +26,10 @@ fn parse_i32_fast(bytes: &[u8]) -> Option<i32> {
     Some(if neg { -n } else { n })
 }
 
-/// Fast f32 parsing using the fast-float crate.
+/// Parse a UTF-8 field as an `f32`.
 #[inline]
 fn parse_f32_fast(bytes: &[u8]) -> Option<f32> {
-    fast_float::parse::<f32, &[u8]>(bytes).ok()
+    std::str::from_utf8(bytes).ok()?.parse().ok()
 }
 
 /// Parse a single field column from all rows in the batch.
@@ -464,6 +464,13 @@ fn strip_quotes(raw: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_float_rejects_invalid_utf8() {
+        assert_eq!(parse_f32_fast(b"1.25"), Some(1.25));
+        assert_eq!(parse_f32_fast(b"not-a-number"), None);
+        assert_eq!(parse_f32_fast(&[0xff]), None);
+    }
 
     #[test]
     fn test_parse_string_field() {
