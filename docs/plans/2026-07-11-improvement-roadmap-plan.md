@@ -232,7 +232,7 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 - [x] WS6 Error messages
 - [x] WS7a INNER JOIN
 - [x] WS7b Custom regex format
-- [ ] WS7c nginx/apache formats
+- [x] WS7c nginx/apache formats
 - [ ] WS7d time_bucket
 - [ ] WS7e ndjson output
 - [ ] WS8 Memory + batch coverage

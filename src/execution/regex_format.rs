@@ -73,6 +73,29 @@ impl RegexFormat {
         Self::from_definition(definition)
     }
 
+    pub(crate) fn builtin(name: &str) -> Result<Self, RegexFormatError> {
+        let pattern = match name {
+            "clf" => {
+                r#"^(?P<remote_addr>\S+) \S+ (?P<remote_user>\S+) \[(?P<timestamp>[^]]+)\] "(?P<method>\S+) (?P<path>\S+) (?P<protocol>[^"]+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+|-)$"#
+            }
+            "combined" => {
+                r#"^(?P<remote_addr>\S+) \S+ (?P<remote_user>\S+) \[(?P<timestamp>[^]]+)\] "(?P<method>\S+) (?P<path>\S+) (?P<protocol>[^"]+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+|-) "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)"$"#
+            }
+            _ => unreachable!("validated built-in regex format"),
+        };
+        let types = [
+            ("timestamp".to_string(), "datetime:%d/%b/%Y:%H:%M:%S %z".to_string()),
+            ("status".to_string(), "int".to_string()),
+            ("body_bytes_sent".to_string(), "int".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        Self::from_definition(RegexFormatFile {
+            pattern: pattern.to_string(),
+            types,
+        })
+    }
+
     fn from_definition(definition: RegexFormatFile) -> Result<Self, RegexFormatError> {
         let regex = Regex::new(&definition.pattern)?;
         let names: Vec<String> = regex.capture_names().flatten().map(str::to_string).collect();
@@ -120,6 +143,10 @@ impl RegexFormat {
                 variables.insert(field.name.clone(), Value::Null);
                 continue;
             };
+            if value == "-" && !matches!(field.kind, CaptureType::String) {
+                variables.insert(field.name.clone(), Value::Null);
+                continue;
+            }
             let value = match &field.kind {
                 CaptureType::String => Value::String(value.into()),
                 CaptureType::Integer => Value::Int(value.parse().map_err(|source| RegexFormatError::ParseInteger {
@@ -201,5 +228,15 @@ timestamp = "datetime:%d/%b/%Y:%H:%M:%S %z"
             values["timestamp"],
             Value::DateTime(chrono::DateTime::parse_from_rfc3339("2000-10-10T13:55:36-07:00").unwrap())
         );
+    }
+
+    #[test]
+    fn builtin_clf_treats_a_missing_typed_value_as_null() {
+        let format = RegexFormat::builtin("clf").unwrap();
+        let values = format
+            .parse_line(r#"127.0.0.1 - - [10/Oct/2000:13:55:36 -0700] "GET / HTTP/1.0" 304 -"#)
+            .unwrap();
+        assert_eq!(values["status"], Value::Int(304));
+        assert_eq!(values["body_bytes_sent"], Value::Null);
     }
 }

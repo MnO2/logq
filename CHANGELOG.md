@@ -13,6 +13,7 @@ Phase 4 complete. All phases done.
 - **WS6:** Added statement-level syntax locations and hand-rendered multi-line caret diagnostics, with targeted hints for malformed syntax. Planner errors now identify and suggest functions, tables, and fixed-schema columns while preserving PartiQL `MISSING` behavior for dynamic JSONL fields. Runtime type and argument failures retain query context and point to the failing expression.
 - **WS7a:** Audited INNER, bare, and RIGHT OUTER JOIN behavior across aliases, NULL keys, unmatched rows, aggregation, and residual predicates. Fixed qualified table scopes in hash and nested-loop joins and kept output columns in SELECT-list order.
 - **WS7b:** Added user-defined regex log formats through `--table it:regex=... --format-file definition.toml`. Named captures become columns with optional integer, float, and chrono-formatted datetime types; the normal stdin, gzip, glob, and multi-file readers remain available.
+- **WS7c:** Added `clf` and `combined` formats for standard Apache/nginx logs as predefined definitions on the regex-format engine, including typed timestamps, status codes, byte counts, and null handling for `-` numeric placeholders.
 
 ## Completed Tasks
 

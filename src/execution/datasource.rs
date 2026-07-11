@@ -31,7 +31,7 @@ pub(crate) fn is_time_ordered(format: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn is_dynamic_format(format: &str) -> bool {
-    format == "jsonl" || format.starts_with("regex:")
+    matches!(format, "jsonl" | "clf" | "combined") || format.starts_with("regex:")
 }
 
 /// Fast UTC ISO 8601 timestamp parser for the common AWS log format.
@@ -888,6 +888,7 @@ impl LogFormat {
             "s3" => LogFormat::S3,
             "squid" => LogFormat::Squid,
             "jsonl" => LogFormat::Jsonl,
+            "clf" | "combined" => LogFormat::Regex,
             value if value.starts_with("regex:") => LogFormat::Regex,
             _ => LogFormat::Squid, // default fallback
         }
@@ -933,10 +934,13 @@ impl<R: io::Read> Reader<R> {
         } else {
             (Vec::new(), Vec::new(), 0)
         };
-        let regex_format = file_format
-            .strip_prefix("regex:")
-            .map(|path| RegexFormat::from_file(Path::new(path)))
-            .transpose()?;
+        let regex_format = if let Some(path) = file_format.strip_prefix("regex:") {
+            Some(RegexFormat::from_file(Path::new(path))?)
+        } else if matches!(format, LogFormat::Regex) {
+            Some(RegexFormat::builtin(&file_format)?)
+        } else {
+            None
+        };
         Ok(Reader {
             rdr: io::BufReader::with_capacity(builder.capacity, rdr),
             format,

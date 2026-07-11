@@ -31,6 +31,8 @@ versions, memory measurements, limitations, and known optimization gaps.
 | `squid` | Squid proxy native format |
 | `jsonl` | Newline-delimited JSON (schema-free, nested data) |
 | `regex` | User-defined named-capture regex from a TOML format file |
+| `clf` | Common Log Format used by Apache and nginx |
+| `combined` | Combined Log Format with referer and user-agent fields |
 
 ## Installation
 
@@ -108,6 +110,14 @@ timestamp = "datetime:%d/%b/%Y:%H:%M:%S %z"
 Every capture must have a unique name. A non-matching line or a typed value that cannot be parsed
 stops the query with a descriptive error. Regex tables support stdin, gzip, globs, and comma lists
 through the same input layer as built-in formats.
+
+For standard Apache/nginx access logs, the equivalent definitions are built in and need no format
+file:
+
+```bash
+logq query 'select path, status from it where status >= 500' \
+  --table 'it:combined=/var/log/nginx/access.log'
+```
 
 ## SQL Feature Reference
 

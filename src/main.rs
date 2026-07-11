@@ -82,7 +82,7 @@ where
         if table_name.is_empty() || !table_name.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(AppError::InvalidTableSpecString);
         }
-        if !["elb", "alb", "squid", "s3", "jsonl", "regex"].contains(&file_format) {
+        if !["elb", "alb", "squid", "s3", "jsonl", "regex", "clf", "combined"].contains(&file_format) {
             return Err(AppError::InvalidLogFileFormat);
         }
         let file_format = if file_format == "regex" {

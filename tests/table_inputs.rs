@@ -164,3 +164,38 @@ bytes = "int"
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(stdout.trim(), r#"[{"path":"/failed","status":503,"bytes":42}]"#);
 }
+
+#[test]
+fn queries_builtin_common_and_combined_log_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let common_path = dir.path().join("common.log");
+    let combined_path = dir.path().join("combined.log");
+    std::fs::write(
+        &common_path,
+        b"127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] \"GET /apache.gif HTTP/1.0\" 200 2326\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &combined_path,
+        b"127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] \"GET /apache.gif HTTP/1.0\" 503 2326 \"https://example.com/\" \"Mozilla/5.0\"\n",
+    )
+    .unwrap();
+
+    let common = run_query(
+        "select path, status, body_bytes_sent from it",
+        &format!("it:clf={}", common_path.display()),
+    );
+    assert_eq!(
+        common.trim(),
+        r#"[{"path":"/apache.gif","status":200,"body_bytes_sent":2326}]"#
+    );
+
+    let combined = run_query(
+        "select status, referer, user_agent from it",
+        &format!("it:combined={}", combined_path.display()),
+    );
+    assert_eq!(
+        combined.trim(),
+        r#"[{"status":503,"referer":"https://example.com/","user_agent":"Mozilla/5.0"}]"#
+    );
+}
