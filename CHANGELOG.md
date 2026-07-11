@@ -1,5 +1,15 @@
 # CHANGELOG — PartiQL Implementation Progress
 
+## 0.2.0 - 2026-07-11
+
+- Query a substantially expanded PartiQL subset, including INNER/RIGHT joins, subqueries, set operations, three-valued NULL/MISSING logic, approximate aggregates, array/string/date functions, and completed `time_bucket` intervals.
+- Read gzip files transparently and scan deterministic globs or comma-separated shards without concatenating them first.
+- Query schema-free JSONL, custom named-capture regex formats, and built-in Apache/nginx `clf` and `combined` logs.
+- Stream newline-delimited JSON with `--output ndjson`; inspect batch/row selection with pipeline-aware `explain`; cap materializing queries with `--max-memory`.
+- Diagnose syntax, planning, schema, and runtime failures with source locations, carets, contextual hints, and did-you-mean suggestions.
+- Bound `ORDER BY ... LIMIT` memory to O(k), retain fixed-schema batch execution where supported, and publish reproducible end-to-end performance and memory measurements.
+- Require Rust 1.85 or newer and ship current, advisory-clean dependencies with multi-platform CI.
+
 ## Current Status
 Phase 4 complete. All phases done.
 
