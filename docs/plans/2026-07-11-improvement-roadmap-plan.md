@@ -23,7 +23,8 @@ State as of this writing:
 - All PartiQL implementation phases (0–4) complete; see `CHANGELOG.md`.
 - **789 unit tests + 1 integration test, all passing** (`cargo test`). This is the regression baseline: no workstream may break it.
 - Heavy performance work already done (batch pipeline, dictionary encoding, CompactString, hash join). Criterion benches in `benches/`, most gated behind `--features bench-internals`.
-- Known feature gaps: no INNER JOIN (LEFT and CROSS exist), no correlated subqueries, no window functions (the latter two are **out of scope** — do not implement).
+- INNER and RIGHT JOIN syntax/execution already landed in `0de9aa3`, and `time_bucket` already exists for long-form second/minute/hour intervals. Their WS7 items are validation/documentation and targeted completion work, not greenfield implementations.
+- Known feature gaps: no correlated subqueries or window functions (both are **out of scope** — do not implement).
 
 ### Ground rules (apply to every workstream)
 
@@ -43,9 +44,9 @@ State as of this writing:
 | 4 | WS4: Parser fuzzing + conformance testing | M | WS1 |
 | 5 | WS5: Competitor benchmark suite | M | WS2 (test on .gz inputs) |
 | 6 | WS6: Error message quality | M | WS3 (parser untouched by WS3, but land after churn) |
-| 7 | WS7: Feature reach (INNER JOIN, custom regex format, time buckets, ndjson) | M–L | WS3 |
+| 7 | WS7: Feature reach (JOIN validation/docs, custom regex format, time-bucket completion, ndjson) | M–L | WS3 |
 | 8 | WS8: Memory ceilings + batch-pipeline coverage | L | WS5 (benchmarks reveal targets) |
-| 9 | WS9: Release engineering | S–M | WS1–WS3 |
+| 9 | WS9: Release engineering | S–M | WS1–WS8 |
 
 WS1 and WS2 are independent and can run in parallel. Everything else should land on top of a green, modernized CI.
 
@@ -157,8 +158,8 @@ WS1 and WS2 are independent and can run in parallel. Everything else should land
 
 Independent sub-items; can be split across agents. Each follows test-first.
 
-### 7a. INNER JOIN (S)
-LEFT JOIN with ON already exists (Phase 3 Step 27, `FromClause::Join` in the AST; join streams in execution). Add `[INNER] JOIN ... ON` — parser accepts `INNER JOIN` and bare `JOIN`, planner maps to the existing hash-join/nested-loop machinery minus NULL padding. This is mostly plumbing an enum variant through; grep for how `Left` join type flows from `src/syntax/parser.rs` through `src/logical/` into `src/execution/types.rs`.
+### 7a. INNER/RIGHT JOIN validation and documentation (S)
+INNER and RIGHT JOIN support already exists (`0de9aa3`): the parser accepts `INNER JOIN`, bare `JOIN`, and `RIGHT [OUTER] JOIN`, and the planner maps them to the hash-join machinery. Audit end-to-end semantics (matched/unmatched rows, NULL keys, aliases, residual predicates), add any missing integration tests, and document both join forms in README and CHANGELOG. Fix only gaps found by those tests.
 
 ### 7b. User-defined regex format (M)
 New table spec form: `--table it:regex=access.log --format-file fmt.toml` (or inline `regex:PATTERN` — pick the ergonomics that fits the existing spec parser in `src/app.rs`). A format definition = a regex with named capture groups; group names become column names, all typed Varchar unless a `types` map says otherwise (int/float/datetime with a chrono format string). Implement as a new `LogFormat` variant in `src/execution/datasource.rs` that reuses the existing regex-based reader machinery (ELB/ALB already work this way — model on them). This permanently ends per-format hardcoding requests. Ship one worked example in README: nginx combined log format.
@@ -166,8 +167,8 @@ New table spec form: `--table it:regex=access.log --format-file fmt.toml` (or in
 ### 7c. Built-in nginx/apache combined format (S, after 7b)
 Add `clf` and `combined` as built-in formats implemented *as* predefined regex-format definitions on top of 7b, proving the mechanism.
 
-### 7d. time_bucket function (S–M)
-`time_bucket('5m', timestamp)` scalar function (register in `src/functions/`, likely near `date_part`): truncates a DateTime to the containing interval (support s/m/h/d units). Composes with existing GROUP BY — no new operator needed. This is the log-analysis killer feature: `select time_bucket('5m', timestamp) as t, count(*) from it group by t order by t`. Make sure the batch pipeline's grouped-aggregation fast path either supports function-valued group keys or falls back cleanly (test both).
+### 7d. time_bucket completion (S–M)
+`time_bucket` already exists in `src/functions/datetime.rs` for long-form second/minute/hour intervals and already has a batch streaming-groupby fast path. Extend interval parsing to accept ergonomic `s`/`m`/`h`/`d` shorthand such as `5m`, add day bucketing, and preserve existing long-form inputs. Test scalar boundaries plus grouped queries through both batch and row/fallback paths.
 
 ### 7e. ndjson output (S)
 `--output ndjson`: one JSON object per row, no wrapping array. Trivial once WS3's serde_json migration lands; add alongside the existing json/csv writers in the output layer (grep `--output` handling in `src/app.rs`).
@@ -182,13 +183,13 @@ Add `clf` and `combined` as built-in formats implemented *as* predefined regex-f
 
 **Tasks:**
 
-1. **Observability first:** add a `--explain` flag (or `LOGQ_EXPLAIN=1` env var) that prints which pipeline (batch vs row) was chosen and, on fallback, *which plan node* caused it (instrument `try_build_batch_pipeline`'s failure returns in `src/execution/types.rs`). Cheap, and immediately useful for WS5's analysis.
+1. **Observability first:** extend the existing `explain` subcommand to print which pipeline (batch vs row) would be chosen and, on fallback, *which plan node* caused it (instrument `try_build_batch_pipeline`'s failure returns in `src/execution/types.rs`). Do not add a competing `--explain` flag. This is immediately useful for WS5's analysis.
 2. **Top-N optimization:** verify whether `ORDER BY x LIMIT k` already uses a bounded heap (check `src/execution/batch_orderby.rs` and the row-pipeline sort in `src/execution/prefix_sort.rs`); if not, implement it — it's the most common log query shape and caps memory at O(k).
 3. **Measure ceilings:** using WS5's 1GB dataset, record peak RSS for GROUP BY high-cardinality key, full ORDER BY, and DISTINCT. Document in `docs/benchmarks.md`.
 4. **Graceful degradation:** pick ONE of (a) external merge sort spill for ORDER BY, or (b) a soft memory budget that aborts with a clear "query exceeded memory budget (--max-memory)" error instead of OOM. Option (b) is far cheaper and acceptable — decide based on WS5 findings and effort budget; do not attempt spill-to-disk for hash aggregation (out of proportion for a CLI tool).
 5. **Batch coverage expansion:** from the `--explain` data over WS5's query set, pick the top 1–2 fallback causes and add batch support only if the row-pipeline cost shows up in benchmarks. Do not expand batch coverage speculatively.
 
-**Done when:** `--explain` merged; top-N verified/implemented with a memory test; ceilings documented; one degradation mechanism shipped.
+**Done when:** pipeline-aware `explain` is merged; top-N verified/implemented with a memory test; ceilings documented; one degradation mechanism shipped.
 
 ---
 
@@ -202,7 +203,7 @@ Add `clf` and `combined` as built-in formats implemented *as* predefined regex-f
 2. Bump to 0.2.0. Verify `cargo publish --dry-run` (note `exclude` in Cargo.toml already trims benches/data).
 3. Set up `cargo-dist` (or a hand-rolled release workflow) building binaries for mac (arm64/x86_64), linux (x86_64, musl preferred for portability), windows, attached to GitHub Releases on tag push.
 4. Optional: Homebrew tap formula (cargo-dist can generate one).
-5. Tag and release. Announce section in README ("Install" gains binary-download instructions).
+5. Only after WS1–WS8 are complete and the full release gate is green: tag and release. Announce section in README ("Install" gains binary-download instructions).
 
 **Done when:** `cargo install logq` gets 0.2.0 and a GitHub Release carries binaries for the three platforms.
 
