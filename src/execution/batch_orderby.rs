@@ -2,6 +2,8 @@
 
 use crate::common::types::Value;
 use crate::execution::batch::*;
+use crate::execution::prefix_sort::BoundedTopN;
+use crate::execution::stream::Record;
 use crate::execution::types::{Ordering, StreamResult};
 use crate::simd::bitmap::Bitmap;
 use crate::simd::selection::SelectionVector;
@@ -20,10 +22,31 @@ pub(crate) struct BatchOrderByOperator {
     consumed: bool,
     result_batches: Vec<ColumnBatch>,
     emit_idx: usize,
+    limit: Option<usize>,
+    #[cfg(test)]
+    peak_retained_rows: usize,
 }
 
 impl BatchOrderByOperator {
     pub fn new(child: Box<dyn BatchStream>, sort_columns: Vec<PathExpr>, orderings: Vec<Ordering>) -> Self {
+        Self::with_limit(child, sort_columns, orderings, None)
+    }
+
+    pub fn new_top_n(
+        child: Box<dyn BatchStream>,
+        sort_columns: Vec<PathExpr>,
+        orderings: Vec<Ordering>,
+        limit: usize,
+    ) -> Self {
+        Self::with_limit(child, sort_columns, orderings, Some(limit))
+    }
+
+    fn with_limit(
+        child: Box<dyn BatchStream>,
+        sort_columns: Vec<PathExpr>,
+        orderings: Vec<Ordering>,
+        limit: Option<usize>,
+    ) -> Self {
         let schema = BatchSchema {
             names: child.schema().names.clone(),
             types: child.schema().types.clone(),
@@ -36,10 +59,17 @@ impl BatchOrderByOperator {
             consumed: false,
             result_batches: Vec::new(),
             emit_idx: 0,
+            limit,
+            #[cfg(test)]
+            peak_retained_rows: 0,
         }
     }
 
     fn consume_and_sort(&mut self) -> StreamResult<()> {
+        if let Some(limit) = self.limit {
+            return self.consume_top_n(limit);
+        }
+
         // Phase 1: Collect all active rows into accumulated columns
         let mut all_values: Vec<Vec<Value>> = Vec::new();
         let num_cols = self.schema.names.len();
@@ -110,7 +140,45 @@ impl BatchOrderByOperator {
             sorted_values.push(col_data);
         }
 
-        // Emit in BATCH_SIZE chunks
+        self.emit_sorted_values(sorted_values, total_rows);
+
+        Ok(())
+    }
+
+    fn consume_top_n(&mut self, limit: usize) -> StreamResult<()> {
+        let mut top_n = BoundedTopN::new(limit, self.sort_columns.clone(), self.orderings.clone());
+        while let Some(batch) = self.child.next_batch()? {
+            for row in 0..batch.len {
+                if !batch.selection.is_active(row, batch.len) {
+                    continue;
+                }
+                let values = batch
+                    .columns
+                    .iter()
+                    .map(|column| BatchToRowAdapter::extract_value(column, row))
+                    .collect();
+                top_n.push(Record::new(&self.schema.names, values));
+            }
+        }
+        #[cfg(test)]
+        {
+            self.peak_retained_rows = top_n.peak_retained();
+        }
+        let records = top_n.finish();
+        let total_rows = records.len();
+        let num_cols = self.schema.names.len();
+        let mut sorted_values = vec![Vec::with_capacity(total_rows); num_cols];
+        for record in records {
+            for (index, (_, value)) in record.into_tuples().into_iter().enumerate() {
+                sorted_values[index].push(value);
+            }
+        }
+        self.emit_sorted_values(sorted_values, total_rows);
+        Ok(())
+    }
+
+    fn emit_sorted_values(&mut self, sorted_values: Vec<Vec<Value>>, total_rows: usize) {
+        let num_cols = self.schema.names.len();
         let mut offset = 0;
         while offset < total_rows {
             let chunk_len = (total_rows - offset).min(BATCH_SIZE);
@@ -131,8 +199,11 @@ impl BatchOrderByOperator {
             });
             offset += chunk_len;
         }
+    }
 
-        Ok(())
+    #[cfg(test)]
+    fn peak_retained_rows(&self) -> usize {
+        self.peak_retained_rows
     }
 }
 
@@ -247,6 +318,44 @@ mod tests {
         assert_eq!(v2, Value::Int(30));
 
         assert!(op.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_top_n_retains_only_the_requested_rows() {
+        let values: Vec<i32> = (1..=100).rev().collect();
+        let col = TypedColumn::Int32 {
+            data: PaddedVec::from_vec(values),
+            null: Bitmap::all_set(100),
+            missing: Bitmap::all_set(100),
+        };
+        let batch = ColumnBatch {
+            columns: vec![col],
+            names: vec!["x".to_string()],
+            selection: SelectionVector::All,
+            len: 100,
+        };
+        let schema = BatchSchema {
+            names: vec!["x".to_string()],
+            types: vec![ColumnType::Int32],
+        };
+        let sort_col = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
+        let mut op = BatchOrderByOperator::new_top_n(
+            Box::new(OneBatch {
+                batch: Some(batch),
+                schema,
+            }),
+            vec![sort_col],
+            vec![Ordering::Asc],
+            3,
+        );
+
+        let result = op.next_batch().unwrap().unwrap();
+        assert_eq!(op.peak_retained_rows(), 3);
+        assert_eq!(result.len, 3);
+        let values: Vec<_> = (0..3)
+            .map(|row| BatchToRowAdapter::extract_value(&result.columns[0], row))
+            .collect();
+        assert_eq!(values, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
 
     #[test]

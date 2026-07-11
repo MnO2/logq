@@ -106,39 +106,139 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
+fn compare_records(a: &Record, b: &Record, sort_keys: &[PathExpr], orderings: &[Ordering]) -> std::cmp::Ordering {
+    for (idx, key) in sort_keys.iter().enumerate() {
+        let a_owned;
+        let b_owned;
+        let a_ref = match a.get_ref(key) {
+            Some(value) => value,
+            None => {
+                a_owned = a.get(key);
+                &a_owned
+            }
+        };
+        let b_ref = match b.get_ref(key) {
+            Some(value) => value,
+            None => {
+                b_owned = b.get(key);
+                &b_owned
+            }
+        };
+        let ordering = orderings.get(idx).copied().unwrap_or(Ordering::Asc);
+        let result = match ordering {
+            Ordering::Asc => compare_values(a_ref, b_ref),
+            Ordering::Desc => compare_values(a_ref, b_ref).reverse(),
+        };
+        if result != std::cmp::Ordering::Equal {
+            return result;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 /// Fallback: direct sort using compare_values (used for small result sets).
 fn direct_sort(records: &mut [Record], sort_keys: &[PathExpr], orderings: &[Ordering]) {
-    records.sort_by(|a, b| {
-        for idx in 0..sort_keys.len() {
-            let key = &sort_keys[idx];
-            let ordering = &orderings[idx];
-            let a_owned;
-            let b_owned;
-            let a_ref = match a.get_ref(key) {
-                Some(v) => v,
-                None => {
-                    a_owned = a.get(key);
-                    &a_owned
-                }
-            };
-            let b_ref = match b.get_ref(key) {
-                Some(v) => v,
-                None => {
-                    b_owned = b.get(key);
-                    &b_owned
-                }
-            };
-            let cmp_result = compare_values(a_ref, b_ref);
-            let ordered = match ordering {
-                Ordering::Asc => cmp_result,
-                Ordering::Desc => cmp_result.reverse(),
-            };
-            if ordered != std::cmp::Ordering::Equal {
-                return ordered;
-            }
+    records.sort_by(|a, b| compare_records(a, b, sort_keys, orderings));
+}
+
+struct RankedRecord {
+    record: Record,
+    ordinal: usize,
+}
+
+fn compare_ranked(
+    a: &RankedRecord,
+    b: &RankedRecord,
+    sort_keys: &[PathExpr],
+    orderings: &[Ordering],
+) -> std::cmp::Ordering {
+    compare_records(&a.record, &b.record, sort_keys, orderings).then_with(|| a.ordinal.cmp(&b.ordinal))
+}
+
+/// Retains only the best `capacity` records in a max-heap while scanning.
+pub(crate) struct BoundedTopN {
+    heap: Vec<RankedRecord>,
+    capacity: usize,
+    sort_keys: Vec<PathExpr>,
+    orderings: Vec<Ordering>,
+    next_ordinal: usize,
+    peak_retained: usize,
+}
+
+impl BoundedTopN {
+    pub(crate) fn new(capacity: usize, sort_keys: Vec<PathExpr>, orderings: Vec<Ordering>) -> Self {
+        Self {
+            heap: Vec::with_capacity(capacity),
+            capacity,
+            sort_keys,
+            orderings,
+            next_ordinal: 0,
+            peak_retained: 0,
         }
-        std::cmp::Ordering::Equal
-    });
+    }
+
+    pub(crate) fn push(&mut self, record: Record) {
+        let ranked = RankedRecord {
+            record,
+            ordinal: self.next_ordinal,
+        };
+        self.next_ordinal += 1;
+        if self.capacity == 0 {
+            return;
+        }
+
+        if self.heap.len() < self.capacity {
+            self.heap.push(ranked);
+            self.sift_up(self.heap.len() - 1);
+            self.peak_retained = self.peak_retained.max(self.heap.len());
+        } else if compare_ranked(&ranked, &self.heap[0], &self.sort_keys, &self.orderings).is_lt() {
+            self.heap[0] = ranked;
+            self.sift_down(0);
+        }
+    }
+
+    fn sift_up(&mut self, mut index: usize) {
+        while index > 0 {
+            let parent = (index - 1) / 2;
+            if !compare_ranked(&self.heap[index], &self.heap[parent], &self.sort_keys, &self.orderings).is_gt() {
+                break;
+            }
+            self.heap.swap(index, parent);
+            index = parent;
+        }
+    }
+
+    fn sift_down(&mut self, mut index: usize) {
+        loop {
+            let left = index * 2 + 1;
+            if left >= self.heap.len() {
+                break;
+            }
+            let right = left + 1;
+            let mut larger = left;
+            if right < self.heap.len()
+                && compare_ranked(&self.heap[right], &self.heap[left], &self.sort_keys, &self.orderings).is_gt()
+            {
+                larger = right;
+            }
+            if !compare_ranked(&self.heap[larger], &self.heap[index], &self.sort_keys, &self.orderings).is_gt() {
+                break;
+            }
+            self.heap.swap(index, larger);
+            index = larger;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn peak_retained(&self) -> usize {
+        self.peak_retained
+    }
+
+    pub(crate) fn finish(mut self) -> VecDeque<Record> {
+        self.heap
+            .sort_by(|a, b| compare_ranked(a, b, &self.sort_keys, &self.orderings));
+        self.heap.into_iter().map(|ranked| ranked.record).collect()
+    }
 }
 
 pub struct PrefixSortEncoder {
@@ -532,6 +632,48 @@ mod tests {
     use crate::execution::types::Ordering;
     use crate::syntax::ast::{PathExpr, PathSegment};
     use ordered_float::OrderedFloat;
+
+    #[test]
+    fn bounded_top_n_never_retains_more_than_its_limit() {
+        let key = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
+        let mut top_n = BoundedTopN::new(3, vec![key], vec![Ordering::Asc]);
+        for value in (1..=1_000).rev() {
+            top_n.push(Record::new(&["x".to_string()], vec![Value::Int(value)]));
+        }
+
+        assert_eq!(top_n.peak_retained(), 3);
+        let values: Vec<_> = top_n
+            .finish()
+            .into_iter()
+            .map(|record| record.get_field_value("x").unwrap().clone())
+            .collect();
+        assert_eq!(values, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    }
+
+    #[test]
+    fn bounded_top_n_matches_full_sort_for_multiple_keys_and_directions() {
+        let fields = ["x".to_string(), "y".to_string()];
+        let records: Vec<_> = (0..100)
+            .map(|value| Record::new(&fields, vec![Value::Int(value % 7), Value::Int(100 - value)]))
+            .collect();
+        let keys = vec![
+            PathExpr::new(vec![PathSegment::AttrName("x".to_string())]),
+            PathExpr::new(vec![PathSegment::AttrName("y".to_string())]),
+        ];
+
+        for orderings in [vec![Ordering::Asc, Ordering::Desc], vec![Ordering::Desc, Ordering::Asc]] {
+            let expected: Vec<_> = PrefixSortEncoder::default()
+                .sort(records.clone(), &keys, &orderings)
+                .into_iter()
+                .take(11)
+                .collect();
+            let mut top_n = BoundedTopN::new(11, keys.clone(), orderings);
+            for record in records.clone() {
+                top_n.push(record);
+            }
+            assert_eq!(top_n.finish().into_iter().collect::<Vec<_>>(), expected);
+        }
+    }
 
     #[test]
     fn test_encode_value_null_sorts_last() {

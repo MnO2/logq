@@ -202,6 +202,9 @@ select approx_count_distinct(user_agent) from it
 select * from it order by backend_processing_time desc limit 10
 ```
 
+`ORDER BY ... LIMIT k` uses a bounded top-N heap in both execution pipelines, retaining at most
+`k` candidate rows instead of materializing and sorting the complete input.
+
 ### JOINs
 
 ```sql

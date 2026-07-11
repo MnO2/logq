@@ -1227,7 +1227,7 @@ impl Node {
                     }
                 }
                 // Fallback: wrap with BatchFilterOperator for non-DataSource children
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
                             batch_stream,
@@ -1319,7 +1319,7 @@ impl Node {
                     let required = params.map_source.compute_required_fields_for_batch();
                     match params
                         .map_source
-                        .try_get_batch_limited(variables, registry, &required, threads, row_limit)
+                        .try_get_batch_limited(variables, registry, &required, threads, None)
                     {
                         Some(Ok(batch_stream)) => {
                             let op = crate::execution::batch_streaming_groupby::BatchStreamingGroupByOperator::new(
@@ -1338,7 +1338,7 @@ impl Node {
                     }
                 }
                 // Hash-based fallback
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
                     Some(Ok(batch_stream)) => {
                         let groupby = crate::execution::batch_groupby::BatchGroupByOperator::new(
                             batch_stream,
@@ -1354,13 +1354,22 @@ impl Node {
                 }
             }
             Node::OrderBy(sort_columns, orderings, source) => {
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
                     Some(Ok(batch_stream)) => {
-                        let op = crate::execution::batch_orderby::BatchOrderByOperator::new(
-                            batch_stream,
-                            sort_columns.clone(),
-                            orderings.clone(),
-                        );
+                        let op = if let Some(limit) = row_limit {
+                            crate::execution::batch_orderby::BatchOrderByOperator::new_top_n(
+                                batch_stream,
+                                sort_columns.clone(),
+                                orderings.clone(),
+                                limit,
+                            )
+                        } else {
+                            crate::execution::batch_orderby::BatchOrderByOperator::new(
+                                batch_stream,
+                                sort_columns.clone(),
+                                orderings.clone(),
+                            )
+                        };
                         Some(Ok(Box::new(op) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
@@ -1368,7 +1377,7 @@ impl Node {
                 }
             }
             Node::Distinct(source) => {
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
                     Some(Ok(batch_stream)) => {
                         let op = crate::execution::batch_distinct::BatchDistinctOperator::new(batch_stream);
                         Some(Ok(Box::new(op) as Box<dyn BatchStream>))
@@ -1455,6 +1464,18 @@ impl Node {
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
+                if let Node::OrderBy(column_names, orderings, order_source) = source.as_ref() {
+                    let mut record_stream = order_source.get(variables, registry, threads)?;
+                    let mut top_n = super::prefix_sort::BoundedTopN::new(
+                        *row_count as usize,
+                        column_names.clone(),
+                        orderings.clone(),
+                    );
+                    while let Some(record) = record_stream.next()? {
+                        top_n.push(record);
+                    }
+                    return Ok(Box::new(InMemoryStream::new(top_n.finish())));
+                }
                 let record_stream = source.get(variables.clone(), registry, threads)?;
                 let stream = LimitStream::new(*row_count, record_stream);
                 Ok(Box::new(stream))

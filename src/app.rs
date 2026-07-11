@@ -674,6 +674,49 @@ mod tests {
     }
 
     #[test]
+    fn test_order_by_limit_considers_late_rows_in_batch_pipeline() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("top-n.log");
+        let mut file = File::create(path.clone()).unwrap();
+        for sent_bytes in (1..=100).rev() {
+            writeln!(
+                file,
+                r#"2019-06-07T18:45:31Z elb1 1.1.1.1:1 2.2.2.2:2 0 0 0 200 200 0 {sent_bytes} "GET https://example.com/ HTTP/1.1" "agent" c t"#
+            )
+            .unwrap();
+        }
+        drop(file);
+        let data_source = common::types::DataSource::File(path, "elb".to_string(), "it".to_string());
+        let data_sources = [("it".to_string(), data_source)].into_iter().collect();
+        let rows = run_to_vec(
+            "select sent_bytes from it order by sent_bytes asc limit 2",
+            data_sources,
+            4,
+        )
+        .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                vec![("sent_bytes".to_string(), Value::Int(1))],
+                vec![("sent_bytes".to_string(), Value::Int(2))],
+            ]
+        );
+
+        let json_lines: Vec<String> = (1..=100).rev().map(|value| format!(r#"{{"x":{value}}}"#)).collect();
+        let json_line_refs: Vec<&str> = json_lines.iter().map(String::as_str).collect();
+        let row_results =
+            run_format_query_to_vec("jsonl", &json_line_refs, "select x from it order by x asc limit 2").unwrap();
+        assert_eq!(
+            row_results,
+            vec![
+                vec![("x".to_string(), Value::Int(1))],
+                vec![("x".to_string(), Value::Int(2))],
+            ]
+        );
+    }
+
+    #[test]
     fn test_run_real_jsonl_log() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("log_for_test.log");

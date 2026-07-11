@@ -17,6 +17,7 @@ Phase 4 complete. All phases done.
 - **WS7d:** Completed `time_bucket` with compact `s`/`m`/`h`/`d` intervals and offset-preserving calendar-day buckets, including grouped coverage through both batch and row execution pipelines.
 - **WS7e:** Added streaming `--output ndjson`, emitting one JSON object per row without buffering the complete result set.
 - **WS8 (observability):** Extended `explain` with the selected batch/row execution pipeline and a specific plan-node reason whenever batch execution falls back.
+- **WS8 (top-N):** Added bounded-heap execution for `ORDER BY ... LIMIT` in both batch and row pipelines, with tests that cap retained candidates at `k`. Corrected parallel batch planning so LIMIT never truncates the input before sorting, grouping, filtering, or deduplication.
 
 ## Completed Tasks
 
