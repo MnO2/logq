@@ -1,0 +1,44 @@
+{
+  "queries": [
+    {
+      "id": "full_count",
+      "label": "Full-file count",
+      "logq": "select count(*) from it",
+      "duckdb": "SELECT count(*) FROM read_ndjson_auto('{data}')",
+      "clickhouse": "SELECT count() FROM file('{data}', JSONEachRow)",
+      "angle_grinder": "* | json | count"
+    },
+    {
+      "id": "selective_filter",
+      "label": "Selective status filter",
+      "logq": "select count(*) from it where status_code = 503",
+      "duckdb": "SELECT count(*) FROM read_ndjson_auto('{data}') WHERE status_code = 503",
+      "clickhouse": "SELECT count() FROM file('{data}', JSONEachRow) WHERE status_code = 503",
+      "angle_grinder": "* | json | where status_code == 503 | count"
+    },
+    {
+      "id": "group_by_status",
+      "label": "Group by status",
+      "logq": "select status_code, count(*) as count from it group by status_code",
+      "duckdb": "SELECT status_code, count(*) AS count FROM read_ndjson_auto('{data}') GROUP BY status_code",
+      "clickhouse": "SELECT status_code, count() AS count FROM file('{data}', JSONEachRow) GROUP BY status_code",
+      "angle_grinder": "* | json | count by status_code"
+    },
+    {
+      "id": "top_latency",
+      "label": "Top-10 latency",
+      "logq": "select request_id, latency from it order by latency desc limit 10",
+      "duckdb": "SELECT request_id, latency FROM read_ndjson_auto('{data}') ORDER BY latency DESC LIMIT 10",
+      "clickhouse": "SELECT request_id, latency FROM file('{data}', JSONEachRow) ORDER BY latency DESC LIMIT 10",
+      "angle_grinder": "* | json | fields + request_id, latency | sort by latency desc"
+    },
+    {
+      "id": "user_agent_like",
+      "label": "User-agent substring",
+      "logq": "select count(*) from it where user_agent like \"%Chrome%\"",
+      "duckdb": "SELECT count(*) FROM read_ndjson_auto('{data}') WHERE user_agent LIKE '%Chrome%'",
+      "clickhouse": "SELECT count() FROM file('{data}', JSONEachRow) WHERE user_agent LIKE '%Chrome%'",
+      "angle_grinder": "* | json | where contains(user_agent, \"Chrome\") | count"
+    }
+  ]
+}
