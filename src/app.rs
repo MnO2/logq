@@ -493,6 +493,7 @@ pub fn run_to_records_with_registry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::types::Value;
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::fs::File;
@@ -608,6 +609,42 @@ mod tests {
         assert_eq!(result, Ok(()));
 
         dir.close().unwrap();
+    }
+
+    #[test]
+    fn test_grouped_time_bucket_shorthand_in_batch_and_row_pipelines() {
+        let elb_lines = [
+            r#"2019-06-07T18:45:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 42355 "GET https://example.com:443/ HTTP/1.1" "agent" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#,
+            r#"2019-06-07T19:05:33.559871Z elb1 78.168.134.92:4586 10.0.0.215:80 0.000036 0.001035 0.000025 200 200 0 123 "GET https://example.com:443/ HTTP/1.1" "agent" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2"#,
+        ];
+        let query = r#"select t, count(*) as n from it group by time_bucket("1d", timestamp) as t order by t asc"#;
+        let batch = run_format_query_to_vec("elb", &elb_lines, query).unwrap();
+        assert_eq!(
+            batch,
+            vec![vec![
+                (
+                    "t".to_string(),
+                    Value::DateTime(chrono::DateTime::parse_from_rfc3339("2019-06-07T00:00:00Z").unwrap()),
+                ),
+                ("n".to_string(), Value::Int(2)),
+            ]]
+        );
+
+        let common_lines = [
+            r#"127.0.0.1 - frank [10/Oct/2000:13:55:36 -0700] "GET /one HTTP/1.0" 200 10"#,
+            r#"127.0.0.1 - frank [10/Oct/2000:23:59:59 -0700] "GET /two HTTP/1.0" 200 20"#,
+        ];
+        let row = run_format_query_to_vec("clf", &common_lines, query).unwrap();
+        assert_eq!(
+            row,
+            vec![vec![
+                (
+                    "t".to_string(),
+                    Value::DateTime(chrono::DateTime::parse_from_rfc3339("2000-10-10T00:00:00-07:00").unwrap(),),
+                ),
+                ("n".to_string(), Value::Int(2)),
+            ]]
+        );
     }
 
     #[test]

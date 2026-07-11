@@ -4,6 +4,8 @@ use crate::execution::types::ExpressionError;
 use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
 use chrono::Datelike;
 use chrono::Duration;
+use chrono::NaiveDate;
+use chrono::TimeZone;
 use chrono::Timelike;
 use ordered_float::OrderedFloat;
 
@@ -118,6 +120,20 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         } else {
                             unreachable!();
                         }
+                    }
+                    common::types::TimeIntervalUnit::Day => {
+                        let day = i64::from(dt.date_naive().num_days_from_ce());
+                        let interval = i64::from(time_interval.n);
+                        let bucket_day = day.div_euclid(interval) * interval;
+                        let bucket_day = i32::try_from(bucket_day)
+                            .ok()
+                            .and_then(NaiveDate::from_num_days_from_ce_opt)
+                            .ok_or(ExpressionError::TimeIntervalNotSupported)?;
+                        let midnight = bucket_day
+                            .and_hms_opt(0, 0, 0)
+                            .and_then(|naive| dt.offset().from_local_datetime(&naive).single())
+                            .ok_or(ExpressionError::TimeIntervalNotSupported)?;
+                        Ok(Value::DateTime(midnight))
                     }
                     _ => Err(ExpressionError::TimeIntervalNotSupported),
                 }
@@ -474,6 +490,28 @@ mod tests {
         let expected = make_datetime("2015-11-07T18:00:00.000000Z");
         assert_eq!(
             r.call("time_bucket", &[Value::String("2 hours".to_string().into()), dt]),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn test_time_bucket_1_day_shorthand() {
+        let r = make_registry();
+        let dt = make_datetime("2015-11-07T18:45:37.691548Z");
+        let expected = make_datetime("2015-11-07T00:00:00.000000Z");
+        assert_eq!(
+            r.call("time_bucket", &[Value::String("1d".to_string().into()), dt]),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn test_time_bucket_2_days_crosses_a_month_boundary() {
+        let r = make_registry();
+        let dt = make_datetime("2015-11-01T18:45:37.691548Z");
+        let expected = make_datetime("2015-10-31T00:00:00.000000Z");
+        assert_eq!(
+            r.call("time_bucket", &[Value::String("2 days".to_string().into()), dt]),
             Ok(expected)
         );
     }

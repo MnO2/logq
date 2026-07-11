@@ -179,9 +179,9 @@ from it
 -- GROUP BY
 select elb_status_code, count(*) as cnt from it group by elb_status_code
 
--- GROUP BY with time bucketing
-select time_bucket('5 seconds', timestamp) as t, sum(sent_bytes) as s
-from it group by time_bucket('5 seconds', timestamp) as t
+-- GROUP BY with time bucketing (s/m/h/d shorthand is also supported)
+select time_bucket('5m', timestamp) as t, sum(sent_bytes) as s
+from it group by time_bucket('5m', timestamp) as t
 
 -- HAVING
 select elb_status_code, count(*) as cnt from it
@@ -304,7 +304,7 @@ select nullif(a, 0) from it
 | `url_query(request)` | Extract query string from HTTP request | `url_query(request)` |
 | `url_path_segments(request)` | Extract path segments | `url_path_segments(request)` |
 | `url_path_bucket(request, depth, placeholder)` | Canonicalize URL path for grouping | `url_path_bucket(request, 1, "_")` |
-| `time_bucket(interval, datetime)` | Bucket timestamp into intervals | `time_bucket('5 seconds', timestamp)` |
+| `time_bucket(interval, datetime)` | Bucket timestamps by second, minute, hour, or day | `time_bucket('5m', timestamp)` |
 | `date_part(unit, datetime)` | Extract part of datetime | `date_part('hour', timestamp)` |
 | `host_name(host)` | Extract hostname from host field | `host_name(backend_and_port)` |
 | `host_port(host)` | Extract port from host field | `host_port(backend_and_port)` |

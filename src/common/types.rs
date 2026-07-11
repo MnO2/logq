@@ -231,6 +231,22 @@ pub(crate) fn parse_time_interval_unit(s: &str, plural: bool) -> ParseTimeInterv
 }
 
 pub(crate) fn parse_time_interval(s: &str) -> ParseTimeIntervalResult<TimeInterval> {
+    if !s.chars().any(char::is_whitespace) {
+        if let Some(split_at) = s.find(|c: char| !c.is_ascii_digit()) {
+            if split_at > 0 {
+                let n = s[..split_at].parse::<u32>()?;
+                let unit = match &s[split_at..] {
+                    "s" => TimeIntervalUnit::Second,
+                    "m" => TimeIntervalUnit::Minute,
+                    "h" => TimeIntervalUnit::Hour,
+                    "d" => TimeIntervalUnit::Day,
+                    _ => return Err(ParseTimeIntervalError::UnknownTimeUnit),
+                };
+                return Ok(TimeInterval { n, unit });
+            }
+        }
+    }
+
     let mut iter = s.split_whitespace();
 
     let integral_opt = if let Some(token) = iter.next() {
@@ -468,6 +484,18 @@ mod tests {
         };
 
         assert_eq!(expected, ans);
+    }
+
+    #[test]
+    fn test_parse_time_interval_shorthand() {
+        for (input, n, unit) in [
+            ("1s", 1, TimeIntervalUnit::Second),
+            ("5m", 5, TimeIntervalUnit::Minute),
+            ("2h", 2, TimeIntervalUnit::Hour),
+            ("1d", 1, TimeIntervalUnit::Day),
+        ] {
+            assert_eq!(parse_time_interval(input).unwrap(), TimeInterval { n, unit });
+        }
     }
 
     #[test]
