@@ -1,6 +1,15 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
 use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
+use serde_json::Value as JsonValue;
+
+fn parse_json(input: &str) -> Result<JsonValue, ExpressionError> {
+    serde_json::from_str(input).map_err(|_| ExpressionError::InvalidArguments)
+}
+
+fn stringify_json(value: &JsonValue) -> Result<String, ExpressionError> {
+    serde_json::to_string(value).map_err(|_| ExpressionError::InvalidArguments)
+}
 
 /// Navigate a JSON value using a simple JSON path.
 ///
@@ -11,7 +20,7 @@ use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandl
 /// - `$[0]` — array element
 /// - `$.key[0]` — object member then array element
 /// - `$.key[0].name` — chained access
-fn json_navigate(value: &json::JsonValue, path: &str) -> Option<json::JsonValue> {
+fn json_navigate(value: &JsonValue, path: &str) -> Option<JsonValue> {
     let path = path.trim();
 
     // Strip leading "$"
@@ -32,16 +41,10 @@ fn json_navigate(value: &json::JsonValue, path: &str) -> Option<json::JsonValue>
     for segment in segments {
         match segment {
             PathSegment::Key(key) => {
-                if current[key.as_str()].is_null() && !current.has_key(key.as_str()) {
-                    return None;
-                }
-                current = current[key.as_str()].clone();
+                current = current.get(&key)?.clone();
             }
             PathSegment::Index(idx) => {
-                if !current.is_array() || idx >= current.len() {
-                    return None;
-                }
-                current = current[idx].clone();
+                current = current.get(idx)?.clone();
             }
         }
     }
@@ -110,9 +113,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(json_str), Value::String(path)) => {
-                let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
+                let parsed = parse_json(json_str)?;
                 match json_navigate(&parsed, path) {
-                    Some(val) => Ok(Value::String(json::stringify(val).into())),
+                    Some(val) => Ok(Value::String(stringify_json(&val)?.into())),
                     None => Ok(Value::Null),
                 }
             }
@@ -127,7 +130,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(json_str), Value::String(path)) => {
-                let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
+                let parsed = parse_json(json_str)?;
                 match json_navigate(&parsed, path) {
                     Some(val) => {
                         if val.is_object() || val.is_array() || val.is_null() {
@@ -135,8 +138,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                         } else if val.is_boolean() {
                             Ok(Value::String(val.as_bool().unwrap().to_string().into()))
                         } else if val.is_number() {
-                            // Use json::stringify to get the raw number representation
-                            Ok(Value::String(json::stringify(val).into()))
+                            Ok(Value::String(stringify_json(&val)?.into()))
                         } else if val.is_string() {
                             Ok(Value::String(val.as_str().unwrap().into()))
                         } else {
@@ -157,9 +159,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
             Value::String(json_str) => {
-                let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
+                let parsed = parse_json(json_str)?;
                 if parsed.is_array() {
-                    Ok(Value::Int(parsed.len() as i32))
+                    Ok(Value::Int(parsed.as_array().unwrap().len() as i32))
                 } else {
                     Ok(Value::Null)
                 }
@@ -175,12 +177,12 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
             Value::String(json_str) => {
-                let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
+                let parsed = parse_json(json_str)?;
                 if !parsed.is_array() {
                     return Ok(Value::Boolean(false));
                 }
                 let search_value = &args[1];
-                for member in parsed.members() {
+                for member in parsed.as_array().unwrap() {
                     match search_value {
                         Value::String(s) => {
                             if member.is_string() && member.as_str().unwrap() == s.as_str() {
@@ -188,7 +190,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                             }
                         }
                         Value::Int(i) => {
-                            if member.is_number() && member.as_i32() == Some(*i) {
+                            if member.is_number() && member.as_i64() == Some(i64::from(*i)) {
                                 return Ok(Value::Boolean(true));
                             }
                         }
@@ -213,11 +215,16 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(json_str), Value::String(path)) => {
-                let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
+                let parsed = parse_json(json_str)?;
                 match json_navigate(&parsed, path) {
                     Some(val) => {
                         if val.is_array() || val.is_object() {
-                            Ok(Value::Int(val.len() as i32))
+                            let len = val
+                                .as_array()
+                                .map(Vec::len)
+                                .or_else(|| val.as_object().map(serde_json::Map::len))
+                                .unwrap_or(0);
+                            Ok(Value::Int(len as i32))
                         } else {
                             Ok(Value::Int(0))
                         }
@@ -251,7 +258,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::String(s) => {
                 // Validate that the string is valid JSON
-                json::parse(s).map_err(|_| ExpressionError::InvalidArguments)?;
+                parse_json(s)?;
                 Ok(Value::String(s.clone()))
             }
             _ => Err(ExpressionError::InvalidArguments),
@@ -265,7 +272,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
             Value::String(json_str) => {
-                let parsed = json::parse(json_str).map_err(|_| ExpressionError::InvalidArguments)?;
+                let parsed = parse_json(json_str)?;
                 let is_scalar = parsed.is_string() || parsed.is_number() || parsed.is_boolean() || parsed.is_null();
                 Ok(Value::Boolean(is_scalar))
             }

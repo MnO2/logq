@@ -91,3 +91,32 @@ fn stdin_input_remains_supported() {
     assert!(child.wait().unwrap().success());
     assert!(output.contains(r#""n":2"#), "unexpected output: {}", output);
 }
+
+#[test]
+fn jsonl_to_json_output_round_trips_nested_values_and_field_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested.jsonl");
+    std::fs::write(
+        &path,
+        b"{\"first\":1,\"nested\":{\"answer\":42},\"items\":[true,null]}\n",
+    )
+    .unwrap();
+
+    let output = run_query("select * from it", &format!("it:jsonl={}", path.display()));
+
+    assert_eq!(
+        output.trim(),
+        r#"[{"first":1,"nested":{"answer":42},"items":[true,null]}]"#
+    );
+}
+
+#[test]
+fn json_output_uses_the_shortest_f32_representation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("float.jsonl");
+    std::fs::write(&path, b"{\"value\":1.2}\n").unwrap();
+
+    let output = run_query("select * from it", &format!("it:jsonl={}", path.display()));
+
+    assert_eq!(output.trim(), r#"[{"value":1.2}]"#);
+}

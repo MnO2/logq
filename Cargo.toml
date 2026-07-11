@@ -26,7 +26,7 @@ chrono = "0.4"
 url = "2.2"
 csv = "1.1"
 lazy_static = "1.4.0"
-json = "0.12"
+serde_json = { version = "1", features = ["preserve_order"] }
 tdigest = "0.2"
 pdatastructs = "0.6.0"
 linked-hash-map = "0.5"

@@ -40,7 +40,7 @@ pub enum AppError {
     #[error("{0}")]
     WriteCsv(#[from] csv::Error),
     #[error("{0}")]
-    WriteJson(#[from] json::Error),
+    WriteJson(#[from] serde_json::Error),
     #[error("{0}")]
     Registry(#[from] functions::RegistryError),
 }
@@ -86,6 +86,27 @@ pub enum OutputMode {
     Table,
     Csv,
     Json,
+}
+
+fn value_to_json(value: common::types::Value) -> serde_json::Value {
+    use common::types::Value;
+    match value {
+        Value::Boolean(value) => value.into(),
+        Value::DateTime(value) => value.to_string().into(),
+        Value::Float(value) => serde_json::from_str(&value.into_inner().to_string()).unwrap_or(serde_json::Value::Null),
+        Value::Host(value) => value.to_string().into(),
+        Value::HttpRequest(value) => value.to_string().into(),
+        Value::Int(value) => value.into(),
+        Value::Null | Value::Missing => serde_json::Value::Null,
+        Value::String(value) => value.to_string().into(),
+        Value::Object(value) => serde_json::Value::Object(
+            value
+                .into_iter()
+                .map(|(key, value)| (key, value_to_json(value)))
+                .collect(),
+        ),
+        Value::Array(value) => serde_json::Value::Array(value.into_iter().map(value_to_json).collect()),
+    }
 }
 
 impl FromStr for OutputMode {
@@ -154,49 +175,16 @@ pub fn run(
             }
         }
         OutputMode::Json => {
-            let mut data = json::JsonValue::new_array();
+            let mut data = Vec::new();
             while let Some(record) = stream.next()? {
-                let mut obj = json::JsonValue::new_object();
-                for (key, val) in record.to_tuples() {
-                    match val {
-                        common::types::Value::Boolean(b) => {
-                            obj[key] = b.into();
-                        }
-                        common::types::Value::DateTime(dt) => {
-                            obj[key] = dt.to_string().into();
-                        }
-                        common::types::Value::Float(f) => {
-                            obj[key] = f.into_inner().into();
-                        }
-                        common::types::Value::Host(h) => {
-                            obj[key] = h.to_string().into();
-                        }
-                        common::types::Value::HttpRequest(h) => {
-                            obj[key] = h.to_string().into();
-                        }
-                        common::types::Value::Int(i) => {
-                            obj[key] = i.into();
-                        }
-                        common::types::Value::Null => {
-                            obj[key] = json::Null;
-                        }
-                        common::types::Value::String(s) => {
-                            obj[key] = s.to_string().into();
-                        }
-                        common::types::Value::Missing => obj[key] = json::Null,
-                        common::types::Value::Object(_) => {
-                            //
-                            obj[key] = json::JsonValue::String("{ ... }".to_string());
-                        }
-                        common::types::Value::Array(_) => {
-                            obj[key] = json::JsonValue::String("[ ... ]".to_string());
-                        }
-                    }
-                }
-
-                data.push(obj)?;
+                let obj = record
+                    .into_tuples()
+                    .into_iter()
+                    .map(|(key, value)| (key, value_to_json(value)))
+                    .collect();
+                data.push(serde_json::Value::Object(obj));
             }
-            let s = data.dump();
+            let s = serde_json::to_string(&data)?;
             println!("{}", s);
         }
     }

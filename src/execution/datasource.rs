@@ -1,14 +1,14 @@
 use super::stream::Record;
 use crate::common;
 use crate::common::types::Value;
-use json;
 use ordered_float::OrderedFloat;
 use url;
 
 use flate2::read::GzDecoder;
-use json::JsonValue;
 use linked_hash_map::LinkedHashMap;
+use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
+use std::convert::TryFrom;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -750,7 +750,7 @@ pub enum ReaderError {
     #[error("{0}")]
     ParseHttpRequest(#[from] common::types::ParseHttpRequestError),
     #[error("{0}")]
-    ParseJson(#[from] json::JsonError),
+    ParseJson(#[from] serde_json::Error),
 }
 
 #[derive(Debug)]
@@ -841,27 +841,23 @@ impl ReaderBuilder {
 
 fn json_to_data_model(parsed: &JsonValue) -> Value {
     match parsed {
-        json::JsonValue::Object(o) => {
+        JsonValue::Object(o) => {
             let t: LinkedHashMap<String, Value> =
                 o.iter().map(|(k, v)| (k.to_string(), json_to_data_model(v))).collect();
             Value::Object(Box::new(t))
         }
-        json::JsonValue::Array(a) => {
+        JsonValue::Array(a) => {
             let a: Vec<Value> = a.iter().map(json_to_data_model).collect();
             Value::Array(a)
         }
-        json::JsonValue::Null => Value::Null,
-        json::JsonValue::String(s) => Value::String(s.clone().into()),
-        json::JsonValue::Short(s) => Value::String(s.to_string().into()),
-        json::JsonValue::Boolean(b) => Value::Boolean(*b),
-        json::JsonValue::Number(n) => {
-            let fixed = n.as_fixed_point_i64(4).unwrap();
-
-            if fixed % 10000 == 0 {
-                Value::Int((fixed / 10000) as i32)
+        JsonValue::Null => Value::Null,
+        JsonValue::String(s) => Value::String(s.clone().into()),
+        JsonValue::Bool(b) => Value::Boolean(*b),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64().and_then(|i| i32::try_from(i).ok()) {
+                Value::Int(i)
             } else {
-                let f: f32 = fixed as f32 / 10000.0;
-                Value::Float(OrderedFloat::from(f))
+                Value::Float(OrderedFloat::from(n.as_f64().unwrap_or_default() as f32))
             }
         }
     }
@@ -1003,7 +999,7 @@ impl<R: io::Read> RecordRead for Reader<R> {
             let record = Record::new_with_variables(record_vars);
             Ok(Some(record))
         } else if more_data > 0 && matches!(self.format, LogFormat::Jsonl) {
-            let parsed = json::parse(&self.buf)?;
+            let parsed = serde_json::from_str(&self.buf)?;
             let data_model = json_to_data_model(&parsed);
 
             match data_model {
