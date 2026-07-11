@@ -229,7 +229,7 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 - [x] WS3 Dependency modernization
 - [x] WS4 Fuzzing + conformance
 - [x] WS5 Competitor benchmarks
-- [ ] WS6 Error messages
+- [x] WS6 Error messages
 - [ ] WS7a INNER JOIN
 - [ ] WS7b Custom regex format
 - [ ] WS7c nginx/apache formats
