@@ -1,0 +1,1 @@
+select category, avg(score) as result from it group by category order by category asc

@@ -1,0 +1,1 @@
+select min(uid) as result from it

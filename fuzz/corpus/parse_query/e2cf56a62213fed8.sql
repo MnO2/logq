@@ -1,0 +1,1 @@
+select uid from it where uid not in (1, 3)

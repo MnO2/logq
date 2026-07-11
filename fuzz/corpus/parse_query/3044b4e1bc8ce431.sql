@@ -1,0 +1,1 @@
+select nullif(category, "alpha") as result from it order by uid asc

@@ -1,0 +1,1 @@
+select sum(uid) as result from it

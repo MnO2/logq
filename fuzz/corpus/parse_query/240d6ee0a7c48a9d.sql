@@ -1,0 +1,1 @@
+select uid from it where active and uid < 3 order by uid asc

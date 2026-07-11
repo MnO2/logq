@@ -1,0 +1,4 @@
+{"uid":1,"person":"Alice","category":"alpha","score":10.5,"active":true,"optional":null}
+{"uid":2,"person":"Bob","category":"beta","score":20.0,"active":false,"optional":"x"}
+{"uid":3,"person":"Carol","category":"alpha","score":15.0,"active":true}
+{"uid":4,"person":"dave","category":"beta","score":5.0,"active":false,"optional":"y"}

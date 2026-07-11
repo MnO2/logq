@@ -1,0 +1,1 @@
+select avg(score) as result from it

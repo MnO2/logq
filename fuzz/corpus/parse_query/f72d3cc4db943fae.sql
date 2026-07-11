@@ -1,0 +1,1 @@
+select count(optional) as result from it

@@ -1,0 +1,1 @@
+select uid from it where uid >= 2 order by uid asc

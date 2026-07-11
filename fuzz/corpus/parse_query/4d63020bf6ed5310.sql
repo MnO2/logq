@@ -1,0 +1,1 @@
+select uid from it where person like "A%" order by uid asc

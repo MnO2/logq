@@ -1,0 +1,1 @@
+select substring(person, 2, 2) as result from it order by uid asc

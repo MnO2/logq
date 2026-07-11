@@ -1,0 +1,1 @@
+select uid from it where optional is missing

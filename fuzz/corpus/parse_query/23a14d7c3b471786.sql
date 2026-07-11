@@ -1,0 +1,1 @@
+select uid from it where active or uid = 2 order by uid asc

@@ -1,0 +1,1 @@
+select uid from it where not active order by uid asc

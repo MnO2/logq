@@ -1,0 +1,1 @@
+select distinct active from it order by active asc

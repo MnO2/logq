@@ -1,0 +1,1 @@
+select uid from it where person not like "%o%" order by uid asc

@@ -1,0 +1,1 @@
+select char_length(person) as result from it order by uid asc

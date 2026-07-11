@@ -1,0 +1,1 @@
+select cast(uid as float) as result from it order by uid asc

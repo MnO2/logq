@@ -1,0 +1,1 @@
+select uid from it order by uid desc

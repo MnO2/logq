@@ -1,0 +1,1 @@
+select uid, person from it order by uid asc

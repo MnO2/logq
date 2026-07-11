@@ -1,0 +1,1 @@
+select uid * 2 as result from it order by uid asc

@@ -1,0 +1,1 @@
+select max(uid) as result from it

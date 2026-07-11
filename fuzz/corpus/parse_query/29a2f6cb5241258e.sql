@@ -1,0 +1,1 @@
+select distinct category from it order by category asc

@@ -1,0 +1,1 @@
+select uid from it where uid not between 2 and 3 order by uid asc

@@ -1,0 +1,1 @@
+select uid from it where uid in (1, 3)

@@ -1,0 +1,1 @@
+select category, sum(uid) as result from it group by category order by category asc

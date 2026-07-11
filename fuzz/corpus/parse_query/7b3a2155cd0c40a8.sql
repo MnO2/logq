@@ -1,0 +1,1 @@
+select uid from it where category = "alpha" order by uid asc

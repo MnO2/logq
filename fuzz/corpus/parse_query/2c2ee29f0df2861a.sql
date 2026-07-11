@@ -1,0 +1,1 @@
+select coalesce(optional, "fallback") as result from it order by uid asc

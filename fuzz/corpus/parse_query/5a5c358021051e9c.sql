@@ -1,0 +1,1 @@
+select uid from it where uid = 1 union all select uid from it where uid = 1

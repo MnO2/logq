@@ -718,10 +718,10 @@ fn parse_expression_op(i: &str) -> IResult<&str, &str, nom::error::Error<&str>> 
     }
 
     for keyword in ["and", "or"] {
-        if let Ok((remaining, operator)) = tag_no_case::<&str, &str, Error<&str>>(keyword)(i)
-            && !remaining.starts_with(|ch: char| ch.is_alphanumeric() || ch == '_')
-        {
-            return Ok((remaining, operator));
+        if let Ok((remaining, operator)) = tag_no_case::<&str, &str, Error<&str>>(keyword)(i) {
+            if !remaining.starts_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
+                return Ok((remaining, operator));
+            }
         }
     }
 

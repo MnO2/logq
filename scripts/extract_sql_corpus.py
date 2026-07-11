@@ -39,6 +39,14 @@ def collect(inputs: tuple[Path, ...]) -> list[str]:
                 value = value.strip()
                 if SQL.search(value) and len(value.encode()) <= 4096:
                     queries.add(value)
+
+    conformance = ROOT / "tests" / "conformance" / "cases.json"
+    if conformance.exists():
+        manifest = json.loads(conformance.read_text(encoding="utf-8"))
+        for case in manifest["cases"]:
+            query = case["query"].strip()
+            if len(query.encode()) <= 4096:
+                queries.add(query)
     return sorted(queries)
 
 

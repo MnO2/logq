@@ -1,0 +1,1 @@
+select case when active then "yes" else "no" end as result from it order by uid asc
