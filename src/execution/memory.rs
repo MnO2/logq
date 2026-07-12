@@ -2,28 +2,49 @@ use crate::common::types::Value;
 use crate::execution::stream::Record;
 use crate::execution::types::{StreamError, StreamResult};
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct MemoryTracker {
-    limit: Option<usize>,
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug)]
+struct MemoryState {
+    limit: usize,
     used: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MemoryTracker {
+    state: Option<Arc<Mutex<MemoryState>>>,
 }
 
 impl MemoryTracker {
     pub(crate) fn new(limit: Option<usize>) -> Self {
-        Self { limit, used: 0 }
+        Self {
+            state: limit.map(|limit| Arc::new(Mutex::new(MemoryState { limit, used: 0 }))),
+        }
     }
 
-    pub(crate) fn add(&mut self, bytes: usize) -> StreamResult<()> {
-        self.used = self.used.saturating_add(bytes);
-        if self.limit.is_some_and(|limit| self.used > limit) {
+    pub(crate) fn limit(&self) -> Option<usize> {
+        self.state.as_ref().map(|state| state.lock().unwrap().limit)
+    }
+
+    pub(crate) fn add(&self, bytes: usize) -> StreamResult<()> {
+        let Some(state) = &self.state else {
+            return Ok(());
+        };
+        let mut state = state.lock().unwrap();
+        state.used = state.used.saturating_add(bytes);
+        if state.used > state.limit {
             return Err(StreamError::MemoryBudgetExceeded);
         }
         Ok(())
     }
 
-    pub(crate) fn replace(&mut self, removed: usize, added: usize) -> StreamResult<()> {
-        self.used = self.used.saturating_sub(removed).saturating_add(added);
-        if self.limit.is_some_and(|limit| self.used > limit) {
+    pub(crate) fn replace(&self, removed: usize, added: usize) -> StreamResult<()> {
+        let Some(state) = &self.state else {
+            return Ok(());
+        };
+        let mut state = state.lock().unwrap();
+        state.used = state.used.saturating_sub(removed).saturating_add(added);
+        if state.used > state.limit {
             return Err(StreamError::MemoryBudgetExceeded);
         }
         Ok(())

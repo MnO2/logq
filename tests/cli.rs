@@ -104,4 +104,30 @@ fn max_memory_stops_materializing_queries_cleanly() {
             "query: {query}\noutput: {combined}"
         );
     }
+
+    // Each operator stays below this ceiling on its own. The composed query
+    // must still fail when DISTINCT and ORDER BY retain more than the shared
+    // query budget in aggregate.
+    let result = Command::new(env!("CARGO_BIN_EXE_logq"))
+        .args([
+            "query",
+            "select distinct x from it order by x asc",
+            "--table",
+            &table,
+            "--output",
+            "ndjson",
+            "--max-memory",
+            "60KiB",
+        ])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        combined.contains("query exceeded memory budget (--max-memory)"),
+        "composed query did not share its budget: {combined}"
+    );
 }

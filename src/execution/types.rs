@@ -1413,11 +1413,26 @@ impl Node {
         threads: usize,
         max_memory: Option<usize>,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
+        self.get_with_memory_tracker(
+            variables,
+            registry,
+            threads,
+            crate::execution::memory::MemoryTracker::new(max_memory),
+        )
+    }
+
+    pub(crate) fn get_with_memory_tracker(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+        memory: crate::execution::memory::MemoryTracker,
+    ) -> CreateStreamResult<Box<dyn RecordStream>> {
         // Try batch pipeline first for supported node patterns.
         // Skip for bare DataSource — the columnar round-trip (parse to columns →
         // BatchToRowAdapter back to rows) is slower than direct row-based parsing
         // when there's no downstream operator (Filter, GroupBy) that benefits.
-        if max_memory.is_none() && !matches!(self, Node::DataSource(..)) {
+        if memory.limit().is_none() && !matches!(self, Node::DataSource(..)) {
             let required = self.compute_required_fields_for_batch();
             if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required, threads) {
                 let batch_stream = batch_result?;
@@ -1428,13 +1443,13 @@ impl Node {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream =
-                    source.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
+                    source.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory)?;
                 let stream = FilterStream::new(*formula.clone(), variables, record_stream, registry);
                 Ok(Box::new(stream))
             }
             Node::Map(named_list, source) => {
                 let record_stream =
-                    source.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
+                    source.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory)?;
 
                 let stream = MapStream::new(named_list.clone(), variables, record_stream, registry);
 
@@ -1473,41 +1488,40 @@ impl Node {
             },
             Node::GroupBy(fields, named_aggregates, source) => {
                 let record_stream =
-                    source.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
-                let stream = GroupByStream::new(
+                    source.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let stream = GroupByStream::new_with_memory_tracker(
                     fields.clone(),
                     variables,
                     named_aggregates.clone(),
                     record_stream,
                     registry,
-                    max_memory,
+                    memory,
                 );
                 Ok(Box::new(stream))
             }
             Node::Limit(row_count, source) => {
                 if let Node::OrderBy(column_names, orderings, order_source) = source.as_ref() {
                     let mut record_stream =
-                        order_source.get_with_memory_limit(variables, registry, threads, max_memory)?;
-                    let mut top_n = super::prefix_sort::BoundedTopN::new_with_memory_limit(
+                        order_source.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                    let mut top_n = super::prefix_sort::BoundedTopN::new_with_memory_tracker(
                         *row_count as usize,
                         column_names.clone(),
                         orderings.clone(),
-                        max_memory,
+                        memory,
                     );
                     while let Some(record) = record_stream.next()? {
                         top_n.try_push(record)?;
                     }
                     return Ok(Box::new(InMemoryStream::new(top_n.finish())));
                 }
-                let record_stream = source.get_with_memory_limit(variables.clone(), registry, threads, max_memory)?;
+                let record_stream = source.get_with_memory_tracker(variables.clone(), registry, threads, memory)?;
                 let stream = LimitStream::new(*row_count, record_stream);
                 Ok(Box::new(stream))
             }
             Node::OrderBy(column_names, orderings, source) => {
                 let mut record_stream =
-                    source.get_with_memory_limit(variables.clone(), registry, threads, max_memory)?;
+                    source.get_with_memory_tracker(variables.clone(), registry, threads, memory.clone())?;
                 let mut records = Vec::new();
-                let mut memory = crate::execution::memory::MemoryTracker::new(max_memory);
 
                 while let Some(record) = record_stream.next()? {
                     memory.add(crate::execution::memory::estimate_record(&record))?;
@@ -1521,36 +1535,36 @@ impl Node {
                 Ok(Box::new(stream))
             }
             Node::Distinct(source) => {
-                let record_stream = source.get_with_memory_limit(variables, registry, threads, max_memory)?;
-                Ok(Box::new(DistinctStream::new(record_stream, max_memory)))
+                let record_stream = source.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                Ok(Box::new(DistinctStream::new_with_memory_tracker(record_stream, memory)))
             }
             Node::CrossJoin(left, right) => {
                 let left_stream =
-                    left.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
+                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(CrossJoinStream::new(
+                Ok(Box::new(CrossJoinStream::new_with_memory_tracker(
                     left_stream,
                     right_node,
                     right_variables,
                     registry,
                     threads,
-                    max_memory,
+                    memory,
                 )))
             }
             Node::LeftJoin(left, right, condition) => {
                 let left_stream =
-                    left.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
+                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
                 let right_node = *right.clone();
                 let right_variables = variables;
-                Ok(Box::new(LeftJoinStream::new(
+                Ok(Box::new(LeftJoinStream::new_with_memory_tracker(
                     left_stream,
                     right_node,
                     right_variables,
                     *condition.clone(),
                     registry,
                     threads,
-                    max_memory,
+                    memory,
                 )))
             }
             Node::HashJoin {
@@ -1561,53 +1575,59 @@ impl Node {
                 join_type,
             } => {
                 let left_stream =
-                    left.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
+                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
                 let right_stream =
-                    right.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
+                    right.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
                 // Keep qualified keys so residual predicates can evaluate against
                 // the same table scopes. HashJoinStream falls back to bare fields
                 // for unaliased source records.
                 let left_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(left, _)| left.clone()).collect();
                 let right_key_fields: Vec<PathExpr> = equi_keys.iter().map(|(_, right)| right.clone()).collect();
-                // Default memory limit: 512 MB
-                let memory_limit = max_memory.unwrap_or(512 * 1024 * 1024);
-                Ok(Box::new(HashJoinStream::new(
+                // Preserve the historical 512 MiB hash-build ceiling when no
+                // query-wide limit was requested. Explicit limits share the
+                // same tracker as every other materializing operator.
+                let hash_memory = if memory.limit().is_some() {
+                    memory
+                } else {
+                    crate::execution::memory::MemoryTracker::new(Some(512 * 1024 * 1024))
+                };
+                Ok(Box::new(HashJoinStream::new_with_memory_tracker(
                     left_stream,
                     right_stream,
                     left_key_fields,
                     right_key_fields,
                     residual.as_ref().map(|r| *r.clone()),
                     join_type.clone(),
-                    memory_limit,
+                    hash_memory,
                     registry,
                 )))
             }
             Node::Union(left, right) => {
                 let left_stream =
-                    left.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
-                let right_stream = right.get_with_memory_limit(variables, registry, threads, max_memory)?;
+                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let right_stream = right.get_with_memory_tracker(variables, registry, threads, memory)?;
                 Ok(Box::new(UnionStream::new(left_stream, right_stream)))
             }
             Node::Intersect(left, right, all) => {
                 let left_stream =
-                    left.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
-                let right_stream = right.get_with_memory_limit(variables, registry, threads, max_memory)?;
-                Ok(Box::new(IntersectStream::new(
+                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let right_stream = right.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                Ok(Box::new(IntersectStream::new_with_memory_tracker(
                     left_stream,
                     right_stream,
                     *all,
-                    max_memory,
+                    memory,
                 )?))
             }
             Node::Except(left, right, all) => {
                 let left_stream =
-                    left.get_with_memory_limit(variables.clone(), registry.clone(), threads, max_memory)?;
-                let right_stream = right.get_with_memory_limit(variables, registry, threads, max_memory)?;
-                Ok(Box::new(ExceptStream::new(
+                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let right_stream = right.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                Ok(Box::new(ExceptStream::new_with_memory_tracker(
                     left_stream,
                     right_stream,
                     *all,
-                    max_memory,
+                    memory,
                 )?))
             }
         }

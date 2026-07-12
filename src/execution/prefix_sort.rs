@@ -178,6 +178,20 @@ impl BoundedTopN {
         orderings: Vec<Ordering>,
         max_memory: Option<usize>,
     ) -> Self {
+        Self::new_with_memory_tracker(
+            capacity,
+            sort_keys,
+            orderings,
+            crate::execution::memory::MemoryTracker::new(max_memory),
+        )
+    }
+
+    pub(crate) fn new_with_memory_tracker(
+        capacity: usize,
+        sort_keys: Vec<PathExpr>,
+        orderings: Vec<Ordering>,
+        memory: crate::execution::memory::MemoryTracker,
+    ) -> Self {
         Self {
             heap: Vec::with_capacity(capacity),
             capacity,
@@ -185,7 +199,7 @@ impl BoundedTopN {
             orderings,
             next_ordinal: 0,
             peak_retained: 0,
-            memory: crate::execution::memory::MemoryTracker::new(max_memory),
+            memory,
         }
     }
 

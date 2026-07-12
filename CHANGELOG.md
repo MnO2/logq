@@ -29,7 +29,7 @@ Phase 4 complete. All phases done.
 - **WS8 (observability):** Extended `explain` with the selected batch/row execution pipeline and a specific plan-node reason whenever batch execution falls back.
 - **WS8 (top-N):** Added bounded-heap execution for `ORDER BY ... LIMIT` in both batch and row pipelines, with tests that cap retained candidates at `k`. Corrected parallel batch planning so LIMIT never truncates the input before sorting, grouping, filtering, or deduplication.
 - **WS8 (ceilings):** Measured the deterministic 1 GiB JSONL corpus: high-cardinality GROUP BY peaked at 1,318.6 MiB RSS, full ORDER BY at 2,140.6 MiB, and DISTINCT at 1,485.4 MiB. The WS5 query set consistently falls back at the dynamic JSONL datasource rather than at an unsupported batch operator.
-- **WS8 (memory budget):** Added `--max-memory` with byte and `KiB`/`MiB`/`GiB` values. Budget-aware execution now aborts sorting, top-N, grouping, deduplication, set operations, and materialized joins with a clear error before estimated state crosses the ceiling.
+- **WS8 (memory budget):** Added `--max-memory` with byte and `KiB`/`MiB`/`GiB` values. One query-wide tracker now covers sorting, top-N, grouping, deduplication, set operations, and materialized joins, while JSON array output streams without retaining the full result. Execution aborts with a clear error before combined estimated state crosses the ceiling.
 - **WS9 (local release preparation):** Prepared version 0.2.0, verified its crates.io package with `cargo publish --dry-run`, and added dist 0.32.0 automation for Apple Silicon/Intel macOS, x86-64 musl Linux, and x86-64 Windows archives plus shell and PowerShell installers. External publishing and the release tag remain maintainer-triggered steps.
 
 ## Completed Tasks

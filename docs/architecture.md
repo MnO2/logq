@@ -173,8 +173,8 @@ Each operator wraps one or more child streams and transforms records on demand. 
 
 `ORDER BY ... LIMIT k` retains at most `k` records in `BoundedTopN`; an unbounded ORDER BY still
 materializes the full input. When `--max-memory` is present, `Node::get_with_memory_limit` selects
-the budget-aware row path and passes a soft estimator through all materializing operators. The
-estimator counts owned keys, values, records, hash state, and join inputs, returning
+the budget-aware row path and passes one shared soft estimator through all materializing operators.
+The estimator counts owned keys, values, records, hash state, and join inputs, returning
 `MemoryBudgetExceeded` before the configured ceiling is crossed.
 
 ### Expression Evaluation

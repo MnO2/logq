@@ -427,17 +427,23 @@ pub fn run_with_memory_limit(
             }
         }
         OutputMode::Json => {
-            let mut data = Vec::new();
+            let stdout = std::io::stdout();
+            let mut writer = std::io::BufWriter::new(stdout.lock());
+            writer.write_all(b"[")?;
+            let mut first = true;
             while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
                 let obj = record
                     .into_tuples()
                     .into_iter()
                     .map(|(key, value)| (key, value_to_json(value)))
                     .collect();
-                data.push(serde_json::Value::Object(obj));
+                if !first {
+                    writer.write_all(b",")?;
+                }
+                serde_json::to_writer(&mut writer, &serde_json::Value::Object(obj))?;
+                first = false;
             }
-            let s = serde_json::to_string(&data)?;
-            println!("{}", s);
+            writer.write_all(b"]\n")?;
         }
         OutputMode::Ndjson => {
             let stdout = std::io::stdout();

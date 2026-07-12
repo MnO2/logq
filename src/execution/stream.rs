@@ -539,7 +539,7 @@ pub struct GroupByStream {
     source: Box<dyn RecordStream>,
     group_iterator: Option<hashbrown::hash_map::IntoIter<Option<Tuple>, GroupState>>,
     registry: Arc<FunctionRegistry>,
-    max_memory: Option<usize>,
+    memory: crate::execution::memory::MemoryTracker,
 }
 
 impl GroupByStream {
@@ -551,6 +551,24 @@ impl GroupByStream {
         registry: Arc<FunctionRegistry>,
         max_memory: Option<usize>,
     ) -> Self {
+        Self::new_with_memory_tracker(
+            keys,
+            variables,
+            aggregates,
+            source,
+            registry,
+            crate::execution::memory::MemoryTracker::new(max_memory),
+        )
+    }
+
+    pub(crate) fn new_with_memory_tracker(
+        keys: Vec<ast::PathExpr>,
+        variables: Variables,
+        aggregates: Vec<NamedAggregate>,
+        source: Box<dyn RecordStream>,
+        registry: Arc<FunctionRegistry>,
+        memory: crate::execution::memory::MemoryTracker,
+    ) -> Self {
         let aggregate_defs: Vec<AggregateDef> = aggregates.iter().map(AggregateDef::from_named_aggregate).collect();
         GroupByStream {
             keys,
@@ -559,7 +577,7 @@ impl GroupByStream {
             source,
             group_iterator: None,
             registry,
-            max_memory,
+            memory,
         }
     }
 }
@@ -568,7 +586,6 @@ impl RecordStream for GroupByStream {
     fn next(&mut self) -> StreamResult<Option<Record>> {
         if self.group_iterator.is_none() {
             let mut groups: HashMap<Option<Tuple>, GroupState> = HashMap::new();
-            let mut memory = crate::execution::memory::MemoryTracker::new(self.max_memory);
             let has_scope = !self.variables.is_empty();
             while let Some(record) = self.source.next()? {
                 let variables = record.to_variables();
@@ -585,7 +602,7 @@ impl RecordStream for GroupByStream {
                         .as_deref()
                         .map(crate::execution::memory::estimate_values)
                         .unwrap_or(0);
-                    memory.add(
+                    self.memory.add(
                         128usize
                             .saturating_add(key_size)
                             .saturating_add(self.aggregate_defs.len().saturating_mul(64)),
@@ -841,17 +858,17 @@ pub(crate) struct CrossJoinStream {
     right_index: usize,
     registry: Arc<FunctionRegistry>,
     threads: usize,
-    max_memory: Option<usize>,
+    memory: crate::execution::memory::MemoryTracker,
 }
 
 impl CrossJoinStream {
-    pub(crate) fn new(
+    pub(crate) fn new_with_memory_tracker(
         left: Box<dyn RecordStream>,
         right_node: Node,
         right_variables: Variables,
         registry: Arc<FunctionRegistry>,
         threads: usize,
-        max_memory: Option<usize>,
+        memory: crate::execution::memory::MemoryTracker,
     ) -> Self {
         CrossJoinStream {
             left,
@@ -862,24 +879,23 @@ impl CrossJoinStream {
             right_index: 0,
             registry,
             threads,
-            max_memory,
+            memory,
         }
     }
 
     fn materialize_right(&mut self) -> StreamResult<()> {
         let mut right_stream = self
             .right_node
-            .get_with_memory_limit(
+            .get_with_memory_tracker(
                 self.right_variables.clone(),
                 self.registry.clone(),
                 self.threads,
-                self.max_memory,
+                self.memory.clone(),
             )
             .map_err(super::types::StreamError::Get)?;
         let mut rows = Vec::new();
-        let mut memory = crate::execution::memory::MemoryTracker::new(self.max_memory);
         while let Some(record) = right_stream.next()? {
-            memory.add(crate::execution::memory::estimate_record(&record))?;
+            self.memory.add(crate::execution::memory::estimate_record(&record))?;
             rows.push(record);
         }
         self.right_rows = Some(rows);
@@ -935,18 +951,19 @@ pub(crate) struct LeftJoinStream {
     right_field_names: Option<Vec<String>>,
     registry: Arc<FunctionRegistry>,
     threads: usize,
-    max_memory: Option<usize>,
+    memory: crate::execution::memory::MemoryTracker,
 }
 
 impl LeftJoinStream {
-    pub(crate) fn new(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_memory_tracker(
         left: Box<dyn RecordStream>,
         right_node: Node,
         right_variables: Variables,
         condition: Formula,
         registry: Arc<FunctionRegistry>,
         threads: usize,
-        max_memory: Option<usize>,
+        memory: crate::execution::memory::MemoryTracker,
     ) -> Self {
         LeftJoinStream {
             left,
@@ -960,24 +977,23 @@ impl LeftJoinStream {
             right_field_names: None,
             registry,
             threads,
-            max_memory,
+            memory,
         }
     }
 
     fn materialize_right(&mut self) -> StreamResult<()> {
         let mut right_stream = self
             .right_node
-            .get_with_memory_limit(
+            .get_with_memory_tracker(
                 self.right_variables.clone(),
                 self.registry.clone(),
                 self.threads,
-                self.max_memory,
+                self.memory.clone(),
             )
             .map_err(super::types::StreamError::Get)?;
         let mut rows = Vec::new();
-        let mut memory = crate::execution::memory::MemoryTracker::new(self.max_memory);
         while let Some(record) = right_stream.next()? {
-            memory.add(crate::execution::memory::estimate_record(&record))?;
+            self.memory.add(crate::execution::memory::estimate_record(&record))?;
             rows.push(record);
         }
         // Populate right_field_names from first record if available
@@ -1076,12 +1092,13 @@ pub(crate) struct HashJoinStream {
     matched: bool,
     right_field_names: Vec<String>,
     built: bool,
-    memory_limit: usize,
+    memory: crate::execution::memory::MemoryTracker,
     build_input: Option<Box<dyn RecordStream>>,
 }
 
 impl HashJoinStream {
     // Join construction keeps both streams, key sets, semantics, limits, and registry explicit.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         left: Box<dyn RecordStream>,
@@ -1091,6 +1108,29 @@ impl HashJoinStream {
         residual: Option<Formula>,
         join_type: LogicalJoinType,
         memory_limit: usize,
+        registry: Arc<FunctionRegistry>,
+    ) -> Self {
+        Self::new_with_memory_tracker(
+            left,
+            right,
+            left_key_fields,
+            right_key_fields,
+            residual,
+            join_type,
+            crate::execution::memory::MemoryTracker::new(Some(memory_limit)),
+            registry,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_memory_tracker(
+        left: Box<dyn RecordStream>,
+        right: Box<dyn RecordStream>,
+        left_key_fields: Vec<ast::PathExpr>,
+        right_key_fields: Vec<ast::PathExpr>,
+        residual: Option<Formula>,
+        join_type: LogicalJoinType,
+        memory: crate::execution::memory::MemoryTracker,
         registry: Arc<FunctionRegistry>,
     ) -> Self {
         HashJoinStream {
@@ -1108,14 +1148,13 @@ impl HashJoinStream {
             matched: false,
             right_field_names: Vec::new(),
             built: false,
-            memory_limit,
+            memory,
             build_input: Some(right),
         }
     }
 
     fn build(&mut self) -> StreamResult<()> {
         let mut build_stream = self.build_input.take().unwrap();
-        let mut approx_bytes: usize = 0;
         let mut first_record = true;
 
         while let Some(record) = build_stream.next()? {
@@ -1149,11 +1188,8 @@ impl HashJoinStream {
                         }
                 })
                 .sum();
-            approx_bytes += record_size + 80; // 80 for LinkedHashMap per-entry overhead
-
-            if approx_bytes > self.memory_limit {
-                return Err(super::types::StreamError::MemoryBudgetExceeded);
-            }
+            // 80 bytes approximates LinkedHashMap/hash-index entry overhead.
+            self.memory.add(record_size.saturating_add(80))?;
 
             let key = extract_key(&record, &self.right_key_fields);
             let idx = self.build_records.len() as u32;
@@ -1317,14 +1353,13 @@ pub(crate) struct IntersectStream {
 }
 
 impl IntersectStream {
-    pub(crate) fn new(
+    pub(crate) fn new_with_memory_tracker(
         left: Box<dyn RecordStream>,
         mut right: Box<dyn RecordStream>,
         all: bool,
-        max_memory: Option<usize>,
+        memory: crate::execution::memory::MemoryTracker,
     ) -> StreamResult<Self> {
         let mut right_set = std::collections::HashMap::new();
-        let mut memory = crate::execution::memory::MemoryTracker::new(max_memory);
         while let Some(record) = right.next()? {
             let key = record.to_tuples();
             if !right_set.contains_key(&key) {
@@ -1366,14 +1401,13 @@ pub(crate) struct ExceptStream {
 }
 
 impl ExceptStream {
-    pub(crate) fn new(
+    pub(crate) fn new_with_memory_tracker(
         left: Box<dyn RecordStream>,
         mut right: Box<dyn RecordStream>,
         all: bool,
-        max_memory: Option<usize>,
+        memory: crate::execution::memory::MemoryTracker,
     ) -> StreamResult<Self> {
         let mut right_set = std::collections::HashMap::new();
-        let mut memory = crate::execution::memory::MemoryTracker::new(max_memory);
         while let Some(record) = right.next()? {
             let key = record.to_tuples();
             if !right_set.contains_key(&key) {
@@ -1418,11 +1452,19 @@ pub(crate) struct DistinctStream {
 }
 
 impl DistinctStream {
+    #[cfg(test)]
     pub(crate) fn new(source: Box<dyn RecordStream>, max_memory: Option<usize>) -> Self {
+        Self::new_with_memory_tracker(source, crate::execution::memory::MemoryTracker::new(max_memory))
+    }
+
+    pub(crate) fn new_with_memory_tracker(
+        source: Box<dyn RecordStream>,
+        memory: crate::execution::memory::MemoryTracker,
+    ) -> Self {
         DistinctStream {
             source,
             seen: std::collections::HashSet::new(),
-            memory: crate::execution::memory::MemoryTracker::new(max_memory),
+            memory,
         }
     }
 }

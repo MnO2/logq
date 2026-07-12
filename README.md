@@ -366,9 +366,9 @@ logq query 'select request_id, count(*) from it group by request_id' \
 ```
 
 The ceiling covers sorting (including top-N candidates), grouping, deduplication, set operations,
-and materialized join inputs. logq stops with `query exceeded memory budget (--max-memory)` when
-its conservative estimate crosses the limit. It is a soft application-level budget rather than a
-hard operating-system allocation cap.
+and materialized join inputs through one query-wide tracker. logq stops with
+`query exceeded memory budget (--max-memory)` when the combined conservative estimate crosses the
+limit. It is a soft application-level budget rather than a hard operating-system allocation cap.
 
 ### Piping to Visualization Tools
 
