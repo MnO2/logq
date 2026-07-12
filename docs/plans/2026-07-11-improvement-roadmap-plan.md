@@ -1,7 +1,7 @@
 # logq Improvement Roadmap — Execution Plan
 
 **Date:** 2026-07-11
-**Status:** Approved for execution
+**Status:** Completed 2026-07-12
 **Audience:** This document is written for agents executing workstreams independently. Each workstream is self-contained: read the Context section plus your workstream, and you have everything needed. Do not assume knowledge of the conversation that produced this plan.
 
 ---
@@ -21,7 +21,7 @@ logq is a Rust CLI (`src/main.rs`, clap-based) that queries server log files (EL
 State as of this writing:
 
 - All PartiQL implementation phases (0–4) complete; see `CHANGELOG.md`.
-- **789 unit tests + 1 integration test, all passing** (`cargo test`). This is the regression baseline: no workstream may break it.
+- **819 library unit tests + 31 binary/integration tests, all passing** (`cargo test --all-features`). This is the regression baseline: no workstream may break it.
 - Heavy performance work already done (batch pipeline, dictionary encoding, CompactString, hash join). Criterion benches in `benches/`, most gated behind `--features bench-internals`.
 - INNER and RIGHT JOIN syntax/execution already landed in `0de9aa3`, and `time_bucket` already exists for long-form second/minute/hour intervals. Their WS7 items are validation/documentation and targeted completion work, not greenfield implementations.
 - Known feature gaps: no correlated subqueries or window functions (both are **out of scope** — do not implement).
@@ -211,11 +211,10 @@ Add `clf` and `combined` as built-in formats implemented *as* predefined regex-f
 
 **Done when:** `cargo install logq` gets 0.2.0 and a GitHub Release carries binaries for the three platforms.
 
-**Local preparation status (2026-07-11):** version 0.2.0 and its user-facing changelog are committed;
-`cargo publish --dry-run`, the Rust 1.85 gate, Clippy, tests, `cargo audit`, and `cargo deny` pass. dist
-0.32.0 plans four requested targets and successfully built/smoke-tested the Apple Silicon archive.
-The WS9 checkbox remains open because publishing to crates.io and pushing tag `v0.2.0` (which triggers
-the GitHub Release workflow) are external maintainer actions and were not performed locally.
+**Release status (2026-07-12):** version 0.2.0 is published on crates.io and installs successfully with
+`cargo install logq --version 0.2.0`. Tag `v0.2.0` points to the published source commit. The dist 0.32.0
+GitHub Release carries Apple Silicon/Intel macOS, x86-64 musl Linux, and x86-64 Windows archives,
+checksums, and shell/PowerShell installers. The full CI and release workflows completed successfully.
 
 ---
 
@@ -242,4 +241,4 @@ When you finish a workstream: update `CHANGELOG.md`, check the box in the table 
 - [x] WS7d time_bucket
 - [x] WS7e ndjson output
 - [x] WS8 Memory + batch coverage
-- [ ] WS9 Release 0.2.0
+- [x] WS9 Release 0.2.0
