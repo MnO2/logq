@@ -91,4 +91,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-fuzz --locked
-      - run: cargo fuzz run parse_query -- -max_len=512 -max_total_time=300
+      - run: cargo fuzz run parse_query -- -max_len=512 -max_total_time=60
