@@ -194,10 +194,8 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                                 return Ok(Value::Boolean(true));
                             }
                         }
-                        Value::Boolean(b) => {
-                            if member.is_boolean() && member.as_bool() == Some(*b) {
-                                return Ok(Value::Boolean(true));
-                            }
+                        Value::Boolean(b) if member.is_boolean() && member.as_bool() == Some(*b) => {
+                            return Ok(Value::Boolean(true));
                         }
                         _ => {}
                     }

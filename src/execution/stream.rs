@@ -766,7 +766,7 @@ impl RecordStream for ProjectionStream {
                                         }
                                     }
 
-                                    new_results.extend(replica.into_iter());
+                                    new_results.extend(replica);
                                 }
 
                                 results = new_results;

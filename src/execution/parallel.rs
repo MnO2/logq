@@ -86,10 +86,7 @@ pub(crate) fn split_chunks(data: &[u8], num_chunks: usize) -> Vec<&[u8]> {
 fn collect_results<T>(results: Vec<StreamResult<T>>) -> StreamResult<Vec<T>> {
     let mut collected = Vec::with_capacity(results.len());
     for result in results {
-        match result {
-            Ok(value) => collected.push(value),
-            Err(e) => return Err(e),
-        }
+        collected.push(result?);
     }
     Ok(collected)
 }

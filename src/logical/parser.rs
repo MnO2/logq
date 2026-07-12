@@ -249,13 +249,9 @@ fn parse_binary_operator(
 
 fn parse_unary_operator(ctx: &ParsingContext, value_expr: &ast::Expression) -> ParseResult<Box<types::Expression>> {
     match value_expr {
-        ast::Expression::UnaryOperator(op, expr) => {
-            if op == &ast::UnaryOperator::Not {
-                let formula = parse_prefix_operator(ctx, types::LogicPrefixOp::Not, expr)?;
-                Ok(Box::new(types::Expression::Logic(formula)))
-            } else {
-                unreachable!();
-            }
+        ast::Expression::UnaryOperator(op, expr) if op == &ast::UnaryOperator::Not => {
+            let formula = parse_prefix_operator(ctx, types::LogicPrefixOp::Not, expr)?;
+            Ok(Box::new(types::Expression::Logic(formula)))
         }
         _ => {
             unreachable!();
