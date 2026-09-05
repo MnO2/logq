@@ -30,11 +30,11 @@ the checkout, while the parent serializes integration, timing, and commits.
   while retaining exact scalar semantics and local fallback. Test actual SQL,
   EXPLAIN, scope/aliases, NULL/MISSING, errors, masked branches and aggregate
   inputs. Measure simple and expression query pairs against the saved baseline.
-- [ ] Run representative paired measurements after compilation has stopped;
+- [x] Run representative paired measurements after compilation has stopped;
   inspect regressions and fix or reject changes that add cost without benefit.
   Keep the existing five-query suite as a regression control and promote useful
   cases to larger inputs when the first measurements justify it.
-- [ ] Complete full Rust tests, formatting, all-target/all-feature Clippy, Rust
+- [x] Complete full Rust tests, formatting, all-target/all-feature Clippy, Rust
   1.85 compatibility, Python harness tests, benchmark smoke checks, independent
   review and a report that separates measurements from remaining hypotheses.
 
@@ -52,7 +52,7 @@ the paired cases above determine which merits implementation next.
 
 | Direction | First controlled experiment | Advance when | Constraints |
 | --- | --- | --- | --- |
-| High-cardinality aggregation / DISTINCT | Fixed row count with 9, 100K and near-unique keys; uniform and skewed distributions; isolate local and final merge cost | Key state or merge dominates; specialized keys/partitioned merge lower CPU or bytes/group | Preserve key equality, first appearance and floating-point merge policy |
+| High-cardinality aggregation / DISTINCT | Fixed row count with 9, 100K and near-unique keys; uniform and skewed distributions; separate local state, final merge and finalization from result formatting | Key state or merge dominates; specialized keys/partitioned merge lower CPU or bytes/group | Preserve key equality, first appearance and floating-point merge policy; many output rows alone are not proof of a merge bottleneck |
 | Worker-local Top-K / deferred payload | K=10/1000 with narrow and wide payload, stable global row positions | Central consumer or payload construction dominates; candidate reduction beats extra heaps | Account workers times K memory; preserve ties, malformed-input errors and cancellation |
 | Small shards / gzip scheduling | Identical rows as one file, small shards and gzip | Sequential file/decompression path dominates after parser improvements | Bounded workers, queues and file descriptors; deterministic input order |
 | Larger-than-memory execution | Fixed operator budgets, full sort and near-unique grouping; compare buffered and mapped input separately | Workloads need bounded-memory completion; measured pressure identifies the operator | Batch lifetime accounting before sorted runs / partition spill; cleanup on error/cancel |
@@ -85,3 +85,12 @@ Generated measurements live under ignored benchmark results directories.
 - Same-kernel reader controls supported using a 64 KiB sequential JSON buffer.
   Oversized duplicate-string retention and SIMD-padding capacity doubling were
   found by independent review and fixed with regression coverage.
+- Implementation committed as `3f24c61`. Final 100K/500K cases, same-kernel
+  probes, original JSONL/ELB controls and pinned ClickHouse comparisons passed
+  answer validation. Historical arithmetic/CASE failures remain explicitly
+  untimed. Default/all-feature Rust suites passed 982/983 tests; Python passed
+  30 tests; formatting, Clippy, Rust 1.85 and five Criterion targets passed.
+- See [the final report](../performance-expansion-2026-09-05.md) for complete
+  tables, regression/CPU/RSS caveats, exact provenance and the next experiment
+  order. Follow-on directions above remain separately scoped work, not completed
+  architecture changes.

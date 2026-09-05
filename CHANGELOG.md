@@ -7,6 +7,7 @@
 - Correct computed SUM/AVG/COUNT inputs that previously read missing projection fields. Keep separate function occurrences independent and report COUNT/approximate cardinality outside the public Int32 range instead of silently narrowing, including the fixed-format COUNT scan fast path.
 - Add deterministic paired workloads with independent answer checking, thread/CPU/RSS controls and reproducible provenance. Add identical-kernel JSON reader and allocation probes; JSON dictionary construction remains experimental because measured total query cost did not show a stable benefit.
 - Track implementation and the acceptance criteria for subsequent aggregation, Top-K, shard scheduling, spilling, columnar reuse and numeric-width work in [the expansion plan](docs/plans/2026-09-05-performance-expansion.md).
+- Recorded paired 100K/500K-row workloads, isolated scanner/allocation experiments and original JSONL/ELB/ClickHouse controls in [the expansion report](docs/performance-expansion-2026-09-05.md), including the remaining COUNT gap and CPU/RSS tradeoffs.
 
 ## Unreleased — performance corrections (2026-09-05)
 
