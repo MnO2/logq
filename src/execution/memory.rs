@@ -95,6 +95,11 @@ impl MemoryReservation {
     }
 
     pub(crate) fn resize(&mut self, bytes: usize) -> StreamResult<()> {
+        // Fixed-size accumulators do not allocate as their values change.
+        // Avoid serializing workers on a query-wide lock for these no-ops.
+        if bytes == self.bytes {
+            return Ok(());
+        }
         self.tracker.replace(self.bytes, bytes)?;
         self.bytes = bytes;
         Ok(())
@@ -193,6 +198,31 @@ pub(crate) fn estimate_value(value: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_reservations_do_not_wait_for_other_operators() {
+        let tracker = MemoryTracker::new(Some(100));
+        let mut reservation = MemoryReservation::new(tracker.clone());
+        reservation.add(30).unwrap();
+        let locked = tracker.state.as_ref().unwrap().lock().unwrap();
+        let (ready, received) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            reservation.resize(30).unwrap();
+            reservation.add(0).unwrap();
+            ready.send(()).unwrap();
+            reservation
+        });
+        let completed = received.recv_timeout(std::time::Duration::from_secs(2));
+        drop(locked);
+        let reservation = worker.join().unwrap();
+        assert!(
+            completed.is_ok(),
+            "unchanged reservations contended on the shared budget"
+        );
+        assert_eq!(tracker.used(), 30);
+        drop(reservation);
+        assert_eq!(tracker.used(), 0);
+    }
 
     #[test]
     fn failed_charges_leave_the_shared_budget_unchanged() {
