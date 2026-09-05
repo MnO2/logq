@@ -38,7 +38,9 @@ fn bench_execution_tier_a(c: &mut Criterion) {
             b.iter(|| {
                 let result =
                     logq::app::run_to_records_with_registry(black_box(query), data_sources.clone(), reg.clone(), 1);
-                let _ = black_box(result);
+                let records = result.expect("execution benchmark query failed");
+                assert!(!records.is_empty(), "execution benchmark must exercise matching rows");
+                black_box(records);
             });
         });
     }
@@ -79,9 +81,10 @@ fn bench_execution_tier_b(c: &mut Criterion) {
                         let variables = ctypes::Variables::default();
                         let mut stream = MapStream::new(named_list, variables, Box::new(source), reg.clone());
                         let mut count = 0u64;
-                        while let Ok(Some(_)) = stream.next() {
+                        while stream.next().expect("map benchmark failed").is_some() {
                             count += 1;
                         }
+                        assert_eq!(count, sz as u64);
                         black_box(count)
                     },
                     criterion::BatchSize::SmallInput,
@@ -115,9 +118,10 @@ fn bench_execution_tier_b(c: &mut Criterion) {
                         let variables = ctypes::Variables::default();
                         let mut stream = FilterStream::new(formula, variables, Box::new(source), reg.clone());
                         let mut count = 0u64;
-                        while let Ok(Some(_)) = stream.next() {
+                        while stream.next().expect("filter benchmark failed").is_some() {
                             count += 1;
                         }
+                        assert!(count > 0 && count < sz as u64);
                         black_box(count)
                     },
                     criterion::BatchSize::SmallInput,
@@ -132,18 +136,19 @@ fn bench_execution_tier_b(c: &mut Criterion) {
         let mut group = c.benchmark_group("execution_limit");
         for &(size, label) in sizes {
             group.bench_with_input(BenchmarkId::from_parameter(label), &size, |b, &sz| {
-                b.iter_batched(
-                    || generate_records(sz),
-                    |data| {
-                        let source = InMemoryStream::new(data);
-                        let mut stream = LimitStream::new(100, Box::new(source));
+                // Keep ownership in Criterion's setup input. iter_batched_ref
+                // drops the unconsumed records after the measured routine.
+                b.iter_batched_ref(
+                    || LimitStream::new(100, Box::new(InMemoryStream::new(generate_records(sz)))),
+                    |stream| {
                         let mut count = 0u64;
-                        while let Ok(Some(_)) = stream.next() {
+                        while stream.next().expect("limit benchmark failed").is_some() {
                             count += 1;
                         }
+                        assert_eq!(count, 100);
                         black_box(count)
                     },
-                    criterion::BatchSize::SmallInput,
+                    criterion::BatchSize::PerIteration,
                 );
             });
         }
@@ -151,8 +156,8 @@ fn bench_execution_tier_b(c: &mut Criterion) {
     }
 }
 
-/// Tier C: Component-level profiling benchmarks using real AWSELB.log
-/// Measures each execution phase individually to establish profiling baseline.
+/// Tier C: Related full queries using real AWSELB.log.
+/// Their differences include projection/output costs, not isolated phase costs.
 fn bench_execution_tier_c(c: &mut Criterion) {
     let path = PathBuf::from("data/AWSELB.log");
     if !path.exists() {
@@ -177,7 +182,9 @@ fn bench_execution_tier_c(c: &mut Criterion) {
             b.iter(|| {
                 let result =
                     logq::app::run_to_records_with_registry(black_box(query), data_sources.clone(), reg.clone(), 1);
-                let _ = black_box(result);
+                let records = result.expect("profiling benchmark query failed");
+                assert!(!records.is_empty(), "profiling benchmark must exercise matching rows");
+                black_box(records);
             });
         });
     }

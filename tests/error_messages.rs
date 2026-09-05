@@ -6,8 +6,8 @@ struct ErrorCase {
     expected: &'static str,
 }
 
-fn run_query(query: &str) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_logq"))
+fn query_output(query: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_logq"))
         .args([
             "query",
             "--output",
@@ -17,9 +17,17 @@ fn run_query(query: &str) -> String {
             query,
         ])
         .output()
-        .unwrap();
-    assert!(output.status.success(), "CLI unexpectedly failed for {query}");
-    String::from_utf8(output.stdout).unwrap()
+        .unwrap()
+}
+
+fn run_query(query: &str) -> String {
+    let output = query_output(query);
+    assert!(!output.status.success(), "CLI unexpectedly succeeded for {query}");
+    assert!(
+        output.stdout.is_empty(),
+        "diagnostics must not appear on stdout for {query}"
+    );
+    String::from_utf8(output.stderr).unwrap()
 }
 
 #[test]
@@ -181,13 +189,16 @@ fn fixed_schema_columns_are_checked_without_rejecting_dynamic_jsonl_fields() {
         ])
         .output()
         .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("unknown column `timestmp`"), "{stdout:#?}");
-    assert!(stdout.contains("did you mean `timestamp`?"), "{stdout:#?}");
-    assert!(stdout.contains("--> query:1:8"), "{stdout:#?}");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unknown column `timestmp`"), "{stderr:#?}");
+    assert!(stderr.contains("did you mean `timestamp`?"), "{stderr:#?}");
+    assert!(stderr.contains("--> query:1:8"), "{stderr:#?}");
 
-    let output = run_query("select field_not_present from it");
-    assert!(!output.contains("unknown column"), "{output:#?}");
+    let output = query_output("select field_not_present from it");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
 }
 
 #[test]

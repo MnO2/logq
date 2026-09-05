@@ -33,9 +33,9 @@ fn parse_f32_fast(bytes: &[u8]) -> Option<f32> {
 }
 
 /// Parse a single field column from all rows in the batch.
-pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
+pub(crate) fn parse_field_column<L: AsRef<[u8]>, F: AsRef<[(usize, usize)]>>(
     lines: &[L],
-    fields: &[Vec<(usize, usize)>],
+    fields: &[F],
     field_idx: usize,
     datatype: &DataType,
 ) -> TypedColumn {
@@ -45,14 +45,16 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             let mut data_builder = PaddedVecBuilder::<u8>::new();
             let mut offsets_builder = PaddedVecBuilder::<u32>::with_capacity(len + 1);
             offsets_builder.push(0);
-            let null_bm = Bitmap::all_set(len);
+            let mut null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let raw = &lines[row].as_ref()[start..end];
                     let bytes = strip_quotes(raw);
                     data_builder.extend_from_slice(bytes);
+                } else {
+                    null_bm.unset(row);
                 }
                 offsets_builder.push(data_builder.len() as u32);
             }
@@ -68,8 +70,8 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             let mut null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_i32_fast(bytes) {
                         Some(v) => data.push(v),
@@ -94,8 +96,8 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             let mut null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_f32_fast(bytes) {
                         Some(v) => data.push(v),
@@ -121,8 +123,8 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             let null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::execution::datasource::parse_utc_timestamp(s) {
@@ -144,8 +146,8 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             let null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("-");
                     if s == "-" {
                         data.push(Value::Null);
@@ -170,8 +172,8 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
             let null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::common::types::parse_http_request(s) {
@@ -193,9 +195,9 @@ pub(crate) fn parse_field_column<L: AsRef<[u8]>>(
 
 /// Parse a field column only for active rows in the selection vector.
 /// Inactive rows get zero-length entries (strings) or zero values (numbers).
-pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
+pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>, F: AsRef<[(usize, usize)]>>(
     lines: &[L],
-    fields: &[Vec<(usize, usize)>],
+    fields: &[F],
     field_idx: usize,
     datatype: &DataType,
     selection: &SelectionVector,
@@ -206,13 +208,15 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
             let mut data_builder = PaddedVecBuilder::<u8>::new();
             let mut offsets_builder = PaddedVecBuilder::<u32>::with_capacity(len + 1);
             offsets_builder.push(0);
-            let null_bm = Bitmap::all_set(len);
+            let mut null_bm = Bitmap::all_set(len);
             let missing_bm = Bitmap::all_set(len);
             for row in 0..len {
-                if selection.is_active(row, len) && field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if selection.is_active(row, len) && field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let bytes = strip_quotes(&lines[row].as_ref()[start..end]);
                     data_builder.extend_from_slice(bytes);
+                } else {
+                    null_bm.unset(row);
                 }
                 offsets_builder.push(data_builder.len() as u32);
             }
@@ -233,8 +237,8 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     null_bm.unset(row);
                     continue;
                 }
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_i32_fast(bytes) {
                         Some(v) => data.push(v),
@@ -264,8 +268,8 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     null_bm.unset(row);
                     continue;
                 }
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let bytes = &lines[row].as_ref()[start..end];
                     match parse_f32_fast(bytes) {
                         Some(v) => data.push(v),
@@ -294,8 +298,8 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                     continue;
                 }
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::execution::datasource::parse_utc_timestamp(s) {
@@ -321,8 +325,8 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                     continue;
                 }
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let s = std::str::from_utf8(&lines[row].as_ref()[start..end]).unwrap_or("-");
                     if s == "-" {
                         data.push(Value::Null);
@@ -351,8 +355,8 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>>(
                     data.push(Value::Null);
                     continue;
                 }
-                if field_idx < fields[row].len() {
-                    let (start, end) = fields[row][field_idx];
+                if field_idx < fields[row].as_ref().len() {
+                    let (start, end) = fields[row].as_ref()[field_idx];
                     let raw = &lines[row].as_ref()[start..end];
                     let s = std::str::from_utf8(strip_quotes(raw)).unwrap_or("");
                     match crate::common::types::parse_http_request(s) {
@@ -464,6 +468,31 @@ fn strip_quotes(raw: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_fields_accepts_borrowed_flat_offset_ranges() {
+        let lines: [&[u8]; 2] = [b"10 first", b"20 second"];
+        let flat = [(0, 2), (3, 8), (0, 2), (3, 9)];
+        let fields = [&flat[..2], &flat[2..]];
+        let all = parse_field_column(&lines, &fields, 0, &DataType::Integral);
+        assert_eq!(
+            crate::execution::batch::BatchToRowAdapter::extract_value(&all, 1),
+            Value::Int(20)
+        );
+        let mut selected = Bitmap::all_unset(2);
+        selected.set(1);
+        let active = parse_field_column_selected(
+            &lines,
+            &fields,
+            1,
+            &DataType::String,
+            &SelectionVector::Bitmap(selected),
+        );
+        assert_eq!(
+            crate::execution::batch::BatchToRowAdapter::extract_value(&active, 1),
+            Value::String("second".into())
+        );
+    }
 
     #[test]
     fn test_parse_float_rejects_invalid_utf8() {

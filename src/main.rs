@@ -42,6 +42,12 @@ enum Commands {
         /// Table-to-file mapping. May be provided more than once.
         #[arg(long = "table")]
         tables: Vec<String>,
+        /// Number of threads for parallel scanning (0 = auto, 1 = sequential).
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Soft memory ceiling in bytes or with KiB/MiB/GiB suffixes.
+        #[arg(long = "max-memory")]
+        max_memory: Option<String>,
         /// TOML definition for tables using the regex format.
         #[arg(long = "format-file")]
         format_file: Option<PathBuf>,
@@ -179,7 +185,8 @@ fn main() {
                 };
 
                 if let Err(e) = result {
-                    println!("{}", e);
+                    eprintln!("{}", e);
+                    std::process::exit(1);
                 }
             } else {
                 print_help(Some("query"));
@@ -187,10 +194,19 @@ fn main() {
         }
         Some(Commands::Explain {
             tables,
+            threads,
+            max_memory,
             format_file,
             query,
         }) => {
             if let Some(query_str) = query {
+                let max_memory = match max_memory.as_deref().map(parse_memory_size).transpose() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        std::process::exit(1);
+                    }
+                };
                 let data_sources = if tables.is_empty() {
                     let mut ds = common::types::DataSourceRegistry::new();
                     ds.insert(
@@ -202,15 +218,16 @@ fn main() {
                     match parse_table_specs(tables.iter().map(String::as_str), format_file.as_deref()) {
                         Ok(ds) => ds,
                         Err(e) => {
-                            println!("{}", e);
-                            return;
+                            eprintln!("{}", e);
+                            std::process::exit(1);
                         }
                     }
                 };
-                let result = app::explain(&query_str, data_sources);
+                let result = app::explain_with_options(&query_str, data_sources, threads.unwrap_or(0), max_memory);
 
                 if let Err(e) = result {
-                    println!("{}", e);
+                    eprintln!("{}", e);
+                    std::process::exit(1);
                 }
             } else {
                 print_help(Some("explain"));

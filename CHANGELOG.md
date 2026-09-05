@@ -1,5 +1,15 @@
 # CHANGELOG — PartiQL Implementation Progress
 
+## Unreleased — performance corrections (2026-09-05)
+
+- Parse JSONL directly into required root fields and typed batches while validating ignored input; preserve nested values, NULL/MISSING, duplicate keys and aliases. Keep unsupported dynamic projections on the strict row reader.
+- Execute scans with shared mmap ranges, lazy file opening, bounded queues and controlled workers. Small ordered scan tasks avoid queue stalls; worker-local COUNT/SUM/AVG states merge without rounding intermediate results. `--threads 0` now resolves to available CPUs.
+- Preserve batch execution under `--max-memory`, charging queued batches and retained grouping, sorting, DISTINCT and bucket state through shared reservations. Failures cancel workers and return nonzero CLI status.
+- Correct COUNT(column), aggregate aliases and schemas, typed/Mixed grouping equality, NULL/MISSING predicates and aggregates, projection dependencies, stable mixed-value sorting, duplicate aliases and constant projections. Accumulate SUM in f64 and round once to the existing public f32 representation.
+- Reuse LIKE regex search caches and dictionary matching, tokenizer offset storage and group key buffers. Compare TopK keys before constructing rejected payloads, and move full-sort output through its permutation.
+- Compile time-bucket intervals once and aggregate computed batch buckets without assuming raw logs are sorted. Preserve timezone offsets, fractional timestamps and arbitrary input ordering.
+- Make benchmark queries fail visibly, validate answers against an independent oracle, fix multi-key ORDER BY parsing and LIMIT timing, and record thread settings, data/query/binary hashes and build provenance.
+
 ## 0.2.0 - 2026-07-11
 
 - Query a substantially expanded PartiQL subset, including INNER/RIGHT joins, subqueries, set operations, three-valued NULL/MISSING logic, approximate aggregates, array/string/date functions, and completed `time_bucket` intervals.

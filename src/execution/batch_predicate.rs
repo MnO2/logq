@@ -8,150 +8,215 @@ use crate::simd::bitmap::Bitmap;
 use crate::simd::filter_cache::evaluate_cached_two_pass;
 use crate::simd::kernels;
 use crate::syntax::ast::{PathExpr, PathSegment};
-use regex::Regex;
 use std::sync::Arc;
 
 type BytePredicate<'a> = dyn Fn(&[u8]) -> bool + 'a;
 
-/// Evaluate a physical Formula against a ColumnBatch, returning a Bitmap
-/// of rows where the predicate is true.
+/// TRUE and UNKNOWN must remain distinct until the complete WHERE formula is
+/// evaluated. In particular, NOT UNKNOWN is UNKNOWN, and an UNKNOWN left side
+/// of AND still evaluates its right side (including any evaluation error).
+struct PredicateTruth {
+    yes: Bitmap,
+    unknown: Bitmap,
+}
+
+impl PredicateTruth {
+    fn known(yes: Bitmap, len: usize) -> Self {
+        Self {
+            yes,
+            unknown: Bitmap::all_unset(len),
+        }
+    }
+}
+
 pub(crate) fn evaluate_batch_predicate(
     formula: &Formula,
     batch: &ColumnBatch,
     variables: &Variables,
     registry: &Arc<FunctionRegistry>,
 ) -> StreamResult<Bitmap> {
-    match formula {
-        Formula::Constant(val) => {
-            if *val {
-                Ok(Bitmap::all_set(batch.len))
-            } else {
-                Ok(Bitmap::all_unset(batch.len))
-            }
-        }
-        Formula::Predicate(relation, left, right) => {
-            evaluate_comparison(relation, left, right, batch, variables, registry)
-        }
-        Formula::And(left, right) => {
-            let mut left_bm = evaluate_batch_predicate(left, batch, variables, registry)?;
-            // Short-circuit: if left eliminated all rows, skip right entirely
-            if left_bm.count_ones() == 0 {
-                return Ok(left_bm);
-            }
-            let right_bm = evaluate_batch_predicate_masked(right, batch, variables, registry, Some(&left_bm))?;
-            left_bm.and_inplace(&right_bm);
-            Ok(left_bm)
-        }
-        Formula::Or(left, right) => {
-            let left_bm = evaluate_batch_predicate(left, batch, variables, registry)?;
-            let right_bm = evaluate_batch_predicate(right, batch, variables, registry)?;
-            Ok(left_bm.or(&right_bm))
-        }
-        Formula::Not(inner) => {
-            let bm = evaluate_batch_predicate(inner, batch, variables, registry)?;
-            Ok(bm.not(batch.len))
-        }
-        Formula::IsNull(expr) => evaluate_is_null(expr, batch),
-        Formula::IsNotNull(expr) => {
-            let bm = evaluate_is_null(expr, batch)?;
-            Ok(bm.not(batch.len))
-        }
-        Formula::IsMissing(expr) => evaluate_is_missing(expr, batch),
-        Formula::IsNotMissing(expr) => {
-            let bm = evaluate_is_missing(expr, batch)?;
-            Ok(bm.not(batch.len))
-        }
-        // LIKE/NotLike: push down to dictionary-encoded columns
-        Formula::Like(expr, pattern_expr) | Formula::NotLike(expr, pattern_expr) => {
-            let is_not_like = matches!(formula, Formula::NotLike(_, _));
-            if let Some(bm) = try_dict_like_pushdown(expr, pattern_expr, is_not_like, batch, variables, registry)? {
-                return Ok(bm);
-            }
-            evaluate_scalar_fallback(formula, batch, variables, registry)
-        }
-        // Fallback for In, NotIn, ExpressionPredicate
-        _ => evaluate_scalar_fallback(formula, batch, variables, registry),
-    }
+    let active = batch.selection.to_bitmap(batch.len);
+    Ok(evaluate_truth(formula, batch, variables, registry, &active)?.yes)
 }
 
-/// Like `evaluate_batch_predicate` but with an optional pre-filter mask.
-/// When a mask is provided, scalar fallback paths skip rows where the mask
-/// bit is unset, avoiding expensive per-row evaluation for already-eliminated rows.
-fn evaluate_batch_predicate_masked(
+fn evaluate_truth(
     formula: &Formula,
     batch: &ColumnBatch,
     variables: &Variables,
     registry: &Arc<FunctionRegistry>,
-    pre_mask: Option<&Bitmap>,
-) -> StreamResult<Bitmap> {
+    active: &Bitmap,
+) -> StreamResult<PredicateTruth> {
+    if !active.any() {
+        return Ok(PredicateTruth::known(Bitmap::all_unset(batch.len), batch.len));
+    }
     match formula {
-        // For SIMD-accelerated paths (column vs constant), the kernel is cheap
-        // enough that masking overhead isn't worthwhile -- evaluate all rows.
-        // Only the scalar fallback benefits from masking.
-        Formula::Predicate(relation, left, right) => {
-            evaluate_comparison(relation, left, right, batch, variables, registry)
-        }
-        // Recurse with mask for nested AND
+        Formula::Constant(value) => Ok(PredicateTruth::known(
+            if *value {
+                active.clone()
+            } else {
+                Bitmap::all_unset(batch.len)
+            },
+            batch.len,
+        )),
         Formula::And(left, right) => {
-            let mut left_bm = evaluate_batch_predicate_masked(left, batch, variables, registry, pre_mask)?;
-            if left_bm.count_ones() == 0 {
-                return Ok(left_bm);
-            }
-            // Combine pre_mask with left result for right side
-            let combined = match pre_mask {
-                Some(mask) => mask.and(&left_bm),
-                None => left_bm.clone(),
-            };
-            let right_bm = evaluate_batch_predicate_masked(right, batch, variables, registry, Some(&combined))?;
-            left_bm.and_inplace(&right_bm);
-            Ok(left_bm)
+            let left = evaluate_truth(left, batch, variables, registry, active)?;
+            let right_active = left.yes.or(&left.unknown);
+            let right = evaluate_truth(right, batch, variables, registry, &right_active)?;
+            let unknown = left
+                .unknown
+                .and(&right.yes.or(&right.unknown))
+                .or(&left.yes.and(&right.unknown));
+            Ok(PredicateTruth {
+                yes: left.yes.and(&right.yes),
+                unknown,
+            })
         }
-        // For these patterns, delegate to the regular evaluator
-        // (they use SIMD kernels or simple bitmap ops, not scalar fallback)
-        Formula::Constant(_)
-        | Formula::Or(_, _)
-        | Formula::Not(_)
-        | Formula::IsNull(_)
-        | Formula::IsNotNull(_)
-        | Formula::IsMissing(_)
-        | Formula::IsNotMissing(_) => evaluate_batch_predicate(formula, batch, variables, registry),
-        // Fallback patterns (Like, In, ExpressionPredicate, etc.) benefit from masking
-        _ => evaluate_scalar_fallback_masked(formula, batch, variables, registry, pre_mask),
+        Formula::Or(left, right) => {
+            let left = evaluate_truth(left, batch, variables, registry, active)?;
+            let right_active = active.and(&left.yes.not(batch.len));
+            let right = evaluate_truth(right, batch, variables, registry, &right_active)?;
+            let unknown = left.unknown.and(&right.yes.not(batch.len)).or(&right.unknown);
+            Ok(PredicateTruth {
+                yes: left.yes.or(&right.yes),
+                unknown,
+            })
+        }
+        Formula::Not(inner) => {
+            let inner = evaluate_truth(inner, batch, variables, registry, active)?;
+            Ok(PredicateTruth {
+                yes: active.and(&inner.yes.or(&inner.unknown).not(batch.len)),
+                unknown: inner.unknown,
+            })
+        }
+        Formula::Predicate(relation, left, right) => {
+            if let Expression::Variable(path) = left.as_ref() {
+                if let (Some(index), Some(value)) = (
+                    single_attr_name(path).and_then(|name| batch.names.iter().rposition(|n| n == name)),
+                    invariant_value(right, batch, variables),
+                ) {
+                    return evaluate_column_truth(&batch.columns[index], relation, value, batch.len, active);
+                }
+            }
+            if let Expression::Variable(path) = right.as_ref() {
+                if let (Some(index), Some(value)) = (
+                    single_attr_name(path).and_then(|name| batch.names.iter().rposition(|n| n == name)),
+                    invariant_value(left, batch, variables),
+                ) {
+                    return evaluate_column_truth(
+                        &batch.columns[index],
+                        &flip_relation(relation),
+                        value,
+                        batch.len,
+                        active,
+                    );
+                }
+            }
+            evaluate_scalar_truth(formula, batch, variables, registry, active)
+        }
+        Formula::IsNull(expr) | Formula::IsNotNull(expr) | Formula::IsMissing(expr) | Formula::IsNotMissing(expr) => {
+            if let Some(index) = expr_to_column_name(expr).and_then(|name| batch.names.iter().rposition(|n| n == name))
+            {
+                let column = &batch.columns[index];
+                // Mixed columns can contain actual NULL/MISSING values even when
+                // older fixed-format producers mark their validity bits present.
+                if !matches!(column, TypedColumn::Mixed { .. }) {
+                    let (null, missing) = get_null_missing_bitmaps(column);
+                    let yes = match formula {
+                        Formula::IsNull(_) => missing.and(&null.not(batch.len)),
+                        Formula::IsNotNull(_) => missing.and(&null.not(batch.len)).not(batch.len),
+                        Formula::IsMissing(_) => missing.not(batch.len),
+                        Formula::IsNotMissing(_) => missing.clone(),
+                        _ => unreachable!(),
+                    };
+                    return Ok(PredicateTruth::known(yes.and(active), batch.len));
+                }
+            }
+            evaluate_scalar_truth(formula, batch, variables, registry, active)
+        }
+        Formula::Like(expr, pattern) | Formula::NotLike(expr, pattern) => {
+            if let Some(result) = try_dict_like_pushdown(
+                expr,
+                pattern,
+                matches!(formula, Formula::NotLike(..)),
+                batch,
+                variables,
+                registry,
+                active,
+            )? {
+                return Ok(result);
+            }
+            evaluate_scalar_truth(formula, batch, variables, registry, active)
+        }
+        _ => evaluate_scalar_truth(formula, batch, variables, registry, active),
     }
 }
 
-fn evaluate_comparison(
+// The planner hoists literals into the outer Variables scope. Borrow these
+// values once per batch, while preserving row-column shadowing of scope names.
+fn invariant_value<'a>(expression: &'a Expression, batch: &ColumnBatch, variables: &'a Variables) -> Option<&'a Value> {
+    match expression {
+        Expression::Constant(value) => Some(value),
+        Expression::Variable(path) => {
+            let name = single_attr_name(path)?;
+            if batch.names.iter().any(|column| column == name) {
+                None
+            } else {
+                Some(variables.get(name).unwrap_or(&Value::Missing))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn evaluate_column_truth(
+    column: &TypedColumn,
     relation: &Relation,
-    left: &Expression,
-    right: &Expression,
-    batch: &ColumnBatch,
-    variables: &Variables,
-    registry: &Arc<FunctionRegistry>,
-) -> StreamResult<Bitmap> {
-    // Fast path: Variable op Constant
-    if let (Expression::Variable(path), Expression::Constant(const_val)) = (left, right) {
-        if let Some(col_name) = single_attr_name(path) {
-            if let Some(col_idx) = batch.names.iter().position(|n| n == col_name) {
-                return evaluate_column_vs_constant(&batch.columns[col_idx], relation, const_val, batch.len);
+    constant: &Value,
+    len: usize,
+    active: &Bitmap,
+) -> StreamResult<PredicateTruth> {
+    if matches!(constant, Value::Null | Value::Missing) {
+        return Ok(PredicateTruth {
+            yes: Bitmap::all_unset(len),
+            unknown: active.clone(),
+        });
+    }
+    let use_kernel = match (column, constant) {
+        (TypedColumn::Utf8 { .. } | TypedColumn::DictUtf8 { .. }, Value::String(_)) => true,
+        (TypedColumn::Int32 { .. }, Value::Int(_)) => true,
+        (TypedColumn::Float32 { data, .. }, Value::Float(value)) => {
+            !value.is_nan() && !data.iter().any(|value| value.is_nan())
+        }
+        _ => false,
+    };
+    if use_kernel {
+        let yes = evaluate_column_vs_constant(column, relation, constant, len)?.and(active);
+        let unknown = column.validity_bitmap(len).not(len).and(active);
+        return Ok(PredicateTruth { yes, unknown });
+    }
+    let mut result = PredicateTruth::known(Bitmap::all_unset(len), len);
+    for row in 0..len {
+        if !active.is_set(row) {
+            continue;
+        }
+        let owned;
+        let value = match column {
+            TypedColumn::Mixed { data, null, missing } if null.is_set(row) && missing.is_set(row) => &data[row],
+            _ => {
+                owned = BatchToRowAdapter::extract_value(column, row);
+                &owned
             }
+        };
+        match relation
+            .compare_ref(value, constant)
+            .map_err(crate::execution::types::EvaluateError::Expression)?
+        {
+            Some(true) => result.yes.set(row),
+            None => result.unknown.set(row),
+            Some(false) => {}
         }
     }
-    // Fast path: Constant op Variable (flip relation)
-    if let (Expression::Constant(const_val), Expression::Variable(path)) = (left, right) {
-        if let Some(col_name) = single_attr_name(path) {
-            if let Some(col_idx) = batch.names.iter().position(|n| n == col_name) {
-                let flipped = flip_relation(relation);
-                return evaluate_column_vs_constant(&batch.columns[col_idx], &flipped, const_val, batch.len);
-            }
-        }
-    }
-    // Fallback to scalar
-    evaluate_scalar_fallback(
-        &Formula::Predicate(relation.clone(), Box::new(left.clone()), Box::new(right.clone())),
-        batch,
-        variables,
-        registry,
-    )
+    Ok(result)
 }
 
 fn evaluate_column_vs_constant(
@@ -306,201 +371,124 @@ fn evaluate_column_vs_constant(
                 Ok(bm.and(&valid))
             }
         }
-        // Fallback: row-by-row for Mixed columns and type mismatches
-        _ => {
-            let mut result = Bitmap::all_unset(len);
-            for row in 0..len {
-                let val = BatchToRowAdapter::extract_value(col, row);
-                if matches!(val, Value::Null | Value::Missing) {
-                    continue;
-                }
-                let matches = match relation {
-                    Relation::Equal => val == *constant,
-                    Relation::NotEqual => val != *constant,
-                    Relation::MoreThan => compare_values_ord(&val, constant, |a, b| a > b),
-                    Relation::LessThan => compare_values_ord(&val, constant, |a, b| a < b),
-                    Relation::GreaterEqual => compare_values_ord(&val, constant, |a, b| a >= b),
-                    Relation::LessEqual => compare_values_ord(&val, constant, |a, b| a <= b),
-                };
-                if matches {
-                    result.set(row);
-                }
-            }
-            Ok(result)
-        }
+        _ => unreachable!("column kernels require matching primitive types"),
     }
 }
 
-/// Helper for ordering comparisons on Value pairs in the general fallback path.
-fn compare_values_ord(
-    left: &Value,
-    right: &Value,
-    cmp: impl Fn(std::cmp::Ordering, std::cmp::Ordering) -> bool,
-) -> bool {
-    use ordered_float::OrderedFloat;
-    use std::cmp::Ordering;
-    match (left, right) {
-        (Value::Int(l), Value::Int(r)) => cmp(l.cmp(r), Ordering::Equal),
-        (Value::Float(l), Value::Float(r)) => cmp(l.cmp(r), Ordering::Equal),
-        (Value::Int(l), Value::Float(r)) => cmp(OrderedFloat::from(*l as f32).cmp(r), Ordering::Equal),
-        (Value::Float(l), Value::Int(r)) => cmp(l.cmp(&OrderedFloat::from(*r as f32)), Ordering::Equal),
-        (Value::String(l), Value::String(r)) => cmp(l.cmp(r), Ordering::Equal),
-        (Value::DateTime(l), Value::DateTime(r)) => cmp(l.cmp(r), Ordering::Equal),
-        _ => false,
-    }
-}
-
-fn evaluate_is_null(expr: &Expression, batch: &ColumnBatch) -> StreamResult<Bitmap> {
-    if let Some(col_name) = expr_to_column_name(expr) {
-        if let Some(col_idx) = batch.names.iter().position(|n| n == col_name) {
-            let (null, missing) = get_null_missing_bitmaps(&batch.columns[col_idx]);
-            // IS NULL: missing=1 AND null=0
-            return Ok(missing.and(&null.not(batch.len)));
-        }
-    }
-    Ok(Bitmap::all_unset(batch.len))
-}
-
-fn evaluate_is_missing(expr: &Expression, batch: &ColumnBatch) -> StreamResult<Bitmap> {
-    if let Some(col_name) = expr_to_column_name(expr) {
-        if let Some(col_idx) = batch.names.iter().position(|n| n == col_name) {
-            let (_, missing) = get_null_missing_bitmaps(&batch.columns[col_idx]);
-            // IS MISSING: missing=0
-            return Ok(missing.not(batch.len));
-        }
-    }
-    // Column not found -> all rows are "missing" for that column
-    Ok(Bitmap::all_set(batch.len))
-}
-
-/// Push LIKE/NOT LIKE down to dictionary-encoded or plain Utf8 string columns.
-/// Evaluates the regex once per dictionary entry (or unique value), then broadcasts.
+/// Match only active strings, caching compiled patterns across batches and
+/// evaluating each referenced dictionary entry at most once within a batch.
 fn try_dict_like_pushdown(
     expr: &Expression,
     pattern_expr: &Expression,
     is_not_like: bool,
     batch: &ColumnBatch,
-    _variables: &Variables,
-    _registry: &Arc<FunctionRegistry>,
-) -> StreamResult<Option<Bitmap>> {
-    let col_name = match expr_to_column_name(expr) {
-        Some(name) => name,
-        None => return Ok(None),
+    variables: &Variables,
+    registry: &Arc<FunctionRegistry>,
+    active: &Bitmap,
+) -> StreamResult<Option<PredicateTruth>> {
+    let Some(col_idx) = expr_to_column_name(expr).and_then(|name| batch.names.iter().rposition(|n| n == name)) else {
+        return Ok(None);
     };
-    let col_idx = match batch.names.iter().position(|n| n == col_name) {
-        Some(idx) => idx,
-        None => return Ok(None),
-    };
-    // Pattern must be a constant string
-    let pattern_str = match pattern_expr {
-        Expression::Constant(Value::String(s)) => s.as_str(),
+    let col = &batch.columns[col_idx];
+    if !matches!(col, TypedColumn::Utf8 { .. } | TypedColumn::DictUtf8 { .. }) {
+        return Ok(None);
+    }
+    let pattern = match pattern_expr {
+        Expression::Constant(value) => value.clone(),
+        Expression::Variable(path) if matches!(path.path_segments.first(), Some(PathSegment::AttrName(name)) if !batch.names.contains(name)) => {
+            pattern_expr.expression_value_impl(variables, None, registry)?
+        }
         _ => return Ok(None),
     };
-    // Compile the LIKE pattern to a regex
-    let regex_pattern = crate::execution::types::like_pattern_to_regex(pattern_str);
-    let re = match Regex::new(&regex_pattern) {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
+    if matches!(pattern, Value::Null | Value::Missing) {
+        return Ok(Some(PredicateTruth {
+            yes: Bitmap::all_unset(batch.len),
+            unknown: active.clone(),
+        }));
+    }
+    let Value::String(pattern) = pattern else {
+        return Ok(None);
     };
-
-    let col = &batch.columns[col_idx];
-    match col {
-        TypedColumn::DictUtf8 {
-            dict_data,
-            dict_offsets,
-            codes,
-            null,
-            missing,
-        } => {
-            let dict_size = dict_offsets.len() - 1;
-            let mut match_table = vec![0u8; dict_size];
-            for c in 0..dict_size {
-                let start = dict_offsets[c] as usize;
-                let end = dict_offsets[c + 1] as usize;
-                let entry = std::str::from_utf8(&dict_data[start..end]).unwrap_or("");
-                let matched = re.is_match(entry);
-                match_table[c] = if is_not_like { !matched as u8 } else { matched as u8 };
-            }
-            let mut result_bytes = vec![0u8; batch.len];
-            kernels::dict_broadcast(codes, &match_table, &mut result_bytes);
-            let bm = Bitmap::pack_from_bytes(&result_bytes);
-            if col.all_present(batch.len) {
-                Ok(Some(bm))
-            } else {
-                let valid = null.and(missing);
-                Ok(Some(bm.and(&valid)))
-            }
-        }
-        TypedColumn::Utf8 {
-            data,
-            offsets,
-            null,
-            missing,
-        } => {
-            // Use filter cache for Utf8 LIKE
-            let bm = evaluate_cached_two_pass(
-                data,
-                offsets,
-                &|field: &[u8]| {
-                    let s = std::str::from_utf8(field).unwrap_or("");
-                    let matched = re.is_match(s);
-                    if is_not_like { !matched } else { matched }
-                },
-                batch.len,
-            );
-            if col.all_present(batch.len) {
-                Ok(Some(bm))
-            } else {
-                let valid = null.and(missing);
-                Ok(Some(bm.and(&valid)))
-            }
-        }
-        _ => Ok(None),
+    let valid = col.validity_bitmap(batch.len).and(active);
+    let unknown = active.and(&valid.not(batch.len));
+    if !valid.any() {
+        return Ok(Some(PredicateTruth {
+            yes: Bitmap::all_unset(batch.len),
+            unknown,
+        }));
     }
+    let yes = crate::execution::types::with_like_regex(&pattern, |re| {
+        let mut yes = Bitmap::all_unset(batch.len);
+        match col {
+            TypedColumn::DictUtf8 {
+                dict_data,
+                dict_offsets,
+                codes,
+                ..
+            } => {
+                let mut matches = vec![None; dict_offsets.len() - 1];
+                for row in 0..batch.len {
+                    if !valid.is_set(row) {
+                        continue;
+                    }
+                    let code = codes[row] as usize;
+                    let matched = *matches[code].get_or_insert_with(|| {
+                        let bytes = &dict_data[dict_offsets[code] as usize..dict_offsets[code + 1] as usize];
+                        re.is_match(&String::from_utf8_lossy(bytes)) != is_not_like
+                    });
+                    if matched {
+                        yes.set(row);
+                    }
+                }
+            }
+            TypedColumn::Utf8 { data, offsets, .. } => {
+                let mut matches = hashbrown::HashMap::with_capacity(32);
+                for row in 0..batch.len {
+                    if !valid.is_set(row) {
+                        continue;
+                    }
+                    let bytes = &data[offsets[row] as usize..offsets[row + 1] as usize];
+                    let matched = *matches
+                        .entry(bytes)
+                        .or_insert_with(|| re.is_match(&String::from_utf8_lossy(bytes)) != is_not_like);
+                    if matched {
+                        yes.set(row);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        yes
+    })?;
+    Ok(Some(PredicateTruth { yes, unknown }))
 }
 
-fn evaluate_scalar_fallback(
+fn evaluate_scalar_truth(
     formula: &Formula,
     batch: &ColumnBatch,
     variables: &Variables,
     registry: &Arc<FunctionRegistry>,
-) -> StreamResult<Bitmap> {
-    let mut result = Bitmap::all_unset(batch.len);
+    active: &Bitmap,
+) -> StreamResult<PredicateTruth> {
+    let mut result = PredicateTruth::known(Bitmap::all_unset(batch.len), batch.len);
+    // Reuse row-map nodes and keys; scope is borrowed rather than cloned per row.
+    let mut row_vars = Variables::with_capacity(batch.columns.len());
     for row in 0..batch.len {
-        let mut row_vars = variables.clone();
-        for (i, col) in batch.columns.iter().enumerate() {
-            let val = BatchToRowAdapter::extract_value(col, row);
-            row_vars.insert(batch.names[i].clone(), val);
+        if !active.is_set(row) {
+            continue;
         }
-        if let Ok(Some(true)) = formula.evaluate(&row_vars, registry) {
-            result.set(row)
-        }
-    }
-    Ok(result)
-}
-
-fn evaluate_scalar_fallback_masked(
-    formula: &Formula,
-    batch: &ColumnBatch,
-    variables: &Variables,
-    registry: &Arc<FunctionRegistry>,
-    pre_mask: Option<&Bitmap>,
-) -> StreamResult<Bitmap> {
-    let mut result = Bitmap::all_unset(batch.len);
-    for row in 0..batch.len {
-        // Skip rows already eliminated by a previous predicate
-        if let Some(mask) = pre_mask {
-            if !mask.is_set(row) {
-                continue;
+        for (index, column) in batch.columns.iter().enumerate() {
+            let value = BatchToRowAdapter::extract_value(column, row);
+            if let Some(existing) = row_vars.get_mut(batch.names[index].as_str()) {
+                *existing = value;
+            } else {
+                row_vars.insert(batch.names[index].clone(), value);
             }
         }
-        let mut row_vars = variables.clone();
-        for (i, col) in batch.columns.iter().enumerate() {
-            let val = BatchToRowAdapter::extract_value(col, row);
-            row_vars.insert(batch.names[i].clone(), val);
-        }
-        if let Ok(Some(true)) = formula.evaluate(&row_vars, registry) {
-            result.set(row)
+        match formula.evaluate_in_scope(&row_vars, variables, registry)? {
+            Some(true) => result.yes.set(row),
+            None => result.unknown.set(row),
+            Some(false) => {}
         }
     }
     Ok(result)
@@ -550,6 +538,194 @@ fn get_null_missing_bitmaps(col: &TypedColumn) -> (&Bitmap, &Bitmap) {
 mod tests {
     use super::*;
     use crate::simd::padded_vec::PaddedVecBuilder;
+
+    fn variable(name: &str) -> Expression {
+        Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(name.into())]))
+    }
+
+    fn mixed_batch(values: Vec<Value>) -> ColumnBatch {
+        let len = values.len();
+        ColumnBatch {
+            columns: vec![TypedColumn::Mixed {
+                data: values,
+                null: Bitmap::all_set(len),
+                missing: Bitmap::all_set(len),
+            }],
+            names: vec!["value".into()],
+            selection: crate::simd::selection::SelectionVector::All,
+            len,
+        }
+    }
+
+    #[test]
+    fn test_batch_predicate_nullable_logic_matches_scalar() {
+        let batch = mixed_batch(vec![Value::Int(1), Value::Int(0), Value::Null, Value::Missing]);
+        let eq = Formula::Predicate(
+            Relation::Equal,
+            Box::new(variable("value")),
+            Box::new(Expression::Constant(Value::Int(1))),
+        );
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let formulas = [
+            Formula::Not(Box::new(eq.clone())),
+            Formula::Not(Box::new(Formula::And(
+                Box::new(eq.clone()),
+                Box::new(Formula::Constant(true)),
+            ))),
+            Formula::Not(Box::new(Formula::Or(
+                Box::new(eq.clone()),
+                Box::new(Formula::Constant(false)),
+            ))),
+            Formula::Or(
+                Box::new(eq.clone()),
+                Box::new(Formula::IsMissing(Box::new(variable("value")))),
+            ),
+            Formula::IsNull(Box::new(variable("value"))),
+            Formula::IsMissing(Box::new(variable("value"))),
+            Formula::Predicate(
+                Relation::NotEqual,
+                Box::new(variable("value")),
+                Box::new(Expression::Constant(Value::Null)),
+            ),
+        ];
+        for formula in formulas {
+            let actual = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+            for row in 0..batch.len {
+                let vars = [("value".into(), BatchToRowAdapter::extract_value(&batch.columns[0], row))]
+                    .into_iter()
+                    .collect();
+                let expected = formula.evaluate(&vars, &registry).unwrap() == Some(true);
+                assert_eq!(actual.is_set(row), expected, "{formula:?} row {row}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_predicate_preserves_errors_and_short_circuiting() {
+        let batch = mixed_batch(vec![Value::Null]);
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let error = Formula::Like(
+            Box::new(Expression::Constant(Value::Int(1))),
+            Box::new(Expression::Constant(Value::String("%".into()))),
+        );
+        assert!(evaluate_batch_predicate(&error, &batch, &Variables::new(), &registry).is_err());
+        let unknown = Formula::Predicate(
+            Relation::Equal,
+            Box::new(variable("value")),
+            Box::new(Expression::Constant(Value::Int(1))),
+        );
+        assert!(
+            evaluate_batch_predicate(
+                &Formula::And(Box::new(unknown), Box::new(error.clone())),
+                &batch,
+                &Variables::new(),
+                &registry
+            )
+            .is_err()
+        );
+        for formula in [
+            Formula::And(Box::new(Formula::Constant(false)), Box::new(error.clone())),
+            Formula::Or(Box::new(Formula::Constant(true)), Box::new(error)),
+        ] {
+            assert!(evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).is_ok());
+        }
+        let ordering = Formula::Predicate(
+            Relation::MoreThan,
+            Box::new(variable("value")),
+            Box::new(Expression::Constant(Value::Int(0))),
+        );
+        let batch = mixed_batch(vec![Value::String("wrong type".into())]);
+        assert!(evaluate_batch_predicate(&ordering, &batch, &Variables::new(), &registry).is_err());
+    }
+
+    #[test]
+    fn test_batch_predicate_masked_dictionary_like_with_scope_pattern() {
+        let mut batch = make_dict_string_batch(&["Chrome", "Safari", "Chrome", "Chrome"]);
+        if let TypedColumn::DictUtf8 { null, missing, .. } = &mut batch.columns[0] {
+            null.unset(2);
+            missing.unset(3);
+        }
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let variables = [("pattern".into(), Value::String("%Chrome%".into()))]
+            .into_iter()
+            .collect();
+        let formula = Formula::And(
+            Box::new(Formula::IsNotMissing(Box::new(variable("status")))),
+            Box::new(Formula::Not(Box::new(Formula::Like(
+                Box::new(variable("status")),
+                Box::new(variable("pattern")),
+            )))),
+        );
+        let actual = evaluate_batch_predicate(&formula, &batch, &variables, &registry).unwrap();
+        assert_eq!(actual.count_ones(), 1);
+        assert!(actual.is_set(1));
+    }
+
+    #[test]
+    fn test_batch_predicate_selection_does_not_evaluate_inactive_errors() {
+        let mut batch = mixed_batch(vec![Value::String("ok".into()), Value::Int(1)]);
+        let mut selected = Bitmap::all_unset(2);
+        selected.set(0);
+        batch.selection = crate::simd::selection::SelectionVector::Bitmap(selected);
+        let formula = Formula::Like(
+            Box::new(variable("value")),
+            Box::new(Expression::Constant(Value::String("%".into()))),
+        );
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let actual = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+        assert_eq!(actual.count_ones(), 1);
+    }
+
+    #[test]
+    fn test_batch_predicate_complete_three_valued_truth_tables() {
+        let states = [Value::Boolean(true), Value::Boolean(false), Value::Null, Value::Missing];
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for a in &states {
+            for b in &states {
+                left.push(a.clone());
+                right.push(b.clone());
+            }
+        }
+        let len = left.len();
+        let batch = ColumnBatch {
+            columns: [left, right]
+                .into_iter()
+                .map(|data| TypedColumn::Mixed {
+                    data,
+                    null: Bitmap::all_set(len),
+                    missing: Bitmap::all_set(len),
+                })
+                .collect(),
+            names: vec!["left".into(), "right".into()],
+            selection: crate::simd::selection::SelectionVector::All,
+            len,
+        };
+        let left = Formula::ExpressionPredicate(Box::new(variable("left")));
+        let right = Formula::ExpressionPredicate(Box::new(variable("right")));
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        for formula in [
+            Formula::And(Box::new(left.clone()), Box::new(right.clone())),
+            Formula::Or(Box::new(left), Box::new(right)),
+        ] {
+            for formula in [formula.clone(), Formula::Not(Box::new(formula))] {
+                let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
+                for row in 0..len {
+                    let vars = batch
+                        .names
+                        .iter()
+                        .zip(&batch.columns)
+                        .map(|(name, col)| (name.clone(), BatchToRowAdapter::extract_value(col, row)))
+                        .collect();
+                    assert_eq!(
+                        result.is_set(row),
+                        formula.evaluate(&vars, &registry).unwrap() == Some(true),
+                        "{formula:?} row {row}"
+                    );
+                }
+            }
+        }
+    }
 
     fn make_string_batch(values: &[&str]) -> ColumnBatch {
         let len = values.len();
@@ -812,5 +988,58 @@ mod tests {
         let registry = Arc::new(crate::functions::register_all().unwrap());
         let result = evaluate_batch_predicate(&formula, &batch, &Variables::new(), &registry).unwrap();
         assert_eq!(result.count_ones(), 0);
+    }
+    #[test]
+    fn test_batch_predicate_boolean_column_compares_scoped_literal() {
+        let mut bits = Bitmap::all_unset(2);
+        bits.set(0);
+        let batch = ColumnBatch {
+            columns: vec![TypedColumn::Boolean {
+                data: bits,
+                null: Bitmap::all_set(2),
+                missing: Bitmap::all_set(2),
+            }],
+            names: vec!["keep".into()],
+            selection: crate::simd::selection::SelectionVector::All,
+            len: 2,
+        };
+        let mut scope = Variables::new();
+        scope.insert("const_000000000".into(), Value::Boolean(true));
+        let formula = Formula::Predicate(
+            Relation::Equal,
+            Box::new(variable("keep")),
+            Box::new(variable("const_000000000")),
+        );
+        let actual = evaluate_batch_predicate(&formula, &batch, &scope, &Arc::new(FunctionRegistry::new())).unwrap();
+        assert!(actual.is_set(0));
+        assert!(!actual.is_set(1));
+    }
+    #[test]
+    fn test_batch_predicate_scoped_numeric_literal_preserves_masks_and_shadowing() {
+        use crate::simd::padded_vec::PaddedVec;
+        let mut null = Bitmap::all_set(3);
+        null.unset(2);
+        let batch = ColumnBatch {
+            columns: vec![TypedColumn::Int32 {
+                data: PaddedVec::from_vec(vec![1, 3, 0]),
+                null,
+                missing: Bitmap::all_set(3),
+            }],
+            names: vec!["x".into()],
+            selection: crate::simd::selection::SelectionVector::All,
+            len: 3,
+        };
+        let mut scope = Variables::new();
+        scope.insert("bound".into(), Value::Int(2));
+        scope.insert("x".into(), Value::Int(99));
+        let formula = Formula::Not(Box::new(Formula::Predicate(
+            Relation::MoreThan,
+            Box::new(variable("x")),
+            Box::new(variable("bound")),
+        )));
+        let actual = evaluate_batch_predicate(&formula, &batch, &scope, &Arc::new(FunctionRegistry::new())).unwrap();
+        assert!(actual.is_set(0));
+        assert!(!actual.is_set(1));
+        assert!(!actual.is_set(2));
     }
 }

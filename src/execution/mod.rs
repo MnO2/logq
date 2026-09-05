@@ -12,6 +12,8 @@ pub mod batch_tokenizer;
 pub mod datasource;
 pub mod field_analysis;
 pub mod field_parser;
+pub(crate) mod json_batch_scan;
+pub(crate) mod json_reader;
 pub mod log_schema;
 pub(crate) mod memory;
 pub(crate) mod parallel;

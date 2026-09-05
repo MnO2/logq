@@ -31,7 +31,7 @@ fn queries_a_gzipped_alb_file_end_to_end() {
 
     let output = run_query("select count(*) as n from it", &format!("it:alb={}", path.display()));
 
-    assert!(output.contains(r#""_count":7"#), "unexpected output: {}", output);
+    assert!(output.contains(r#""n":7"#), "unexpected output: {}", output);
 }
 
 #[test]
@@ -64,9 +64,18 @@ fn scans_plain_and_gzipped_alb_shards_through_the_batch_pipeline() {
 fn empty_glob_error_names_the_pattern() {
     let dir = tempfile::tempdir().unwrap();
     let pattern = format!("{}/*.missing", dir.path().display());
-    let output = run_query("select count(*) from it", &format!("it:jsonl={pattern}"));
-
-    assert!(output.contains(&format!("No files matched pattern: {pattern}")));
+    let output = Command::new(env!("CARGO_BIN_EXE_logq"))
+        .args([
+            "query",
+            "select count(*) from it",
+            "--table",
+            &format!("it:jsonl={pattern}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("No files matched pattern: {pattern}")));
 }
 
 #[test]

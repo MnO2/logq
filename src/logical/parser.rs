@@ -433,7 +433,10 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
                         PathSegment::Wildcard | PathSegment::WildcardAttr => None,
                     };
 
-                    Ok(Box::new(types::Named::Expression(*e.clone(), name)))
+                    Ok(Box::new(types::Named::Expression(
+                        *e.clone(),
+                        name_opt.clone().or(name),
+                    )))
                 }
                 _ => Ok(Box::new(types::Named::Expression(*e, name_opt.clone()))),
             }
@@ -1055,7 +1058,11 @@ pub(crate) fn parse_query(
                             }
                             types::Aggregate::Count(named) => {
                                 named_aggregates.push(named_aggregate.clone());
-                                named_list.push(named.clone());
+                                // COUNT(*) depends on row cardinality, not on
+                                // every input column as SELECT * does.
+                                if !matches!(named, types::Named::Star) {
+                                    named_list.push(named.clone());
+                                }
                             }
                             types::Aggregate::First(named) => {
                                 if let types::Named::Star = named {

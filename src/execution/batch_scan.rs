@@ -7,7 +7,7 @@ use crate::execution::batch_tokenizer::tokenize_line_into;
 use crate::execution::datasource::DataType;
 use crate::execution::field_parser::{parse_field_column, parse_field_column_selected};
 use crate::execution::log_schema::LogSchema;
-use crate::execution::types::{Formula, StreamResult};
+use crate::execution::types::{Formula, StreamError, StreamResult};
 use crate::functions::FunctionRegistry;
 use crate::simd::bitmap::Bitmap;
 use crate::simd::padded_vec::PaddedVecBuilder;
@@ -22,8 +22,6 @@ use std::sync::Arc;
 pub(crate) enum ScanAggregation {
     /// COUNT(*) — count all rows passing the filter.
     CountStar,
-    /// SUM(column) — sum values in an integer/float field.
-    SumColumn(usize),
 }
 
 /// Arena-style storage for batch lines. Stores all line bytes in a single
@@ -80,6 +78,8 @@ pub(crate) struct BatchScanOperator {
     done: bool,
     buf: String,
     offsets_scratch: Vec<(usize, usize)>,
+    field_offsets: Vec<(usize, usize)>,
+    field_spans: Vec<(usize, usize)>,
     arena: BatchLineArena,
     /// Optional scan-time aggregation. When set, the operator accumulates
     /// the aggregate during scanning and emits a single-row result.
@@ -114,6 +114,8 @@ impl BatchScanOperator {
             done: false,
             buf: String::with_capacity(512),
             offsets_scratch: Vec::with_capacity(30),
+            field_offsets: Vec::with_capacity(BATCH_SIZE * 30),
+            field_spans: Vec::with_capacity(BATCH_SIZE),
             arena: BatchLineArena::new(),
             scan_aggregation: None,
         }
@@ -125,7 +127,7 @@ impl BatchScanOperator {
         self
     }
 
-    fn read_lines(&mut self) {
+    fn read_lines(&mut self) -> StreamResult<()> {
         self.arena.clear();
         while self.arena.len() < BATCH_SIZE {
             self.buf.clear();
@@ -142,176 +144,140 @@ impl BatchScanOperator {
                 }
                 Err(_) => {
                     self.done = true;
-                    break;
+                    return Err(StreamError::Reader);
                 }
             }
         }
+        Ok(())
     }
 
-    /// Consume all input in aggregation mode, returning a single-row result batch.
-    /// This avoids constructing projected columns — only filter fields are parsed
-    /// (if a predicate is pushed), and the aggregate is accumulated directly.
-    fn next_batch_aggregated(&mut self, agg: ScanAggregation) -> StreamResult<Option<ColumnBatch>> {
-        if self.done {
-            return Ok(None);
+    /// Reuse one offsets arena for the whole batch, rather than allocating an
+    /// owned Vec for every line. Field parsers borrow each row's range.
+    fn tokenize_lines(&mut self) {
+        self.field_offsets.clear();
+        self.field_spans.clear();
+        for &(start, end) in &self.arena.spans {
+            tokenize_line_into(&self.arena.data[start..end], &mut self.offsets_scratch);
+            let first = self.field_offsets.len();
+            self.field_offsets.extend_from_slice(&self.offsets_scratch);
+            self.field_spans.push((first, self.field_offsets.len()));
         }
-        // Clear aggregation mode so subsequent calls return None
-        self.scan_aggregation = None;
+    }
 
-        let mut count: i64 = 0;
-        let mut sum: f64 = 0.0;
+    /// Count framed nonblank UTF-8 lines without tokenization or a line arena.
+    /// Complete lines are inspected in the reader's buffer; only lines split
+    /// across buffers need temporary storage.
+    fn count_unfiltered_rows(&mut self) -> StreamResult<i64> {
+        fn nonblank(line: &[u8]) -> StreamResult<bool> {
+            let text = std::str::from_utf8(line).map_err(|_| StreamError::Reader)?;
+            Ok(!text.trim_end().is_empty())
+        }
 
+        let mut count = 0;
+        let mut partial = Vec::new();
         loop {
-            self.read_lines();
-            if self.arena.len() == 0 {
+            let input = self.reader.fill_buf().map_err(|_| StreamError::Reader)?;
+            if input.is_empty() {
                 break;
             }
-
-            let lines = self.arena.to_slices();
-            let len = lines.len();
-
-            // Tokenize all lines
-            let mut line_fields: Vec<Vec<(usize, usize)>> = Vec::with_capacity(len);
-            for line in &lines {
-                tokenize_line_into(line, &mut self.offsets_scratch);
-                line_fields.push(self.offsets_scratch.clone());
+            let consumed = input.len();
+            let mut start = 0;
+            for end in memchr::memchr_iter(b'\n', input) {
+                let line = &input[start..end];
+                let present = if partial.is_empty() {
+                    nonblank(line)?
+                } else {
+                    partial.extend_from_slice(line);
+                    let present = nonblank(&partial)?;
+                    partial.clear();
+                    present
+                };
+                count += i64::from(present);
+                start = end + 1;
             }
+            partial.extend_from_slice(&input[start..]);
+            self.reader.consume(consumed);
+        }
+        if !partial.is_empty() {
+            count += i64::from(nonblank(&partial)?);
+        }
+        Ok(count)
+    }
 
-            if let Some((ref formula, ref variables, ref registry)) = self.pushed_predicate {
-                // Parse only filter fields for predicate evaluation
+    /// Consume COUNT(*) into mergeable i64 state without narrowing it into
+    /// the public Int32 output representation at each parallel worker.
+    pub(crate) fn consume_count(&mut self) -> StreamResult<i64> {
+        if self.done {
+            return Ok(0);
+        }
+        self.scan_aggregation = None;
+        let count = if self.pushed_predicate.is_none() {
+            self.done = true;
+            self.count_unfiltered_rows()?
+        } else {
+            let mut count: i64 = 0;
+            while !self.done {
+                self.read_lines()?;
+                if self.arena.len() == 0 {
+                    break;
+                }
+                self.tokenize_lines();
+                let lines = self.arena.to_slices();
+                let len = lines.len();
+                let line_fields: Vec<&[(usize, usize)]> = self
+                    .field_spans
+                    .iter()
+                    .map(|&(start, end)| &self.field_offsets[start..end])
+                    .collect();
                 let mut filter_columns = Vec::with_capacity(self.filter_field_indices.len());
                 let mut filter_names = Vec::with_capacity(self.filter_field_indices.len());
                 for &field_idx in &self.filter_field_indices {
                     let datatype = self.schema.field_type(field_idx);
-                    let col = parse_field_column(&lines, &line_fields, field_idx, &datatype);
-                    filter_columns.push(col);
+                    filter_columns.push(parse_field_column(&lines, &line_fields, field_idx, &datatype));
                     filter_names.push(self.schema.field_name(field_idx).to_string());
                 }
-
                 let filter_batch = ColumnBatch {
                     columns: filter_columns,
                     names: filter_names,
                     selection: SelectionVector::All,
                     len,
                 };
-
-                let bitmap = evaluate_batch_predicate(formula, &filter_batch, variables, registry)?;
-
-                match &agg {
-                    ScanAggregation::CountStar => {
-                        count += bitmap.count_ones() as i64;
-                    }
-                    ScanAggregation::SumColumn(field_idx) => {
-                        let datatype = self.schema.field_type(*field_idx);
-                        let col = parse_field_column(&lines, &line_fields, *field_idx, &datatype);
-                        // Sum active, valid values
-                        match &col {
-                            TypedColumn::Int32 {
-                                data, null, missing, ..
-                            } => {
-                                for i in 0..len {
-                                    if bitmap.is_set(i) && null.is_set(i) && missing.is_set(i) {
-                                        sum += data[i] as f64;
-                                    }
-                                }
-                            }
-                            TypedColumn::Float32 {
-                                data, null, missing, ..
-                            } => {
-                                for i in 0..len {
-                                    if bitmap.is_set(i) && null.is_set(i) && missing.is_set(i) {
-                                        sum += data[i] as f64;
-                                    }
-                                }
-                            }
-                            _ => {
-                                // Non-numeric column — sum is 0
-                            }
-                        }
-                    }
-                }
-            } else {
-                // No predicate — all rows active
-                match &agg {
-                    ScanAggregation::CountStar => {
-                        count += len as i64;
-                    }
-                    ScanAggregation::SumColumn(field_idx) => {
-                        let datatype = self.schema.field_type(*field_idx);
-                        let col = parse_field_column(&lines, &line_fields, *field_idx, &datatype);
-                        match &col {
-                            TypedColumn::Int32 {
-                                data, null, missing, ..
-                            } => {
-                                for i in 0..len {
-                                    if null.is_set(i) && missing.is_set(i) {
-                                        sum += data[i] as f64;
-                                    }
-                                }
-                            }
-                            TypedColumn::Float32 {
-                                data, null, missing, ..
-                            } => {
-                                for i in 0..len {
-                                    if null.is_set(i) && missing.is_set(i) {
-                                        sum += data[i] as f64;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                let (formula, variables, registry) = self.pushed_predicate.as_ref().unwrap();
+                count += evaluate_batch_predicate(formula, &filter_batch, variables, registry)?.count_ones() as i64;
             }
+            count
+        };
+        self.done = true;
+        Ok(count)
+    }
+
+    /// Consume all input in aggregation mode, returning a single-row result batch.
+    fn next_batch_aggregated(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        if self.done {
+            return Ok(None);
         }
-
-        // Build single-row result batch
-        match agg {
-            ScanAggregation::CountStar => {
-                let mut builder = PaddedVecBuilder::<i32>::with_capacity(1);
-                builder.push(count as i32);
-                let data = builder.seal();
-                let null_bm = Bitmap::all_set(1);
-                let missing_bm = Bitmap::all_set(1);
-                let col = TypedColumn::Int32 {
-                    data,
-                    null: null_bm,
-                    missing: missing_bm,
-                };
-                Ok(Some(ColumnBatch {
-                    columns: vec![col],
-                    names: self.batch_schema.names.clone(),
-                    selection: SelectionVector::All,
-                    len: 1,
-                }))
-            }
-            ScanAggregation::SumColumn(_) => {
-                let mut builder = PaddedVecBuilder::<f32>::with_capacity(1);
-                builder.push(sum as f32);
-                let data = builder.seal();
-                let null_bm = Bitmap::all_set(1);
-                let missing_bm = Bitmap::all_set(1);
-                let col = TypedColumn::Float32 {
-                    data,
-                    null: null_bm,
-                    missing: missing_bm,
-                };
-                Ok(Some(ColumnBatch {
-                    columns: vec![col],
-                    names: self.batch_schema.names.clone(),
-                    selection: SelectionVector::All,
-                    len: 1,
-                }))
-            }
-        }
+        let count = self.consume_count()?;
+        let mut builder = PaddedVecBuilder::<i32>::with_capacity(1);
+        builder.push(count as i32);
+        let column = TypedColumn::Int32 {
+            data: builder.seal(),
+            null: Bitmap::all_set(1),
+            missing: Bitmap::all_set(1),
+        };
+        Ok(Some(ColumnBatch {
+            columns: vec![column],
+            names: self.batch_schema.names.clone(),
+            selection: SelectionVector::All,
+            len: 1,
+        }))
     }
 }
 
 impl BatchStream for BatchScanOperator {
     fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
         // Scan-time aggregation: consume all input, return single-row result
-        if let Some(ref agg) = self.scan_aggregation {
-            return self.next_batch_aggregated(agg.clone());
+        if self.scan_aggregation.is_some() {
+            return self.next_batch_aggregated();
         }
 
         loop {
@@ -319,20 +285,19 @@ impl BatchStream for BatchScanOperator {
                 return Ok(None);
             }
 
-            self.read_lines();
+            self.read_lines()?;
             if self.arena.len() == 0 {
                 return Ok(None);
             }
 
+            self.tokenize_lines();
             let lines = self.arena.to_slices();
             let len = lines.len();
-
-            // Tokenize all lines using reusable scratch buffer
-            let mut line_fields: Vec<Vec<(usize, usize)>> = Vec::with_capacity(len);
-            for line in &lines {
-                tokenize_line_into(line, &mut self.offsets_scratch);
-                line_fields.push(self.offsets_scratch.clone());
-            }
+            let line_fields: Vec<&[(usize, usize)]> = self
+                .field_spans
+                .iter()
+                .map(|&(start, end)| &self.field_offsets[start..end])
+                .collect();
 
             if let Some((ref formula, ref variables, ref registry)) = self.pushed_predicate {
                 // === Two-phase scan ===
@@ -442,6 +407,124 @@ mod tests {
     use crate::syntax::ast::{PathExpr, PathSegment};
     use std::io::Cursor;
     use std::sync::Arc;
+
+    struct FailingAfterData(Cursor<Vec<u8>>);
+
+    impl std::io::Read for FailingAfterData {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            let input = self.fill_buf()?;
+            let len = input.len().min(output.len());
+            output[..len].copy_from_slice(&input[..len]);
+            self.consume(len);
+            Ok(len)
+        }
+    }
+
+    impl BufRead for FailingAfterData {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            let input = self.0.fill_buf()?;
+            if input.is_empty() {
+                Err(std::io::Error::other("injected read failure"))
+            } else {
+                Ok(input)
+            }
+        }
+        fn consume(&mut self, amount: usize) {
+            self.0.consume(amount);
+        }
+    }
+
+    fn count_scan(reader: Box<dyn BufRead>) -> BatchScanOperator {
+        BatchScanOperator::new(reader, LogSchema::from_format("squid"), vec![], vec![], None).with_scan_aggregation(
+            ScanAggregation::CountStar,
+            BatchSchema {
+                names: vec!["n".into()],
+                types: vec![ColumnType::Int32],
+            },
+        )
+    }
+
+    #[test]
+    fn consume_count_keeps_i64_state_without_output_column() {
+        let mut scan = count_scan(Box::new(Cursor::new(b"one\ntwo\nlast".to_vec())));
+        assert_eq!(scan.consume_count().unwrap(), 3i64);
+        assert!(scan.next_batch().unwrap().is_none());
+        assert!(scan.arena.spans.is_empty());
+        assert!(scan.field_offsets.is_empty());
+    }
+
+    #[test]
+    fn scan_propagates_io_failure_instead_of_returning_partial_batch() {
+        let reader = Box::new(FailingAfterData(Cursor::new(b"first row\n".to_vec())));
+        let mut scan = BatchScanOperator::new(reader, LogSchema::from_format("squid"), vec![0], vec![], None);
+        assert!(matches!(
+            scan.next_batch(),
+            Err(crate::execution::types::StreamError::Reader)
+        ));
+        assert!(scan.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn count_scan_propagates_io_failure_instead_of_partial_count() {
+        let mut scan = count_scan(Box::new(FailingAfterData(Cursor::new(b"first row\n".to_vec()))));
+        assert!(matches!(
+            scan.next_batch(),
+            Err(crate::execution::types::StreamError::Reader)
+        ));
+        assert!(scan.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn count_framing_preserves_blank_lines_utf8_crlf_and_unterminated_rows() {
+        let data = "\n \t\r\n\u{2003}\nfirst row\r\n第二 行\nunterminated";
+        for buffer_size in [1, 2, 3, 7, 64] {
+            let reader = std::io::BufReader::with_capacity(buffer_size, Cursor::new(data.as_bytes().to_vec()));
+            let mut scan = count_scan(Box::new(reader));
+            let batch = scan.next_batch().unwrap().unwrap();
+            assert_eq!(BatchToRowAdapter::extract_value(&batch.columns[0], 0), Value::Int(3));
+            assert!(scan.next_batch().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn count_framing_rejects_invalid_utf8_like_the_row_reader() {
+        for data in [b"valid\n\xff\n".as_slice(), b"valid\n\xff".as_slice()] {
+            let mut scan = count_scan(Box::new(Cursor::new(data.to_vec())));
+            assert!(matches!(
+                scan.next_batch(),
+                Err(crate::execution::types::StreamError::Reader)
+            ));
+        }
+    }
+
+    #[test]
+    fn scan_offsets_remain_correct_across_batches_with_different_widths() {
+        let mut data = "first \"quoted field\" tail\n".repeat(BATCH_SIZE);
+        data.push_str("last\nnext [bracket field] trailing");
+        let mut scan = BatchScanOperator::new(
+            Box::new(Cursor::new(data.into_bytes())),
+            LogSchema::from_format("squid"),
+            vec![0, 1, 2],
+            vec![],
+            None,
+        );
+        let first = scan.next_batch().unwrap().unwrap();
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&first.columns[1], BATCH_SIZE - 1),
+            Value::String("quoted field".into())
+        );
+        let second = scan.next_batch().unwrap().unwrap();
+        assert_eq!(second.len, 2);
+        assert_eq!(BatchToRowAdapter::extract_value(&second.columns[1], 0), Value::Null);
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&second.columns[1], 1),
+            Value::String("bracket field".into())
+        );
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&second.columns[2], 1),
+            Value::String("trailing".into())
+        );
+    }
 
     #[test]
     fn test_batch_scan_simple() {

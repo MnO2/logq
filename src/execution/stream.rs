@@ -292,8 +292,15 @@ impl RecordStream for MapStream {
                 // Move values out of the source in SELECT-list order.
                 let mut source_vars = record.into_variables();
                 let mut out = Variables::with_capacity(self.projection_map.len());
-                for (src_field, out_name) in &self.projection_map {
-                    let v = source_vars.remove(src_field).unwrap_or(Value::Missing);
+                for (index, (src_field, out_name)) in self.projection_map.iter().enumerate() {
+                    let v = if self.projection_map[index + 1..]
+                        .iter()
+                        .any(|(source, _)| source == src_field)
+                    {
+                        source_vars.get(src_field).cloned().unwrap_or(Value::Missing)
+                    } else {
+                        source_vars.remove(src_field).unwrap_or(Value::Missing)
+                    };
                     out.insert(out_name.clone(), v);
                 }
                 return Ok(Some(Record::new_with_variables(out)));

@@ -9,7 +9,9 @@ fn collect_expr_fields(expr: &Expression, out: &mut HashSet<String>) {
     match expr {
         Expression::Variable(path_expr) => {
             // Extract attribute name from the first segment of the path
-            if let Some(PathSegment::AttrName(name)) = path_expr.path_segments.first() {
+            if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) =
+                path_expr.path_segments.first()
+            {
                 out.insert(name.clone());
             }
             // Wildcards in path mean we need all fields
@@ -110,7 +112,9 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
         Node::GroupBy(keys, aggregates, source) => {
             // Collect key path names
             for key_path in keys {
-                if let Some(PathSegment::AttrName(name)) = key_path.path_segments.first() {
+                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) =
+                    key_path.path_segments.first()
+                {
                     out.insert(name.clone());
                 }
             }
@@ -123,7 +127,9 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
         }
         Node::OrderBy(columns, _, source) => {
             for col_path in columns {
-                if let Some(PathSegment::AttrName(name)) = col_path.path_segments.first() {
+                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) =
+                    col_path.path_segments.first()
+                {
                     out.insert(name.clone());
                 }
             }
@@ -155,10 +161,10 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
             collect_node_fields(left, out);
             collect_node_fields(right, out);
             for (lk, rk) in equi_keys {
-                if let Some(PathSegment::AttrName(name)) = lk.path_segments.first() {
+                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) = lk.path_segments.first() {
                     out.insert(name.clone());
                 }
-                if let Some(PathSegment::AttrName(name)) = rk.path_segments.first() {
+                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) = rk.path_segments.first() {
                     out.insert(name.clone());
                 }
             }
@@ -173,6 +179,7 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
 fn collect_aggregate_fields(aggregates: &[NamedAggregate], out: &mut HashSet<String>) {
     for na in aggregates {
         match &na.aggregate {
+            Aggregate::Count(_, Named::Star) => {}
             Aggregate::Avg(_, named)
             | Aggregate::Count(_, named)
             | Aggregate::First(_, named)
@@ -218,6 +225,47 @@ pub(crate) fn extract_required_fields(node: &Node, schema: &LogSchema) -> Vec<us
     resolve_field_names(&names, schema)
 }
 
+/// Required JSON root fields. None preserves complete objects for wildcard,
+/// bound-table, join and subquery shapes; Some(empty) is a validation-only scan.
+pub(crate) fn extract_required_root_names(node: &Node) -> Option<Vec<String>> {
+    fn has_output_projection(node: &Node) -> bool {
+        match node {
+            Node::Map(..) | Node::GroupBy(..) => true,
+            Node::Filter(source, _) | Node::Limit(_, source) | Node::OrderBy(_, _, source) | Node::Distinct(source) => {
+                has_output_projection(source)
+            }
+            _ => false,
+        }
+    }
+    if !has_output_projection(node) {
+        return None;
+    }
+
+    fn has_scoped_source(node: &Node) -> bool {
+        match node {
+            Node::DataSource(_, bindings) => !bindings.is_empty(),
+            Node::Map(_, source)
+            | Node::Filter(source, _)
+            | Node::GroupBy(_, _, source)
+            | Node::Limit(_, source)
+            | Node::OrderBy(_, _, source)
+            | Node::Distinct(source) => has_scoped_source(source),
+            _ => true,
+        }
+    }
+    if has_scoped_source(node) {
+        return None;
+    }
+    let mut names = HashSet::new();
+    collect_node_fields(node, &mut names);
+    if names.contains("*") {
+        return None;
+    }
+    let mut names: Vec<_> = names.into_iter().collect();
+    names.sort();
+    Some(names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +286,15 @@ mod tests {
 
     fn elb_schema() -> LogSchema {
         LogSchema::from_format("elb")
+    }
+
+    #[test]
+    fn bare_json_source_requires_complete_records() {
+        let source = Node::DataSource(
+            DataSource::File(PathBuf::from("input.jsonl"), "jsonl".into(), "it".into()),
+            vec![],
+        );
+        assert_eq!(extract_required_root_names(&source), None);
     }
 
     #[test]

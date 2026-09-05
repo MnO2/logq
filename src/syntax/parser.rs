@@ -635,7 +635,10 @@ fn order_by_clause(i: &str) -> IResult<&str, ast::OrderByExpression, nom::error:
     map(
         preceded(
             tuple((tag_no_case("order"), space1, tag_no_case("by"), space1)),
-            terminated(separated_list0(preceded(space0, char(',')), ordering_term), space0),
+            terminated(
+                separated_list0(delimited(multispace0, char(','), multispace0), ordering_term),
+                space0,
+            ),
         ),
         ast::OrderByExpression::new,
     )(i)

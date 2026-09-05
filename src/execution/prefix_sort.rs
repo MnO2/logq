@@ -7,37 +7,27 @@ use crate::execution::stream::Record;
 use crate::execution::types::Ordering;
 use crate::syntax::ast::PathExpr;
 
-/// Encode i32 into 4 bytes, big-endian, with sign bit flipped for unsigned sort order.
-/// i32::MIN -> 0x00000000, 0 -> 0x80000000, i32::MAX -> 0xFFFFFFFF.
-#[inline]
-fn encode_i32(value: i32, dest: &mut [u8]) {
-    let unsigned = (value as u32) ^ 0x80000000;
-    dest[..4].copy_from_slice(&unsigned.to_be_bytes());
-}
-
 /// Encode bool into 1 byte: false -> 0x00, true -> 0x01.
 #[inline]
 fn encode_bool(value: bool, dest: &mut [u8]) {
     dest[0] = value as u8;
 }
 
-/// Encode f32 into 4 bytes for sort-preserving unsigned comparison.
-/// NaN -> 0xFFFFFFFF, +Inf -> 0xFF800000 (via sign-flip of 0x7F800000),
-/// -Inf -> 0x007FFFFF (via bit-flip of 0xFF800000).
-/// Positive values: flip sign bit. Negative values: flip all bits.
-#[inline]
-fn encode_f32_to(value: f32, dest: &mut [u8]) {
+/// Both public numeric types are exact in f64. One encoding permits numeric
+/// comparison across types without rounding large integers through f32.
+fn encode_number(value: f64, dest: &mut [u8]) {
     let encoded = if value.is_nan() {
-        u32::MAX
+        u64::MAX
     } else {
-        let bits = value.to_bits();
-        if bits & 0x80000000 != 0 {
-            !bits // negative: flip all bits
+        // OrderedFloat considers signed zero equal, so preserve input ties.
+        let bits = if value == 0.0 {
+            0.0f64.to_bits()
         } else {
-            bits ^ 0x80000000 // non-negative: flip sign bit
-        }
+            value.to_bits()
+        };
+        if bits & (1 << 63) != 0 { !bits } else { bits ^ (1 << 63) }
     };
-    dest[..4].copy_from_slice(&encoded.to_be_bytes());
+    dest[..8].copy_from_slice(&encoded.to_be_bytes());
 }
 
 /// Encode DateTime as i64 epoch seconds, sign-flipped big-endian.
@@ -63,7 +53,6 @@ fn encode_string_prefix(s: &str, dest: &mut [u8], prefix_len: usize) {
 const TYPE_TAG_NULL: u8 = 0x00;
 const TYPE_TAG_BOOL: u8 = 0x01;
 const TYPE_TAG_INT: u8 = 0x02;
-const TYPE_TAG_FLOAT: u8 = 0x03;
 const TYPE_TAG_STRING: u8 = 0x04;
 const TYPE_TAG_DATETIME: u8 = 0x05;
 const TYPE_TAG_HOST: u8 = 0x06;
@@ -74,15 +63,32 @@ const TYPE_TAG_ARRAY: u8 = 0x09;
 const NULL_BYTE_NON_NULL: u8 = 0x00;
 const NULL_BYTE_NULL: u8 = 0xFF;
 
-/// String-type tags that need fallback tie-breaking.
-const STRING_TYPE_TAGS: [u8; 3] = [TYPE_TAG_STRING, TYPE_TAG_HOST, TYPE_TAG_HTTP_REQUEST];
+fn type_rank(value: &Value) -> u8 {
+    match value {
+        Value::Boolean(_) => TYPE_TAG_BOOL,
+        Value::Int(_) | Value::Float(_) => TYPE_TAG_INT,
+        Value::String(_) => TYPE_TAG_STRING,
+        Value::DateTime(_) => TYPE_TAG_DATETIME,
+        Value::Host(_) => TYPE_TAG_HOST,
+        Value::HttpRequest(_) => TYPE_TAG_HTTP_REQUEST,
+        Value::Object(_) => TYPE_TAG_OBJECT,
+        Value::Array(_) => TYPE_TAG_ARRAY,
+        Value::Null | Value::Missing => u8::MAX,
+    }
+}
 
 /// Compare two Values by reference for sorting. Returns Ordering assuming ascending.
 /// Null/Missing sort after all non-null values in ascending order.
-fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub(crate) fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int(i1), Value::Int(i2)) => i1.cmp(i2),
         (Value::Float(f1), Value::Float(f2)) => f1.cmp(f2),
+        (Value::Int(i), Value::Float(f)) => {
+            ordered_float::OrderedFloat(*i as f64).cmp(&ordered_float::OrderedFloat(f.into_inner() as f64))
+        }
+        (Value::Float(f), Value::Int(i)) => {
+            ordered_float::OrderedFloat(f.into_inner() as f64).cmp(&ordered_float::OrderedFloat(*i as f64))
+        }
         (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
         (Value::Boolean(b1), Value::Boolean(b2)) => b1.cmp(b2),
         (Value::DateTime(dt1), Value::DateTime(dt2)) => dt1.cmp(dt2),
@@ -102,7 +108,9 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         | (Value::Missing, Value::Null) => std::cmp::Ordering::Equal,
         (Value::Null, _) | (Value::Missing, _) => std::cmp::Ordering::Greater,
         (_, Value::Null) | (_, Value::Missing) => std::cmp::Ordering::Less,
-        _ => std::cmp::Ordering::Equal,
+        // Same-type complex values remain ties. Different type families must
+        // have a consistent order to keep sorting and heap comparison transitive.
+        _ => type_rank(a).cmp(&type_rank(b)),
     }
 }
 
@@ -164,6 +172,7 @@ pub(crate) struct BoundedTopN {
     orderings: Vec<Ordering>,
     next_ordinal: usize,
     peak_retained: usize,
+    estimated_bytes: usize,
     memory: crate::execution::memory::MemoryTracker,
 }
 
@@ -193,16 +202,19 @@ impl BoundedTopN {
         memory: crate::execution::memory::MemoryTracker,
     ) -> Self {
         Self {
-            heap: Vec::with_capacity(capacity),
+            // LIMIT is user-controlled. Allocate only as rows are retained.
+            heap: Vec::new(),
             capacity,
             sort_keys,
             orderings,
             next_ordinal: 0,
             peak_retained: 0,
+            estimated_bytes: 0,
             memory,
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn push(&mut self, record: Record) {
         self.try_push(record)
             .expect("unlimited top-N memory tracker cannot fail");
@@ -222,15 +234,64 @@ impl BoundedTopN {
 
         if self.heap.len() < self.capacity {
             self.memory.add(estimated_bytes)?;
+            self.estimated_bytes = self.estimated_bytes.saturating_add(estimated_bytes);
             self.heap.push(ranked);
             self.sift_up(self.heap.len() - 1);
             self.peak_retained = self.peak_retained.max(self.heap.len());
         } else if compare_ranked(&ranked, &self.heap[0], &self.sort_keys, &self.orderings).is_lt() {
             self.memory.replace(self.heap[0].estimated_bytes, estimated_bytes)?;
+            self.estimated_bytes = self
+                .estimated_bytes
+                .saturating_sub(self.heap[0].estimated_bytes)
+                .saturating_add(estimated_bytes);
             self.heap[0] = ranked;
             self.sift_down(0);
         }
         Ok(())
+    }
+
+    /// The supplied keys must describe the record returned by `materialize`, in
+    /// sort-key order. Rejected rows do not construct their payload; equal keys
+    /// retain earlier input rows exactly as the eager heap does.
+    pub(crate) fn try_push_lazy(
+        &mut self,
+        keys: &[Value],
+        materialize: impl FnOnce() -> Record,
+    ) -> crate::execution::types::StreamResult<bool> {
+        debug_assert_eq!(keys.len(), self.sort_keys.len());
+        let accepted = self.capacity > 0
+            && (self.heap.len() < self.capacity || {
+                let worst = &self.heap[0].record;
+                let mut ordering = std::cmp::Ordering::Equal;
+                for (index, (key, path)) in keys.iter().zip(&self.sort_keys).enumerate() {
+                    let owned;
+                    let other = if let Some(value) = worst.get_ref(path) {
+                        value
+                    } else {
+                        owned = worst.get(path);
+                        &owned
+                    };
+                    ordering = compare_values(key, other);
+                    if self.orderings.get(index) == Some(&Ordering::Desc) {
+                        ordering = ordering.reverse();
+                    }
+                    if !ordering.is_eq() {
+                        break;
+                    }
+                }
+                ordering.is_lt()
+            });
+        if accepted {
+            self.try_push(materialize())?;
+        } else {
+            self.next_ordinal += 1;
+        }
+        Ok(accepted)
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        self.estimated_bytes
+            .saturating_add(self.heap.capacity() * std::mem::size_of::<RankedRecord>())
     }
 
     fn sift_up(&mut self, mut index: usize) {
@@ -330,12 +391,12 @@ impl PrefixSortEncoder {
             Value::Int(i) => {
                 slot[0] = NULL_BYTE_NON_NULL;
                 slot[1] = TYPE_TAG_INT;
-                encode_i32(*i, &mut slot[2..]);
+                encode_number(*i as f64, &mut slot[2..]);
             }
             Value::Float(f) => {
                 slot[0] = NULL_BYTE_NON_NULL;
-                slot[1] = TYPE_TAG_FLOAT;
-                encode_f32_to(f.into_inner(), &mut slot[2..]);
+                slot[1] = TYPE_TAG_INT;
+                encode_number(f.into_inner() as f64, &mut slot[2..]);
             }
             Value::String(s) => {
                 slot[0] = NULL_BYTE_NON_NULL;
@@ -360,11 +421,11 @@ impl PrefixSortEncoder {
                 encode_string_prefix(&s, &mut slot[2..], self.string_prefix_len);
             }
             Value::Object(_) => {
-                slot[0] = NULL_BYTE_NULL;
+                slot[0] = NULL_BYTE_NON_NULL;
                 slot[1] = TYPE_TAG_OBJECT;
             }
             Value::Array(_) => {
-                slot[0] = NULL_BYTE_NULL;
+                slot[0] = NULL_BYTE_NON_NULL;
                 slot[1] = TYPE_TAG_ARRAY;
             }
         }
@@ -399,17 +460,17 @@ impl PrefixSortEncoder {
 
         for (i, record) in records.iter().enumerate().take(n) {
             let entry_offset = i * entry_w;
-            for k in 0..num_keys {
+            for (k, key) in sort_keys.iter().enumerate() {
                 let slot_offset = entry_offset + k * slot_w;
                 let val_owned;
-                let val = match record.get_ref(&sort_keys[k]) {
+                let val = match record.get_ref(key) {
                     Some(v) => v,
                     None => {
-                        val_owned = record.get(&sort_keys[k]);
+                        val_owned = record.get(key);
                         &val_owned
                     }
                 };
-                let descending = orderings[k] == Ordering::Desc;
+                let descending = orderings.get(k) == Some(&Ordering::Desc);
                 self.encode_value(val, &mut buffer[slot_offset..slot_offset + slot_w], descending);
             }
             // Write row index as u32 big-endian
@@ -422,59 +483,34 @@ impl PrefixSortEncoder {
         indices.sort_unstable_by(|&a, &b| {
             let a_off = a * entry_w;
             let b_off = b * entry_w;
-            let a_key = &buffer[a_off..a_off + key_w];
-            let b_key = &buffer[b_off..b_off + key_w];
-
-            let ord = a_key.cmp(b_key);
-            if ord != std::cmp::Ordering::Equal {
-                return ord;
-            }
-
-            // Tie-breaking: check if any key position has a string-type tag
-            let row_a = u32::from_be_bytes(buffer[a_off + key_w..a_off + key_w + 4].try_into().unwrap()) as usize;
-            let row_b = u32::from_be_bytes(buffer[b_off + key_w..b_off + key_w + 4].try_into().unwrap()) as usize;
-
-            for k in 0..num_keys {
-                let slot_a = a_off + k * slot_w;
-                let mut tag_a = buffer[slot_a + 1];
-                if orderings[k] == Ordering::Desc {
-                    tag_a = !tag_a;
+            // Resolve each prefix collision before consulting the next key:
+            // a long string or subsecond timestamp can still decide ordering.
+            for (k, key) in sort_keys.iter().enumerate() {
+                let a_slot = &buffer[a_off + k * slot_w..a_off + (k + 1) * slot_w];
+                let b_slot = &buffer[b_off + k * slot_w..b_off + (k + 1) * slot_w];
+                let encoded_order = a_slot.cmp(b_slot);
+                if !encoded_order.is_eq() {
+                    return encoded_order;
                 }
-                let slot_b = b_off + k * slot_w;
-                let mut tag_b = buffer[slot_b + 1];
-                if orderings[k] == Ordering::Desc {
-                    tag_b = !tag_b;
+                let mut tag = a_slot[1];
+                if orderings.get(k) == Some(&Ordering::Desc) {
+                    tag = !tag;
                 }
-
-                if STRING_TYPE_TAGS.contains(&tag_a) || STRING_TYPE_TAGS.contains(&tag_b) {
-                    let va_owned;
-                    let va = match records[row_a].get_ref(&sort_keys[k]) {
-                        Some(v) => v,
-                        None => {
-                            va_owned = records[row_a].get(&sort_keys[k]);
-                            &va_owned
-                        }
-                    };
-                    let vb_owned;
-                    let vb = match records[row_b].get_ref(&sort_keys[k]) {
-                        Some(v) => v,
-                        None => {
-                            vb_owned = records[row_b].get(&sort_keys[k]);
-                            &vb_owned
-                        }
-                    };
-                    let cmp = compare_values(va, vb);
-                    let ordered = match orderings[k] {
-                        Ordering::Asc => cmp,
-                        Ordering::Desc => cmp.reverse(),
-                    };
-                    if ordered != std::cmp::Ordering::Equal {
-                        return ordered;
-                    }
+                if !matches!(
+                    tag,
+                    TYPE_TAG_STRING | TYPE_TAG_DATETIME | TYPE_TAG_HOST | TYPE_TAG_HTTP_REQUEST
+                ) {
+                    // Numeric, boolean and nullish encodings are complete.
+                    continue;
+                }
+                let direction = orderings.get(k).copied().unwrap_or(Ordering::Asc);
+                let full_order = compare_records(&records[a], &records[b], std::slice::from_ref(key), &[direction]);
+                if !full_order.is_eq() {
+                    return full_order;
                 }
             }
-
-            std::cmp::Ordering::Equal
+            // The row index makes equal keys stable even with unstable sorting.
+            a.cmp(&b)
         });
 
         // Phase 3: Reorder records
@@ -498,41 +534,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    // ---- encode_i32 tests ----
-
-    #[test]
-    fn test_encode_i32_ordering() {
-        let mut buf_neg = [0u8; 4];
-        let mut buf_zero = [0u8; 4];
-        let mut buf_pos = [0u8; 4];
-        let mut buf_max = [0u8; 4];
-        let mut buf_min = [0u8; 4];
-
-        encode_i32(i32::MIN, &mut buf_min);
-        encode_i32(-1, &mut buf_neg);
-        encode_i32(0, &mut buf_zero);
-        encode_i32(1, &mut buf_pos);
-        encode_i32(i32::MAX, &mut buf_max);
-
-        assert!(buf_min < buf_neg);
-        assert!(buf_neg < buf_zero);
-        assert!(buf_zero < buf_pos);
-        assert!(buf_pos < buf_max);
-    }
-
-    #[test]
-    fn test_encode_i32_specific_values() {
-        let mut buf = [0u8; 4];
-        encode_i32(i32::MIN, &mut buf);
-        assert_eq!(buf, [0x00, 0x00, 0x00, 0x00]);
-
-        encode_i32(0, &mut buf);
-        assert_eq!(buf, [0x80, 0x00, 0x00, 0x00]);
-
-        encode_i32(i32::MAX, &mut buf);
-        assert_eq!(buf, [0xFF, 0xFF, 0xFF, 0xFF]);
-    }
-
     // ---- encode_bool tests ----
 
     #[test]
@@ -544,59 +545,6 @@ mod tests {
         assert!(buf_f < buf_t);
         assert_eq!(buf_f[0], 0x00);
         assert_eq!(buf_t[0], 0x01);
-    }
-
-    // ---- encode_f32_to tests ----
-
-    #[test]
-    fn test_encode_f32_ordering() {
-        let cases: Vec<f32> = vec![
-            f32::NEG_INFINITY,
-            -1000.0,
-            -1.0,
-            -0.0,
-            0.0,
-            1.0,
-            1000.0,
-            f32::INFINITY,
-            f32::NAN,
-        ];
-        let mut prev = [0u8; 4];
-        encode_f32_to(cases[0], &mut prev);
-        for &val in &cases[1..] {
-            let mut curr = [0u8; 4];
-            encode_f32_to(val, &mut curr);
-            assert!(
-                prev <= curr,
-                "failed: prev {:?} should <= curr {:?} for value {}",
-                prev,
-                curr,
-                val
-            );
-            prev = curr;
-        }
-    }
-
-    #[test]
-    fn test_encode_f32_special_values() {
-        let mut buf = [0u8; 4];
-
-        encode_f32_to(f32::NEG_INFINITY, &mut buf);
-        assert_eq!(buf, [0x00, 0x7F, 0xFF, 0xFF]);
-
-        encode_f32_to(0.0, &mut buf);
-        assert_eq!(buf, [0x80, 0x00, 0x00, 0x00]);
-
-        encode_f32_to(f32::NAN, &mut buf);
-        assert_eq!(buf, [0xFF, 0xFF, 0xFF, 0xFF]);
-    }
-
-    #[test]
-    fn test_encode_f32_neg_nan() {
-        let neg_nan = f32::from_bits(0xFFC00000);
-        let mut buf = [0u8; 4];
-        encode_f32_to(neg_nan, &mut buf);
-        assert_eq!(buf, [0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
     // ---- encode_datetime tests ----
@@ -670,6 +618,111 @@ mod tests {
     use ordered_float::OrderedFloat;
 
     #[test]
+    fn sort_strategies_agree_on_mixed_numbers_nulls_and_stable_ties() {
+        let values = vec![
+            Value::Null,
+            Value::Int(3),
+            Value::Float(OrderedFloat(1.5)),
+            Value::Missing,
+            Value::Float(OrderedFloat(-0.0)),
+            Value::Int(0),
+            Value::Float(OrderedFloat(0.0)),
+            Value::Int(16_777_217),
+            Value::Float(OrderedFloat(16_777_216.0)),
+            Value::Int(16_777_216),
+        ];
+        let records: Vec<_> = values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| Record::new(&["x".into(), "id".into()], vec![value, Value::Int(i as i32)]))
+            .collect();
+        let keys = vec![PathExpr::new(vec![PathSegment::AttrName("x".into())])];
+        for (direction, expected) in [
+            (Ordering::Asc, vec![4, 5, 6, 2, 1, 8, 9, 7, 0, 3]),
+            (Ordering::Desc, vec![0, 3, 7, 8, 9, 1, 2, 4, 5, 6]),
+        ] {
+            for threshold in [0, usize::MAX] {
+                let output = PrefixSortEncoder {
+                    threshold,
+                    ..Default::default()
+                }
+                .sort(records.clone(), &keys, &[direction]);
+                let ids: Vec<_> = output
+                    .iter()
+                    .map(|row| row.get_field_value("id").unwrap().clone())
+                    .collect();
+                assert_eq!(
+                    ids,
+                    expected.iter().copied().map(Value::Int).collect::<Vec<_>>(),
+                    "threshold {threshold}, direction {direction:?}"
+                );
+            }
+            let mut top = BoundedTopN::new(8, keys.clone(), vec![direction]);
+            for record in records.clone() {
+                top.push(record);
+            }
+            let ids: Vec<_> = top
+                .finish()
+                .iter()
+                .map(|row| row.get_field_value("id").unwrap().clone())
+                .collect();
+            assert_eq!(ids, expected[..8].iter().copied().map(Value::Int).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn prefix_collisions_resolve_first_key_before_secondary_keys() {
+        use chrono::{FixedOffset, TimeZone};
+        let utc = FixedOffset::east_opt(0).unwrap();
+        let cases = [
+            (
+                Value::String("same-prefix-b".into()),
+                Value::String("same-prefix-a".into()),
+            ),
+            (
+                Value::DateTime(utc.timestamp_opt(1, 2).unwrap()),
+                Value::DateTime(utc.timestamp_opt(1, 1).unwrap()),
+            ),
+        ];
+        let keys = vec![
+            PathExpr::new(vec![PathSegment::AttrName("x".into())]),
+            PathExpr::new(vec![PathSegment::AttrName("id".into())]),
+        ];
+        for (later, earlier) in cases {
+            let records = vec![
+                Record::new(&["x".into(), "id".into()], vec![later, Value::Int(0)]),
+                Record::new(&["x".into(), "id".into()], vec![earlier, Value::Int(1)]),
+            ];
+            let output = PrefixSortEncoder {
+                threshold: 0,
+                string_prefix_len: 4,
+            }
+            .sort(records, &keys, &[Ordering::Asc, Ordering::Asc]);
+            assert_eq!(output[0].get_field_value("id"), Some(&Value::Int(1)));
+        }
+    }
+
+    #[test]
+    fn encoded_sort_keeps_input_order_for_equal_keys() {
+        let records: Vec<_> = (0..256)
+            .map(|i| Record::new(&["x".into(), "id".into()], vec![Value::Int(i % 3), Value::Int(i)]))
+            .collect();
+        let keys = vec![PathExpr::new(vec![PathSegment::AttrName("x".into())])];
+        let output = PrefixSortEncoder::default().sort(records, &keys, &[Ordering::Asc]);
+        for group in 0..3 {
+            let ids: Vec<_> = output
+                .iter()
+                .filter(|row| row.get_field_value("x") == Some(&Value::Int(group)))
+                .map(|row| row.get_field_value("id").unwrap().clone())
+                .collect();
+            assert_eq!(
+                ids,
+                (0..256).filter(|i| i % 3 == group).map(Value::Int).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn bounded_top_n_never_retains_more_than_its_limit() {
         let key = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
         let mut top_n = BoundedTopN::new(3, vec![key], vec![Ordering::Asc]);
@@ -684,6 +737,43 @@ mod tests {
             .map(|record| record.get_field_value("x").unwrap().clone())
             .collect();
         assert_eq!(values, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    }
+
+    #[test]
+    fn lazy_top_n_materializes_only_admitted_payloads_and_keeps_stable_ties() {
+        let key = PathExpr::new(vec![PathSegment::AttrName("x".to_string())]);
+        let mut top_n = BoundedTopN::new(2, vec![key], vec![Ordering::Asc]);
+        let mut materialized = 0;
+        for (value, label) in [(1, "first"), (1, "second"), (2, "worse"), (0, "best"), (1, "late tie")] {
+            top_n
+                .try_push_lazy(&[Value::Int(value)], || {
+                    materialized += 1;
+                    Record::new(
+                        &["x".into(), "label".into()],
+                        vec![Value::Int(value), Value::String(label.into())],
+                    )
+                })
+                .unwrap();
+        }
+        assert_eq!(materialized, 3);
+        let records = top_n.finish();
+        assert_eq!(records[0].get_field_value("label"), Some(&Value::String("best".into())));
+        assert_eq!(
+            records[1].get_field_value("label"),
+            Some(&Value::String("first".into()))
+        );
+    }
+
+    #[test]
+    fn zero_top_n_does_not_materialize_and_large_limits_do_not_preallocate() {
+        let mut zero = BoundedTopN::new(0, vec![], vec![]);
+        assert!(
+            !zero
+                .try_push_lazy(&[], || panic!("zero LIMIT evaluated payload"))
+                .unwrap()
+        );
+        let large = BoundedTopN::new(usize::MAX, vec![], vec![]);
+        assert!(large.finish().is_empty());
     }
 
     #[test]
@@ -773,7 +863,7 @@ mod tests {
         for val in &values[1..] {
             let mut curr = vec![0u8; slot_width];
             encoder.encode_value(val, &mut curr, false);
-            assert!(prev < curr, "type ordering failed for {:?}", val);
+            assert!(prev <= curr, "type ordering failed for {:?}", val);
             prev = curr;
         }
     }
@@ -796,8 +886,9 @@ mod tests {
         encoder.encode_value(&Value::Array(vec![]), &mut arr_slot, false);
 
         assert!(string_slot < null_slot, "typed values should sort before Null");
-        assert!(null_slot < obj_slot, "Null should sort before Object");
+        assert!(obj_slot < null_slot, "Null should sort after Object");
         assert!(obj_slot < arr_slot, "Object should sort before Array");
+        assert!(arr_slot < null_slot, "Null should sort after Array");
     }
 
     // ---- sort function tests ----

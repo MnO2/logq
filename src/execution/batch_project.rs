@@ -6,32 +6,55 @@ use crate::execution::types::StreamResult;
 /// Projects (selects) a subset of columns from a ColumnBatch.
 pub(crate) struct BatchProjectOperator {
     child: Box<dyn BatchStream>,
-    output_columns: Vec<String>,
+    projection: Vec<(String, String)>,
     schema: BatchSchema,
+    scope: crate::common::types::Variables,
 }
 
 impl BatchProjectOperator {
+    #[cfg(test)]
     pub fn new(child: Box<dyn BatchStream>, output_columns: Vec<String>) -> Self {
-        let child_schema = child.schema();
-        let types: Vec<ColumnType> = output_columns
-            .iter()
-            .filter_map(|name| {
-                child_schema
-                    .names
-                    .iter()
-                    .position(|n| n == name)
-                    .map(|i| child_schema.types[i].clone())
-            })
-            .collect();
+        Self::with_projection(
+            child,
+            output_columns.into_iter().map(|name| (name.clone(), name)).collect(),
+        )
+    }
+
+    pub fn with_projection(child: Box<dyn BatchStream>, projection: Vec<(String, String)>) -> Self {
+        // LinkedHashMap moves overwritten output names to their last position.
+        let mut unique: Vec<(String, String)> = Vec::new();
+        for (source, output) in projection {
+            if let Some(index) = unique.iter().position(|(_, name)| name == &output) {
+                unique.remove(index);
+            }
+            unique.push((source, output));
+        }
         let schema = BatchSchema {
-            names: output_columns.clone(),
-            types,
+            names: unique.iter().map(|(_, output)| output.clone()).collect(),
+            types: unique
+                .iter()
+                .map(|(source, _)| {
+                    child
+                        .schema()
+                        .names
+                        .iter()
+                        .position(|n| n == source)
+                        .map(|i| child.schema().types[i].clone())
+                        .unwrap_or(ColumnType::Mixed)
+                })
+                .collect(),
         };
         Self {
             child,
-            output_columns,
+            projection: unique,
             schema,
+            scope: crate::common::types::Variables::new(),
         }
+    }
+
+    pub(crate) fn with_scope(mut self, scope: crate::common::types::Variables) -> Self {
+        self.scope = scope;
+        self
     }
 }
 
@@ -45,17 +68,55 @@ impl BatchStream for BatchProjectOperator {
                     selection,
                     len,
                 } = batch;
-                let mut col_map: Vec<(String, TypedColumn)> = names.into_iter().zip(columns).collect();
-
-                let mut new_columns = Vec::with_capacity(self.output_columns.len());
-                let mut new_names = Vec::with_capacity(self.output_columns.len());
-
-                for output_name in &self.output_columns {
-                    if let Some(pos) = col_map.iter().position(|(n, _)| n == output_name) {
-                        let (name, col) = col_map.remove(pos);
-                        new_columns.push(col);
-                        new_names.push(name);
-                    }
+                let mut columns: Vec<Option<TypedColumn>> = columns.into_iter().map(Some).collect();
+                let mut new_columns = Vec::with_capacity(self.projection.len());
+                let mut new_names = Vec::with_capacity(self.projection.len());
+                for (index, (source, output)) in self.projection.iter().enumerate() {
+                    let column = if let Some(pos) = names.iter().position(|name| name == source) {
+                        if self.projection[index + 1..].iter().any(|(name, _)| name == source) {
+                            let data: Vec<_> = (0..len)
+                                .map(|row| {
+                                    BatchToRowAdapter::extract_value(
+                                        columns[pos].as_ref().expect("column still needed"),
+                                        row,
+                                    )
+                                })
+                                .collect();
+                            let mut null = crate::simd::bitmap::Bitmap::all_set(len);
+                            let mut missing = crate::simd::bitmap::Bitmap::all_set(len);
+                            for (row, value) in data.iter().enumerate() {
+                                match value {
+                                    crate::common::types::Value::Null => null.unset(row),
+                                    crate::common::types::Value::Missing => missing.unset(row),
+                                    _ => {}
+                                }
+                            }
+                            TypedColumn::Mixed { data, null, missing }
+                        } else {
+                            columns[pos].take().expect("last column use")
+                        }
+                    } else {
+                        let value = self
+                            .scope
+                            .get(source)
+                            .cloned()
+                            .unwrap_or(crate::common::types::Value::Missing);
+                        TypedColumn::Mixed {
+                            null: if matches!(value, crate::common::types::Value::Null) {
+                                crate::simd::bitmap::Bitmap::all_unset(len)
+                            } else {
+                                crate::simd::bitmap::Bitmap::all_set(len)
+                            },
+                            missing: if matches!(value, crate::common::types::Value::Missing) {
+                                crate::simd::bitmap::Bitmap::all_unset(len)
+                            } else {
+                                crate::simd::bitmap::Bitmap::all_set(len)
+                            },
+                            data: vec![value; len],
+                        }
+                    };
+                    new_columns.push(column);
+                    new_names.push(output.clone());
                 }
 
                 Ok(Some(ColumnBatch {

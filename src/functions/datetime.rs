@@ -9,6 +9,65 @@ use chrono::TimeZone;
 use chrono::Timelike;
 use ordered_float::OrderedFloat;
 
+/// A validated interval for repeated bucket evaluation. Buckets are aligned to
+/// the timestamp's local clock, including offsets that are not whole hours.
+#[derive(Debug)]
+pub(crate) enum CompiledTimeBucket {
+    Seconds(u32),
+    Minutes(u32),
+    Hours(u32),
+    Days(u32),
+}
+
+impl CompiledTimeBucket {
+    pub(crate) fn parse(interval: &str) -> Result<Self, ExpressionError> {
+        use common::types::TimeIntervalUnit;
+        let interval = common::types::parse_time_interval(interval)?;
+        let n = interval.n;
+        if n == 0 {
+            return Err(ExpressionError::TimeIntervalZero);
+        }
+        match interval.unit {
+            TimeIntervalUnit::Second if n <= 60 && 60 % n == 0 => Ok(Self::Seconds(n)),
+            TimeIntervalUnit::Minute if n <= 60 && 60 % n == 0 => Ok(Self::Minutes(n)),
+            TimeIntervalUnit::Hour if n <= 24 && 24 % n == 0 => Ok(Self::Hours(n)),
+            TimeIntervalUnit::Day => Ok(Self::Days(n)),
+            _ => Err(ExpressionError::TimeIntervalNotSupported),
+        }
+    }
+
+    pub(crate) fn apply(
+        &self,
+        timestamp: &chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<chrono::DateTime<chrono::FixedOffset>, ExpressionError> {
+        let bucket = match self {
+            Self::Seconds(n) => timestamp
+                .with_nanosecond(0)
+                .and_then(|dt| dt.with_second(dt.second() / n * n)),
+            Self::Minutes(n) => timestamp
+                .with_nanosecond(0)
+                .and_then(|dt| dt.with_second(0))
+                .and_then(|dt| dt.with_minute(dt.minute() / n * n)),
+            Self::Hours(n) => timestamp
+                .with_nanosecond(0)
+                .and_then(|dt| dt.with_second(0))
+                .and_then(|dt| dt.with_minute(0))
+                .and_then(|dt| dt.with_hour(dt.hour() / n * n)),
+            Self::Days(n) => {
+                let day = i64::from(timestamp.date_naive().num_days_from_ce());
+                let n = i64::from(*n);
+                let bucket_day = day.div_euclid(n) * n;
+                i32::try_from(bucket_day)
+                    .ok()
+                    .and_then(NaiveDate::from_num_days_from_ce_opt)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .and_then(|midnight| timestamp.offset().from_local_datetime(&midnight).single())
+            }
+        };
+        bucket.ok_or(ExpressionError::TimeIntervalNotSupported)
+    }
+}
+
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
     // date_part: extract a date component from a DateTime
     registry.register(FunctionDef {
@@ -32,112 +91,15 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         }),
     })?;
 
-    // time_bucket: bucket a DateTime into time intervals
+    // time_bucket: scalar and batch execution share exactly the same bucketing rules.
     registry.register(FunctionDef {
         name: "time_bucket".to_string(),
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(time_interval_str), Value::DateTime(dt)) => {
-                let time_interval = common::types::parse_time_interval(time_interval_str)?;
-
-                if time_interval.n == 0 {
-                    return Err(ExpressionError::TimeIntervalZero);
-                }
-
-                match time_interval.unit {
-                    common::types::TimeIntervalUnit::Second => {
-                        if time_interval.n > 60 || 60 % time_interval.n != 0 {
-                            return Err(ExpressionError::TimeIntervalNotSupported);
-                        }
-
-                        let mut target_opt: Option<u32> = None;
-                        let step_size: usize = time_interval.n as usize;
-                        //FIXME: binary search
-                        for point in (0..=60u32).rev().step_by(step_size) {
-                            if point <= dt.second() {
-                                target_opt = Some(point);
-                                break;
-                            }
-                        }
-
-                        if let Some(target) = target_opt {
-                            let new_dt = dt.with_second(target).and_then(|d| d.with_nanosecond(0)).unwrap();
-                            Ok(Value::DateTime(new_dt))
-                        } else {
-                            unreachable!();
-                        }
-                    }
-                    common::types::TimeIntervalUnit::Minute => {
-                        if time_interval.n > 60 || 60 % time_interval.n != 0 {
-                            return Err(ExpressionError::TimeIntervalNotSupported);
-                        }
-
-                        let mut target_opt: Option<u32> = None;
-                        let step_size: usize = time_interval.n as usize;
-                        //FIXME: binary search
-                        for point in (0..=60u32).rev().step_by(step_size) {
-                            if point <= dt.minute() {
-                                target_opt = Some(point);
-                                break;
-                            }
-                        }
-
-                        if let Some(target) = target_opt {
-                            let new_dt = dt
-                                .with_minute(target)
-                                .and_then(|d| d.with_second(0))
-                                .and_then(|d| d.with_nanosecond(0))
-                                .unwrap();
-                            Ok(Value::DateTime(new_dt))
-                        } else {
-                            unreachable!();
-                        }
-                    }
-                    common::types::TimeIntervalUnit::Hour => {
-                        if time_interval.n > 24 || 24 % time_interval.n != 0 {
-                            return Err(ExpressionError::TimeIntervalNotSupported);
-                        }
-
-                        let mut target_opt: Option<u32> = None;
-                        let step_size: usize = time_interval.n as usize;
-                        //FIXME: binary search
-                        for point in (0..=24u32).rev().step_by(step_size) {
-                            if point <= dt.hour() {
-                                target_opt = Some(point);
-                                break;
-                            }
-                        }
-
-                        if let Some(target) = target_opt {
-                            let new_dt = dt
-                                .with_hour(target)
-                                .and_then(|d| d.with_minute(0))
-                                .and_then(|d| d.with_second(0))
-                                .and_then(|d| d.with_nanosecond(0))
-                                .unwrap();
-                            Ok(Value::DateTime(new_dt))
-                        } else {
-                            unreachable!();
-                        }
-                    }
-                    common::types::TimeIntervalUnit::Day => {
-                        let day = i64::from(dt.date_naive().num_days_from_ce());
-                        let interval = i64::from(time_interval.n);
-                        let bucket_day = day.div_euclid(interval) * interval;
-                        let bucket_day = i32::try_from(bucket_day)
-                            .ok()
-                            .and_then(NaiveDate::from_num_days_from_ce_opt)
-                            .ok_or(ExpressionError::TimeIntervalNotSupported)?;
-                        let midnight = bucket_day
-                            .and_hms_opt(0, 0, 0)
-                            .and_then(|naive| dt.offset().from_local_datetime(&naive).single())
-                            .ok_or(ExpressionError::TimeIntervalNotSupported)?;
-                        Ok(Value::DateTime(midnight))
-                    }
-                    _ => Err(ExpressionError::TimeIntervalNotSupported),
-                }
-            }
+            (Value::String(interval), Value::DateTime(timestamp)) => CompiledTimeBucket::parse(interval)?
+                .apply(timestamp)
+                .map(Value::DateTime),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -470,6 +432,56 @@ mod tests {
             r.call("time_bucket", &[Value::String("5 minutes".to_string().into()), dt]),
             Ok(expected)
         );
+    }
+
+    #[test]
+    fn compiled_time_bucket_preserves_wall_clock_offset_and_fractional_rules() {
+        let cases = [
+            (
+                "15s",
+                "2026-04-07T10:13:47.987654321+05:45",
+                "2026-04-07T10:13:45+05:45",
+            ),
+            ("5m", "2026-04-07T10:13:47.987654321+05:45", "2026-04-07T10:10:00+05:45"),
+            ("2h", "2026-04-07T10:13:47.987654321+05:45", "2026-04-07T10:00:00+05:45"),
+            ("1d", "2026-04-07T10:13:47.987654321+05:45", "2026-04-07T00:00:00+05:45"),
+            (
+                "2 days",
+                "2015-11-01T18:45:37.691548-03:30",
+                "2015-10-31T00:00:00-03:30",
+            ),
+            (
+                "30s",
+                "1969-12-31T23:59:59.999999999-03:30",
+                "1969-12-31T23:59:30-03:30",
+            ),
+        ];
+        let registry = make_registry();
+        for (interval, input, expected) in cases {
+            let dt = chrono::DateTime::parse_from_rfc3339(input).unwrap();
+            let expected = chrono::DateTime::parse_from_rfc3339(expected).unwrap();
+            let result = CompiledTimeBucket::parse(interval).unwrap().apply(&dt).unwrap();
+            assert_eq!(result, expected);
+            assert_eq!(result.offset(), expected.offset());
+            assert_eq!(result.nanosecond(), 0);
+            assert_eq!(
+                registry.call("time_bucket", &[Value::String(interval.into()), Value::DateTime(dt)]),
+                Ok(Value::DateTime(result))
+            );
+        }
+    }
+
+    #[test]
+    fn compiled_time_bucket_matches_scalar_interval_errors() {
+        let registry = make_registry();
+        let timestamp = make_datetime("2026-04-07T10:13:47Z");
+        for interval in ["0s", "7s", "13h", "1 month", "invalid"] {
+            let error = CompiledTimeBucket::parse(interval).unwrap_err();
+            assert_eq!(
+                registry.call("time_bucket", &[Value::String(interval.into()), timestamp.clone()]),
+                Err(error)
+            );
+        }
     }
 
     #[test]

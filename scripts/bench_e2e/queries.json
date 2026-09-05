@@ -27,9 +27,9 @@
     {
       "id": "top_latency",
       "label": "Top-10 latency",
-      "logq": "select request_id, latency from it order by latency desc limit 10",
-      "duckdb": "SELECT request_id, latency FROM read_ndjson_auto('{data}') ORDER BY latency DESC LIMIT 10",
-      "clickhouse": "SELECT request_id, latency FROM file('{data}', JSONEachRow) ORDER BY latency DESC LIMIT 10"
+      "logq": "select request_id, latency from it order by latency desc, request_id asc limit 10",
+      "duckdb": "SELECT request_id, latency FROM read_ndjson_auto('{data}') ORDER BY latency DESC, request_id ASC LIMIT 10",
+      "clickhouse": "SELECT request_id, latency FROM file('{data}', JSONEachRow) ORDER BY latency DESC, request_id ASC LIMIT 10"
     },
     {
       "id": "user_agent_like",

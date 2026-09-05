@@ -6,10 +6,11 @@ use ordered_float::OrderedFloat;
 use url;
 
 use flate2::read::GzDecoder;
+#[cfg(test)]
 use linked_hash_map::LinkedHashMap;
+#[cfg(test)]
 use serde_json::Value as JsonValue;
-use std::collections::VecDeque;
-use std::convert::TryFrom;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -18,6 +19,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::result;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// Returns the timestamp column name if this log format guarantees
 /// chronological ordering within a single file.
@@ -760,10 +762,11 @@ pub enum ReaderError {
     RegexFormat(#[from] RegexFormatError),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ReaderBuilder {
     capacity: usize,
     file_format: String,
+    required_fields: Option<Arc<HashSet<String>>>,
 }
 
 pub trait RecordRead {
@@ -825,7 +828,16 @@ impl ReaderBuilder {
         ReaderBuilder {
             capacity: 64 * (1 << 10),
             file_format,
+            required_fields: None,
         }
+    }
+
+    /// Materialize only these root fields for JSONL, validating all input values.
+    /// An empty list retains no fields; the default builder retains every field.
+    /// Other log formats keep their existing fixed-schema decoding.
+    pub fn with_required_fields(mut self, fields: Vec<String>) -> Self {
+        self.required_fields = Some(Arc::new(fields.into_iter().collect()));
+        self
     }
 
     pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> ReaderResult<Reader<Box<dyn Read>>> {
@@ -836,7 +848,7 @@ impl ReaderBuilder {
         MultiFileReader {
             paths: paths.iter().cloned().collect(),
             current: None,
-            builder: ReaderBuilder::new(self.file_format.clone()),
+            builder: self.clone(),
         }
     }
 
@@ -846,6 +858,8 @@ impl ReaderBuilder {
     }
 }
 
+// Keep the old conversion as a test oracle for the direct JSON decoder.
+#[cfg(test)]
 fn json_to_data_model(parsed: &JsonValue) -> Value {
     match parsed {
         JsonValue::Object(o) => {
@@ -923,6 +937,7 @@ pub struct Reader<R> {
     datatypes: Vec<DataType>,
     field_count: usize,
     regex_format: Option<RegexFormat>,
+    required_fields: Option<Arc<HashSet<String>>>,
 }
 
 impl<R: io::Read> Reader<R> {
@@ -949,6 +964,7 @@ impl<R: io::Read> Reader<R> {
             datatypes,
             field_count,
             regex_format,
+            required_fields: builder.required_fields.clone(),
         })
     }
 
@@ -1021,18 +1037,8 @@ impl<R: io::Read> RecordRead for Reader<R> {
             let record = Record::new_with_variables(record_vars);
             Ok(Some(record))
         } else if more_data > 0 && matches!(self.format, LogFormat::Jsonl) {
-            let parsed = serde_json::from_str(&self.buf)?;
-            let data_model = json_to_data_model(&parsed);
-
-            match data_model {
-                Value::Object(o) => {
-                    let record = Record::new_with_variables(*o);
-                    Ok(Some(record))
-                }
-                _ => {
-                    unimplemented!("Array or value on the first layer is not supported yet")
-                }
-            }
+            let variables = super::json_reader::parse_record(&self.buf, self.required_fields.as_deref())?;
+            Ok(Some(Record::new_with_variables(variables)))
         } else {
             Ok(None)
         }
@@ -1046,6 +1052,140 @@ mod tests {
     use chrono;
     use std::io::BufReader;
     use std::str::FromStr;
+
+    #[test]
+    fn test_jsonl_rejects_non_object_roots_without_panicking() {
+        for input in ["[]", "null", "42", "true", r#""text""#] {
+            let mut reader = ReaderBuilder::new("jsonl".to_string())
+                .with_reader(input.as_bytes())
+                .unwrap();
+            assert!(reader.read_record().is_err(), "root: {input}");
+        }
+    }
+
+    #[test]
+    fn test_jsonl_matches_existing_value_conversion_and_order() {
+        let inputs = [
+            r#"{"a":1,"b":2,"a":3,"nested":{"x":1,"y":2,"x":4}}"#,
+            r#"{"escaped\u005fkey":"\uD83D\uDE00\n\t\\\"","array":[null,true,false,{},[],[1,"x"]]}"#,
+            r#"{"lo":-2147483648,"hi":2147483647,"below":-2147483649,"above":2147483648,"u64":18446744073709551615,"huge":18446744073709551616,"float":1.0,"negative_zero":-0.0,"big_float":1e100}"#,
+        ];
+        for input in inputs {
+            let parsed: JsonValue = serde_json::from_str(input).unwrap();
+            let expected = json_to_data_model(&parsed);
+            let mut reader = ReaderBuilder::new("jsonl".to_string())
+                .with_reader(input.as_bytes())
+                .unwrap();
+            let actual = reader.read_record().unwrap().unwrap().into_variables();
+            assert_eq!(Value::Object(Box::new(actual.clone())), expected, "{input}");
+            assert_eq!(
+                actual.keys().map(String::as_str).collect::<Vec<_>>(),
+                parsed
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                "root order: {input}"
+            );
+            if let Some(Value::Object(nested)) = actual.get("nested") {
+                assert_eq!(nested.keys().map(String::as_str).collect::<Vec<_>>(), ["x", "y"]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_jsonl_projection_keeps_whole_roots_and_original_field_order() {
+        let input = r#"{"drop":0,"keep":{"child":[1,null,{"x":"value"}]},"second":2,"keep":{"child":[3,null]},"\u006eull":null}"#;
+        let mut reader = ReaderBuilder::new("jsonl".to_string())
+            .with_required_fields(vec!["second".into(), "keep".into(), "null".into(), "absent".into()])
+            .with_reader(input.as_bytes())
+            .unwrap();
+        let actual = reader.read_record().unwrap().unwrap().into_variables();
+        assert_eq!(
+            actual.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["keep", "second", "null"]
+        );
+        let expected = json_to_data_model(
+            &serde_json::from_str::<JsonValue>(r#"{"keep":{"child":[3,null]},"second":2,"null":null}"#).unwrap(),
+        );
+        assert_eq!(Value::Object(Box::new(actual)), expected);
+    }
+
+    #[test]
+    fn test_jsonl_empty_projection_validates_and_counts_every_object() {
+        let input = "{\"x\":1}\n{}\r\n{\"x\": [true, null, {\"nested\": \"value\"}]}";
+        let mut reader = ReaderBuilder::new("jsonl".to_string())
+            .with_required_fields(vec![])
+            .with_reader(input.as_bytes())
+            .unwrap();
+        for _ in 0..3 {
+            assert!(reader.read_record().unwrap().unwrap().to_variables().is_empty());
+        }
+        assert!(reader.read_record().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_jsonl_projection_preserves_validation_of_ignored_values() {
+        let mut inputs: Vec<String> = [
+            r#"{"keep":1,"omit":1e9999}"#,
+            r#"{"keep":1,"omit":"\uD800"}"#,
+            r#"{"keep":1,"omit":{"\uD800":0}}"#,
+            r#"{"keep":1,"omit":[0,]}"#,
+            r#"{"keep":1,"omit":01}"#,
+            r#"{"keep":1,"omit":1e+}"#,
+            r#"{"keep":1,"omit":{"x":true "y":false}}"#,
+            r#"{"keep":1,"omit":0} garbage"#,
+            r#"{"keep":1,"omit":0} {}"#,
+            r#"{"keep":1,"omit":0,"omit":"\x"}"#,
+            r#"{"keep":1,"omit": [false, 1e100, {"\u006eame":"\uD83D\uDE00"}]}"#,
+            " ",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        for depth in [125, 126, 127, 128, 129, 160] {
+            inputs.push(format!(
+                "{{\"keep\":1,\"omit\":{}0{}}}",
+                "[".repeat(depth),
+                "]".repeat(depth)
+            ));
+        }
+        for input in inputs {
+            let expected = serde_json::from_str::<JsonValue>(&input);
+            for fields in [vec![], vec!["keep".to_string()]] {
+                let mut reader = ReaderBuilder::new("jsonl".to_string())
+                    .with_required_fields(fields)
+                    .with_reader(input.as_bytes())
+                    .unwrap();
+                match (expected.as_ref(), reader.read_record()) {
+                    (Ok(_), Ok(Some(_))) => {}
+                    (Err(expected), Err(ReaderError::ParseJson(actual))) => {
+                        assert_eq!(actual.to_string(), expected.to_string(), "{input}");
+                    }
+                    (_, actual) => panic!("validation mismatch for {input}: {actual:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_jsonl_projection_is_preserved_across_multiple_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..2).map(|i| dir.path().join(format!("{i}.jsonl"))).collect();
+        for (i, path) in paths.iter().enumerate() {
+            std::fs::write(path, format!("{{\"keep\":{i},\"omit\":\"payload\"}}\n")).unwrap();
+        }
+        let mut reader = ReaderBuilder::new("jsonl".to_string())
+            .with_required_fields(vec!["keep".into()])
+            .with_paths(&paths);
+        for i in 0..2 {
+            let actual = reader.read_record().unwrap().unwrap().into_variables();
+            assert_eq!(actual.len(), 1);
+            assert_eq!(actual.get("keep"), Some(&Value::Int(i)));
+        }
+        assert!(reader.read_record().unwrap().is_none());
+    }
 
     #[test]
     fn test_aws_elb_reader() {

@@ -24,7 +24,10 @@ def milliseconds(value: float, deviation: float) -> str:
 def render(results_dir: Path) -> str:
     metadata = json.loads((results_dir / "metadata.json").read_text())
     rss = json.loads((results_dir / "rss.json").read_text())
-    queries = json.loads((HERE / "queries.json").read_text())["queries"]
+    query_file = results_dir / "queries.json"
+    if not query_file.exists():
+        query_file = HERE / "queries.json"  # historical result directories
+    queries = json.loads(query_file.read_text())["queries"]
     tools = list(metadata["versions"])
 
     lines = [
@@ -43,6 +46,8 @@ def render(results_dir: Path) -> str:
         "| Query | Tool | Wall time | Peak RSS |",
         "| --- | --- | ---: | ---: |",
     ]
+    if "thread_policy" in metadata:
+        lines.insert(1, f"Threads: {metadata['thread_policy']} ({metadata['thread_limit'] or 'default'}).")
     for query in queries:
         benchmark = json.loads((results_dir / f"{query['id']}.json").read_text())
         measured = {item["command"]: item for item in benchmark["results"]}

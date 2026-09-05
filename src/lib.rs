@@ -20,7 +20,7 @@ pub mod bench_internals {
     pub fn parse_query(input: &str) -> bool {
         let result = crate::syntax::parser::query(input);
         std::hint::black_box(&result);
-        result.is_ok()
+        matches!(result, Ok((rest, _)) if rest.trim().is_empty())
     }
 
     // AST types

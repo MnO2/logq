@@ -366,19 +366,34 @@ impl FromStr for OutputMode {
 }
 
 pub fn explain(query_str: &str, data_sources: common::types::DataSourceRegistry) -> AppResult<()> {
+    explain_with_options(query_str, data_sources, 0, None)
+}
+
+pub fn explain_with_options(
+    query_str: &str,
+    data_sources: common::types::DataSourceRegistry,
+    threads: usize,
+    max_memory: Option<usize>,
+) -> AppResult<()> {
     let q = parse_query_input(query_str)?;
 
     let registry = Arc::new(functions::register_all()?);
     let node = plan_query(query_str, q, data_sources, registry)?;
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
-    let (physical_plan, _variables) = node.physical(&mut physical_plan_creator)?;
+    let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
-    match physical_plan.execution_pipeline() {
+    let pipeline = physical_plan.execution_pipeline_with_variables(&variables);
+    match pipeline {
         execution::types::ExecutionPipeline::Batch => println!("Execution pipeline: batch"),
         execution::types::ExecutionPipeline::Row(fallback) => {
             println!("Execution pipeline: row");
             println!("Batch fallback: {} ({})", fallback.node, fallback.reason);
         }
+    }
+    println!("Requested threads: {threads} (0 = auto)");
+    println!("Resolved thread limit: {}", execution::types::resolve_threads(threads));
+    if let Some(limit) = max_memory {
+        println!("Memory limit: {limit} bytes (retained execution state)");
     }
     println!("Query Plan:");
     println!("{:?}", physical_plan);

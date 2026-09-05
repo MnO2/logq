@@ -2,11 +2,11 @@
 
 use crate::common::types::Value;
 use crate::execution::batch::*;
+use crate::execution::memory::{MemoryReservation, MemoryTracker, estimate_batch, estimate_value};
 use crate::execution::types::StreamResult;
 use crate::simd::bitmap::Bitmap;
 use crate::simd::selection::SelectionVector;
 use hashbrown::HashSet;
-use std::hash::{Hash, Hasher};
 
 /// Batch-native DISTINCT operator. Tracks seen row keys and deselects
 /// duplicate rows by updating the selection bitmap.
@@ -14,75 +14,13 @@ pub(crate) struct BatchDistinctOperator {
     child: Box<dyn BatchStream>,
     schema: BatchSchema,
     seen: HashSet<RowKey>,
+    memory: MemoryReservation,
 }
 
-/// A hashable row key built from extracted Values.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RowKey(Vec<KeyValue>);
-
-#[derive(Clone, Debug)]
-enum KeyValue {
-    Int(i32),
-    Float(ordered_float::OrderedFloat<f32>),
-    Bool(bool),
-    Str(String),
-    DateTime(i64),
-    Null,
-    Missing,
-}
-
-impl PartialEq for KeyValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (KeyValue::Int(a), KeyValue::Int(b)) => a == b,
-            (KeyValue::Float(a), KeyValue::Float(b)) => a == b,
-            (KeyValue::Bool(a), KeyValue::Bool(b)) => a == b,
-            (KeyValue::Str(a), KeyValue::Str(b)) => a == b,
-            (KeyValue::DateTime(a), KeyValue::DateTime(b)) => a == b,
-            (KeyValue::Null, KeyValue::Null) => true,
-            (KeyValue::Missing, KeyValue::Missing) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for KeyValue {}
-
-impl Hash for KeyValue {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-        match self {
-            KeyValue::Int(v) => v.hash(state),
-            KeyValue::Float(v) => v.hash(state),
-            KeyValue::Bool(v) => v.hash(state),
-            KeyValue::Str(v) => v.hash(state),
-            KeyValue::DateTime(v) => v.hash(state),
-            KeyValue::Null | KeyValue::Missing => {}
-        }
-    }
-}
-
-impl Hash for RowKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        for v in &self.0 {
-            v.hash(state);
-        }
-    }
-}
-
-fn value_to_key(val: &Value) -> KeyValue {
-    match val {
-        Value::Int(v) => KeyValue::Int(*v),
-        Value::Float(v) => KeyValue::Float(*v),
-        Value::Boolean(v) => KeyValue::Bool(*v),
-        Value::String(v) => KeyValue::Str(v.to_string()),
-        Value::DateTime(v) => KeyValue::DateTime(v.timestamp()),
-        Value::Null => KeyValue::Null,
-        Value::Missing => KeyValue::Missing,
-        // For complex types, use debug string as key
-        other => KeyValue::Str(format!("{:?}", other)),
-    }
-}
+/// Keep the same typed equality and hashing as the row pipeline. Datetime
+/// precision and complex values must not collapse into string representations.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RowKey(Vec<Value>);
 
 impl BatchDistinctOperator {
     pub fn new(child: Box<dyn BatchStream>) -> Self {
@@ -94,7 +32,13 @@ impl BatchDistinctOperator {
             child,
             schema,
             seen: HashSet::new(),
+            memory: MemoryReservation::default(),
         }
+    }
+
+    pub(crate) fn with_memory_tracker(mut self, memory: MemoryTracker) -> Self {
+        self.memory = MemoryReservation::new(memory);
+        self
     }
 }
 
@@ -109,17 +53,21 @@ impl BatchStream for BatchDistinctOperator {
                     continue;
                 }
                 // Build row key from all columns
-                let key_vals: Vec<KeyValue> = batch
+                let key_vals: Vec<Value> = batch
                     .columns
                     .iter()
-                    .map(|col| {
-                        let val = BatchToRowAdapter::extract_value(col, row);
-                        value_to_key(&val)
-                    })
+                    .map(|col| BatchToRowAdapter::extract_value(col, row))
                     .collect();
                 let key = RowKey(key_vals);
 
-                if self.seen.insert(key) {
+                if !self.seen.contains(&key) {
+                    if self.memory.is_enabled() {
+                        let key_bytes = 64usize
+                            .saturating_add(key.0.capacity() * std::mem::size_of::<Value>())
+                            .saturating_add(key.0.iter().map(estimate_value).sum::<usize>());
+                        self.memory.add(key_bytes)?;
+                    }
+                    self.seen.insert(key);
                     *selected = 1;
                     active_count += 1;
                 }
@@ -136,6 +84,11 @@ impl BatchStream for BatchDistinctOperator {
                 selection: SelectionVector::Bitmap(sel_bitmap),
                 len: batch.len,
             };
+            if self.memory.is_enabled() {
+                // Keep emitted storage conservatively charged along with the
+                // keys, since ColumnBatch has no reservation of its own.
+                self.memory.add(estimate_batch(&result))?;
+            }
             return Ok(Some(result));
         }
         Ok(None)
@@ -185,6 +138,85 @@ mod tests {
             &self.schema
         }
         fn close(&self) {}
+    }
+
+    fn mixed_source(values: Vec<Value>) -> Box<dyn BatchStream> {
+        let len = values.len();
+        Box::new(MultiBatch {
+            batches: vec![ColumnBatch {
+                columns: vec![TypedColumn::Mixed {
+                    data: values,
+                    null: Bitmap::all_set(len),
+                    missing: Bitmap::all_set(len),
+                }],
+                names: vec!["x".into()],
+                selection: SelectionVector::All,
+                len,
+            }],
+            idx: 0,
+            schema: BatchSchema {
+                names: vec!["x".into()],
+                types: vec![ColumnType::Mixed],
+            },
+        })
+    }
+
+    #[test]
+    fn distinct_preserves_datetime_precision_and_complex_value_types() {
+        let first = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00.000000001Z").unwrap());
+        let second = Value::DateTime(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00.000000002Z").unwrap());
+        let array = Value::Array(vec![Value::Int(1)]);
+        let string = Value::String(format!("{array:?}").into());
+        let mut op = BatchDistinctOperator::new(mixed_source(vec![
+            first.clone(),
+            second,
+            first,
+            array.clone(),
+            string,
+            array,
+        ]));
+        let batch = op.next_batch().unwrap().unwrap();
+        assert_eq!(batch.selection.count_active(batch.len), 4);
+    }
+
+    #[test]
+    fn distinct_charges_unique_keys_and_releases_its_share_on_failure() {
+        use crate::execution::memory::{MemoryReservation, MemoryTracker};
+        let tracker = MemoryTracker::new(Some(4096));
+        let mut other = MemoryReservation::new(tracker.clone());
+        other.add(4000).unwrap();
+        let mut op = BatchDistinctOperator::new(mixed_source(vec![Value::String("x".repeat(256).into())]))
+            .with_memory_tracker(tracker.clone());
+        assert!(matches!(
+            op.next_batch(),
+            Err(crate::execution::types::StreamError::MemoryBudgetExceeded)
+        ));
+        drop(op);
+        assert_eq!(tracker.used(), 4000);
+    }
+
+    #[test]
+    fn duplicate_only_batches_do_not_accumulate_more_budget() {
+        use crate::execution::memory::MemoryTracker;
+        let mut source = mixed_source(vec![Value::Int(1)]);
+        let first = source.next_batch().unwrap().unwrap();
+        let mut source = mixed_source(vec![Value::Int(1); 200]);
+        let repeated = source.next_batch().unwrap().unwrap();
+        let tracker = MemoryTracker::new(Some(4096));
+        let mut op = BatchDistinctOperator::new(Box::new(MultiBatch {
+            batches: vec![first, repeated],
+            idx: 0,
+            schema: source.schema().clone(),
+        }))
+        .with_memory_tracker(tracker.clone());
+        let output = op.next_batch().unwrap().unwrap();
+        let used = tracker.used();
+        assert!(used > 0);
+        drop(output);
+        assert!(op.next_batch().unwrap().is_none());
+        assert_eq!(tracker.used(), used);
+        drop(op);
+        assert_eq!(tracker.used(), 0);
     }
 
     #[test]

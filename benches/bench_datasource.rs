@@ -44,9 +44,10 @@ fn bench_datasource(c: &mut Criterion) {
                 let cursor = std::io::Cursor::new(concatenated.as_bytes());
                 let mut reader = reader_builder.with_reader(cursor).unwrap();
                 let mut count = 0u64;
-                while let Ok(Some(_record)) = reader.read_record() {
+                while reader.read_record().expect("datasource benchmark failed").is_some() {
                     count += 1;
                 }
+                assert_eq!(count, line_count as u64);
                 black_box(count)
             });
         });

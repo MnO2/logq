@@ -5,14 +5,11 @@ use super::stream::{
 };
 use crate::common;
 use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
-use crate::execution::batch::{
-    BatchSchema, BatchStream, BatchToRowAdapter, ColumnType, ConcatBatchStream, PrecomputedBatchStream,
-};
+use crate::execution::batch::{BatchSchema, BatchStream, BatchToRowAdapter, ColumnType};
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
 use crate::execution::batch_project::BatchProjectOperator;
 use crate::execution::batch_scan::BatchScanOperator;
-use crate::execution::batch_scan::datatype_to_column_type;
 use crate::execution::log_schema::LogSchema;
 use crate::execution::parallel;
 use crate::execution::stream::ProjectionStream;
@@ -290,7 +287,7 @@ pub enum Relation {
 impl Relation {
     /// Compare two Values by reference. Avoids cloning when values are
     /// already available as references (e.g., from LinkedHashMap::get).
-    fn compare_ref(&self, left: &Value, right: &Value) -> ExpressionResult<Option<bool>> {
+    pub(crate) fn compare_ref(&self, left: &Value, right: &Value) -> ExpressionResult<Option<bool>> {
         if matches!(left, Value::Null | Value::Missing) || matches!(right, Value::Null | Value::Missing) {
             return Ok(None);
         }
@@ -414,17 +411,18 @@ thread_local! {
     );
 }
 
-fn get_or_compile_like_regex(pattern: &str) -> Result<regex::Regex, EvaluateError> {
+pub(crate) fn with_like_regex<T>(pattern: &str, evaluate: impl FnOnce(&regex::Regex) -> T) -> Result<T, EvaluateError> {
     LIKE_REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some(re) = cache.get(pattern) {
-            return Ok(re.clone());
+        if !cache.contains(pattern) {
+            let regex_pattern = like_pattern_to_regex(pattern);
+            let re = regex::Regex::new(&regex_pattern)
+                .map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
+            cache.put(pattern.to_string(), re);
         }
-        let regex_pattern = like_pattern_to_regex(pattern);
-        let re =
-            regex::Regex::new(&regex_pattern).map_err(|_| EvaluateError::Expression(ExpressionError::TypeMismatch))?;
-        cache.put(pattern.to_string(), re.clone());
-        Ok(re)
+        // Regex::clone starts a fresh search cache. Borrow the worker-local
+        // cached regex for the search so scratch allocations survive each row.
+        Ok(evaluate(cache.get(pattern).expect("cached regex")))
     })
 }
 
@@ -540,10 +538,7 @@ impl Formula {
                 match (&val, &pattern) {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
-                    (Value::String(s), Value::String(p)) => {
-                        let re = get_or_compile_like_regex(p)?;
-                        Ok(Some(re.is_match(s)))
-                    }
+                    (Value::String(s), Value::String(p)) => Ok(Some(with_like_regex(p, |re| re.is_match(s))?)),
                     _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
                 }
             }
@@ -553,10 +548,7 @@ impl Formula {
                 match (&val, &pattern) {
                     (Value::Null, _) | (_, Value::Null) => Ok(None),
                     (Value::Missing, _) | (_, Value::Missing) => Ok(None),
-                    (Value::String(s), Value::String(p)) => {
-                        let re = get_or_compile_like_regex(p)?;
-                        Ok(Some(!re.is_match(s)))
-                    }
+                    (Value::String(s), Value::String(p)) => Ok(Some(!with_like_regex(p, |re| re.is_match(s))?)),
                     _ => Err(EvaluateError::Expression(ExpressionError::TypeMismatch)),
                 }
             }
@@ -702,7 +694,7 @@ impl Formula {
 }
 
 /// Parameters extracted when a streaming GroupBy pattern is detected.
-struct StreamingGroupByParams<'a> {
+struct TimeBucketGroupByParams<'a> {
     timestamp_column: String,
     bucket_interval: String,
     bucket_alias: String,
@@ -753,8 +745,38 @@ pub enum ExecutionPipeline {
     Row(BatchFallback),
 }
 
+/// Normalize auto once at the query boundary; worker queues remain bounded.
+pub(crate) fn resolve_threads(requested: usize) -> usize {
+    if requested == 0 {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    } else {
+        requested
+    }
+}
+
+fn projected_reader(format: &str, fields: Option<&[String]>) -> ReaderBuilder {
+    let builder = ReaderBuilder::new(format.to_string());
+    if format == "jsonl" {
+        if let Some(fields) = fields {
+            return builder.with_required_fields(fields.to_vec());
+        }
+    }
+    builder
+}
+
+#[derive(Clone, Copy)]
+struct BatchOptions<'a> {
+    threads: usize,
+    json_fields: Option<&'a [String]>,
+    memory: &'a crate::execution::memory::MemoryTracker,
+}
+
 impl Node {
     pub fn execution_pipeline(&self) -> ExecutionPipeline {
+        self.execution_pipeline_with_variables(&Variables::new())
+    }
+
+    pub fn execution_pipeline_with_variables(&self, variables: &Variables) -> ExecutionPipeline {
         if matches!(self, Node::DataSource(..)) {
             return ExecutionPipeline::Row(BatchFallback {
                 node: "DataSource",
@@ -762,13 +784,16 @@ impl Node {
             });
         }
 
-        match self.batch_support() {
+        match self.batch_support(
+            crate::execution::field_analysis::extract_required_root_names(self).is_some(),
+            variables,
+        ) {
             Ok(()) => ExecutionPipeline::Batch,
             Err(fallback) => ExecutionPipeline::Row(fallback),
         }
     }
 
-    fn batch_support(&self) -> Result<(), BatchFallback> {
+    fn batch_support(&self, projected_json: bool, variables: &Variables) -> Result<(), BatchFallback> {
         match self {
             Node::DataSource(data_source, bindings) => {
                 if !bindings.is_empty() {
@@ -786,7 +811,7 @@ impl Node {
                         });
                     }
                 };
-                if crate::execution::datasource::is_dynamic_format(format) {
+                if crate::execution::datasource::is_dynamic_format(format) && !(format == "jsonl" && projected_json) {
                     return Err(BatchFallback {
                         node: "DataSource",
                         reason: format!("dynamic format `{format}`"),
@@ -800,13 +825,28 @@ impl Node {
                 }
                 Ok(())
             }
-            Node::Filter(source, _) | Node::Limit(_, source) | Node::OrderBy(_, _, source) | Node::Distinct(source) => {
-                source.batch_support()
+            Node::Filter(source, _) | Node::Limit(_, source) | Node::Distinct(source) => {
+                source.batch_support(projected_json, variables)
+            }
+            Node::OrderBy(keys, _, source) => {
+                if keys.iter().any(|path| {
+                    path.path_segments.len() != 1 || !matches!(path.path_segments[0], PathSegment::AttrName(_))
+                }) {
+                    return Err(BatchFallback {
+                        node: "OrderBy",
+                        reason: "nested sort keys require row path evaluation".into(),
+                    });
+                }
+                source.batch_support(projected_json, variables)
             }
             Node::Map(named_list, source) => {
-                let is_simple = named_list
-                    .iter()
-                    .all(|named| matches!(named, Named::Expression(Expression::Variable(_), _) | Named::Star));
+                let is_simple = named_list.iter().all(|named| match named {
+                    Named::Expression(Expression::Variable(path), _) => {
+                        path.path_segments.len() == 1 && matches!(path.path_segments[0], PathSegment::AttrName(_))
+                    }
+                    Named::Star => true,
+                    _ => false,
+                });
                 if !is_simple {
                     return Err(BatchFallback {
                         node: "Map",
@@ -821,13 +861,13 @@ impl Node {
                         reason: "bare SELECT * avoids a column-to-row round trip".to_string(),
                     });
                 }
-                source.batch_support()
+                source.batch_support(projected_json, variables)
             }
             Node::GroupBy(keys, _, source) => {
-                if let Some(params) = Self::detect_streaming_groupby(keys, source) {
-                    params.map_source.batch_support()
+                if let Some(params) = Self::detect_time_bucket_groupby(keys, source, variables) {
+                    params.map_source.batch_support(projected_json, variables)
                 } else {
-                    source.batch_support()
+                    source.batch_support(projected_json, variables)
                 }
             }
             Node::CrossJoin(..) => Err(BatchFallback {
@@ -891,24 +931,8 @@ impl Node {
         use crate::execution::batch_scan::ScanAggregation;
         match &agg.aggregate {
             Aggregate::Count(_, Named::Star) => Some(ScanAggregation::CountStar),
-            Aggregate::Count(_, Named::Expression(Expression::Variable(p), _)) => {
-                if p.path_segments.len() == 1 {
-                    // We need the field index, but we don't have the schema here.
-                    // For now, return CountStar — COUNT(col) on non-null columns
-                    // behaves the same. The full field-index resolution happens in
-                    // try_build_scan_with_aggregation.
-                    Some(ScanAggregation::CountStar) // placeholder
-                } else {
-                    None
-                }
-            }
-            Aggregate::Sum(_, Named::Expression(Expression::Variable(p), _)) => {
-                if p.path_segments.len() == 1 {
-                    Some(ScanAggregation::SumColumn(0)) // placeholder index
-                } else {
-                    None
-                }
-            }
+            // Column aggregates need validity checks. Leave them to the typed
+            // aggregate operator rather than substituting a row count.
             _ => None,
         }
     }
@@ -918,9 +942,11 @@ impl Node {
     fn try_build_scan_with_aggregation(
         source: &Node,
         _scan_agg_hint: &crate::execution::batch_scan::ScanAggregation,
+        output_name: &str,
         variables: &Variables,
         registry: &Arc<FunctionRegistry>,
-        _threads: usize,
+        threads: usize,
+        memory: &crate::execution::memory::MemoryTracker,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
         use crate::execution::batch_scan::ScanAggregation;
 
@@ -946,13 +972,7 @@ impl Node {
             _ => return None,
         };
 
-        // Resolve the actual ScanAggregation with correct field indices
-        // For now, we only support COUNT(*) pushdown since it doesn't need
-        // any projected columns.
-        let scan_agg = match _scan_agg_hint {
-            ScanAggregation::CountStar => ScanAggregation::CountStar,
-            _ => return None, // TODO: resolve field indices for COUNT(col)/SUM(col)
-        };
+        let scan_agg = ScanAggregation::CountStar;
 
         // Determine filter fields if there's a predicate
         let (filter_fields, pushed_pred): (Vec<usize>, PushedPredicate) = if let Some(formula) = formula_opt {
@@ -963,14 +983,30 @@ impl Node {
         };
 
         // For COUNT(*), we don't need any projected fields — use a minimal schema
-        let agg_name = "_count".to_string();
+        let agg_name = output_name.to_string();
         let batch_schema = BatchSchema {
             names: vec![agg_name.clone()],
             types: vec![ColumnType::Int32],
         };
 
-        // Skip parallel path for aggregation pushdown — sequential is fine
-        // since we're not constructing full column batches
+        if threads > 1 {
+            if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
+                return Some(
+                    parallel::ParallelBatchStream::new_count(
+                        mmap,
+                        threads,
+                        schema,
+                        filter_fields,
+                        pushed_pred,
+                        agg_name,
+                        registry.clone(),
+                        memory.clone(),
+                    )
+                    .map(|stream| Box::new(stream) as Box<dyn BatchStream>)
+                    .map_err(|_| CreateStreamError::Io),
+                );
+            }
+        }
         match crate::execution::datasource::open_path(path) {
             Ok(file) => {
                 let reader: Box<dyn std::io::BufRead> = Box::new(std::io::BufReader::new(file));
@@ -989,14 +1025,127 @@ impl Node {
         }
     }
 
-    /// Detect if a GroupBy node qualifies for streaming aggregation.
+    /// Build worker-local associative states directly above each scan, then
+    /// merge the states in input order without moving input batches to the parent.
+    fn try_build_parallel_aggregation(
+        keys: &[PathExpr],
+        aggregates: &[NamedAggregate],
+        source: &Node,
+        variables: &Variables,
+        registry: &Arc<FunctionRegistry>,
+        required_fields: &[usize],
+        options: BatchOptions<'_>,
+    ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
+        let BatchOptions {
+            threads,
+            json_fields,
+            memory,
+        } = options;
+        use crate::execution::batch_groupby::BatchGroupByOperator;
+        if threads <= 1 || !BatchGroupByOperator::supports_parallel(keys, aggregates) {
+            return None;
+        }
+        let (named_list, source) = match source {
+            Node::Map(named_list, source) => (named_list, source.as_ref()),
+            _ => return None,
+        };
+        let mut projection = Vec::with_capacity(named_list.len());
+        for named in named_list {
+            let Named::Expression(Expression::Variable(path), alias) = named else {
+                return None;
+            };
+            if path.path_segments.len() != 1 {
+                return None;
+            }
+            let PathSegment::AttrName(name) = &path.path_segments[0] else {
+                return None;
+            };
+            projection.push((name.clone(), alias.clone().unwrap_or_else(|| name.clone())));
+        }
+        let (source, predicate) = match source {
+            Node::Filter(source, predicate) => (source.as_ref(), Some(*predicate.clone())),
+            source => (source, None),
+        };
+        let Node::DataSource(DataSource::File(path, format, _), bindings) = source else {
+            return None;
+        };
+        if !bindings.is_empty() {
+            return None;
+        }
+        let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) else {
+            return None;
+        };
+        let is_json = format == "jsonl";
+        let scan = if is_json {
+            parallel::ParallelBatchStream::new_json(mmap, threads, json_fields?.to_vec(), None)
+        } else {
+            if crate::execution::datasource::is_dynamic_format(format) {
+                return None;
+            }
+            let schema = LogSchema::from_format(format);
+            let filter_fields = predicate
+                .as_ref()
+                .map(|formula| crate::execution::field_analysis::extract_fields_from_formula(formula, &schema))
+                .unwrap_or_default();
+            let pushed = predicate
+                .clone()
+                .map(|formula| (formula, variables.clone(), registry.clone()));
+            parallel::ParallelBatchStream::new(
+                mmap,
+                threads,
+                schema,
+                required_fields.to_vec(),
+                filter_fields,
+                pushed,
+                None,
+            )
+        };
+        let scan = match scan {
+            Ok(scan) => scan,
+            Err(_) => return Some(Err(CreateStreamError::Io)),
+        };
+        let mapped_schema = BatchSchema {
+            names: projection.iter().map(|(_, output)| output.clone()).collect(),
+            types: vec![ColumnType::Mixed; projection.len()],
+        };
+        let scope = variables.clone();
+        let functions = registry.clone();
+        let stream = scan
+            .map_workers(mapped_schema, move |mut child| {
+                if is_json {
+                    if let Some(predicate) = &predicate {
+                        child = Box::new(BatchFilterOperator::new(
+                            child,
+                            predicate.clone(),
+                            scope.clone(),
+                            functions.clone(),
+                        ));
+                    }
+                }
+                Box::new(BatchProjectOperator::with_projection(child, projection.clone()).with_scope(scope.clone()))
+            })
+            .into_aggregate(
+                keys.to_vec(),
+                aggregates.to_vec(),
+                variables.clone(),
+                registry.clone(),
+                memory.clone(),
+            );
+        Some(Ok(Box::new(stream)))
+    }
+
+    /// Detect a constant time-bucket projection that can use typed batches.
     ///
     /// Requirements:
     /// 1. Exactly one GROUP BY key
     /// 2. Child is a Map node containing a time_bucket() function call
     ///    that aliases to the group key name
-    /// 3. Underlying data source is time-ordered (ELB or ALB)
-    fn detect_streaming_groupby<'a>(keys: &[PathExpr], source: &'a Node) -> Option<StreamingGroupByParams<'a>> {
+    /// 3. Underlying data source has typed timestamps (ELB or ALB).
+    fn detect_time_bucket_groupby<'a>(
+        keys: &[PathExpr],
+        source: &'a Node,
+        variables: &Variables,
+    ) -> Option<TimeBucketGroupByParams<'a>> {
         // Must have exactly one GROUP BY key
         if keys.len() != 1 {
             return None;
@@ -1019,21 +1168,40 @@ impl Node {
                     // Extract interval string from first argument
                     let interval = match &args[0] {
                         Named::Expression(Expression::Constant(Value::String(s)), _) => s.to_string(),
+                        Named::Expression(Expression::Variable(path), _) if path.path_segments.len() == 1 => {
+                            let PathSegment::AttrName(name) = &path.path_segments[0] else {
+                                return None;
+                            };
+                            let Some(Value::String(value)) = variables.get(name) else {
+                                return None;
+                            };
+                            value.to_string()
+                        }
                         _ => return None,
                     };
                     // Extract timestamp column name from second argument
                     let ts_col = match &args[1] {
-                        Named::Expression(Expression::Variable(path), _) => match path.path_segments.last()? {
-                            PathSegment::AttrName(name) => name.clone(),
-                            _ => return None,
-                        },
+                        Named::Expression(Expression::Variable(path), _) if path.path_segments.len() == 1 => {
+                            match path.path_segments.last()? {
+                                PathSegment::AttrName(name) => name.clone(),
+                                _ => return None,
+                            }
+                        }
                         _ => return None,
                     };
-                    // Verify the underlying source is time-ordered
-                    if !Self::source_is_time_ordered(map_source) {
+                    // Bypassing Map is safe only for identity projections besides
+                    // this bucket. Other aliases/expressions retain ordinary execution.
+                    if named_list.iter().any(|other| {
+                        if other == named { return false; }
+                        !matches!(other, Named::Expression(Expression::Variable(path), alias)
+                            if path.path_segments.len() == 1 && matches!(&path.path_segments[0], PathSegment::AttrName(name) if alias.as_ref().is_none_or(|alias| alias == name)))
+                    }) { return None; }
+                    // Fixed formats provide typed timestamps; grouping itself
+                    // makes no assumption about the actual input order.
+                    if !Self::supports_time_bucket_source(map_source) {
                         return None;
                     }
-                    return Some(StreamingGroupByParams {
+                    return Some(TimeBucketGroupByParams {
                         timestamp_column: ts_col,
                         bucket_interval: interval,
                         bucket_alias: key_name,
@@ -1045,14 +1213,14 @@ impl Node {
         None
     }
 
-    /// Check if the given node subtree has a time-ordered data source.
-    fn source_is_time_ordered(node: &Node) -> bool {
+    /// Check if the source exposes a known timestamp type for bucket projection.
+    fn supports_time_bucket_source(node: &Node) -> bool {
         match node {
             Node::DataSource(DataSource::File(_, format, _), _) => {
                 crate::execution::datasource::is_time_ordered(format).is_some()
             }
             Node::DataSource(DataSource::Files(_, _, _), _) => false,
-            Node::Filter(child, _) => Self::source_is_time_ordered(child),
+            Node::Filter(child, _) => Self::supports_time_bucket_source(child),
             _ => false,
         }
     }
@@ -1065,8 +1233,20 @@ impl Node {
         registry: &Arc<FunctionRegistry>,
         required_fields: &[usize],
         threads: usize,
+        json_fields: Option<&[String]>,
+        memory: &crate::execution::memory::MemoryTracker,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
-        self.try_get_batch_limited(variables, registry, required_fields, threads, None)
+        self.try_get_batch_limited(
+            variables,
+            registry,
+            required_fields,
+            None,
+            BatchOptions {
+                threads,
+                json_fields,
+                memory,
+            },
+        )
     }
 
     /// Like `try_get_batch` but with an optional row limit hint.
@@ -1077,9 +1257,14 @@ impl Node {
         variables: &Variables,
         registry: &Arc<FunctionRegistry>,
         required_fields: &[usize],
-        threads: usize,
         row_limit: Option<usize>,
+        options: BatchOptions<'_>,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
+        let BatchOptions {
+            threads,
+            json_fields,
+            memory,
+        } = options;
         match self {
             Node::DataSource(data_source, bindings) => {
                 if !bindings.is_empty() {
@@ -1087,8 +1272,33 @@ impl Node {
                 }
                 match data_source {
                     DataSource::File(path, file_format, _) => {
+                        if file_format == "jsonl" {
+                            let fields = json_fields?.to_vec();
+                            if threads > 1 {
+                                if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
+                                    return Some(
+                                        parallel::ParallelBatchStream::new_json(mmap, threads, fields, row_limit)
+                                            .map(|stream| {
+                                                Box::new(stream.with_memory_tracker(memory.clone()))
+                                                    as Box<dyn BatchStream>
+                                            })
+                                            .map_err(|_| CreateStreamError::Io),
+                                    );
+                                }
+                            }
+                            return Some(
+                                crate::execution::datasource::open_path(path)
+                                    .map(|reader| {
+                                        Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
+                                            Box::new(std::io::BufReader::new(reader)),
+                                            fields,
+                                        )) as Box<dyn BatchStream>
+                                    })
+                                    .map_err(|_| CreateStreamError::Io),
+                            );
+                        }
                         if crate::execution::datasource::is_dynamic_format(file_format) {
-                            return None; // Dynamic formats have no batch schema.
+                            return None;
                         }
                         let schema = LogSchema::from_format(file_format);
                         let fields = if required_fields.is_empty() {
@@ -1099,25 +1309,21 @@ impl Node {
                         // Try parallel mmap path
                         if threads > 1 {
                             if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
-                                if let Ok(chunk_batches) = parallel::parallel_scan_chunks_limited(
-                                    &mmap,
-                                    threads,
-                                    &schema,
-                                    &fields,
-                                    &[],
-                                    &None,
-                                    row_limit,
-                                ) {
-                                    let batch_schema = BatchSchema {
-                                        names: fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
-                                        types: fields
-                                            .iter()
-                                            .map(|&i| datatype_to_column_type(&schema.field_type(i)))
-                                            .collect(),
-                                    };
-                                    let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
-                                    return Some(Ok(Box::new(PrecomputedBatchStream::new(all_batches, batch_schema))));
-                                }
+                                return Some(
+                                    parallel::ParallelBatchStream::new(
+                                        mmap,
+                                        threads,
+                                        schema,
+                                        fields,
+                                        vec![],
+                                        None,
+                                        row_limit,
+                                    )
+                                    .map(|stream| {
+                                        Box::new(stream.with_memory_tracker(memory.clone())) as Box<dyn BatchStream>
+                                    })
+                                    .map_err(|_| CreateStreamError::Io),
+                                );
                             }
                         }
                         // Sequential fallback
@@ -1131,31 +1337,69 @@ impl Node {
                         }
                     }
                     DataSource::Files(paths, file_format, table_name) => {
-                        if paths.is_empty() || crate::execution::datasource::is_dynamic_format(file_format) {
+                        if paths.is_empty()
+                            || (crate::execution::datasource::is_dynamic_format(file_format)
+                                && !(file_format == "jsonl" && json_fields.is_some()))
+                        {
                             return None;
                         }
-                        let mut streams = Vec::with_capacity(paths.len());
-                        let mut batch_schema = None;
-                        for path in paths {
+                        // Derive the schema without opening any file. The
+                        // factory retains one owned query context, not one per path.
+                        let batch_schema = if file_format == "jsonl" {
+                            let names = json_fields?.to_vec();
+                            BatchSchema {
+                                types: vec![ColumnType::Mixed; names.len()],
+                                names,
+                            }
+                        } else {
+                            let schema = LogSchema::from_format(file_format);
+                            let fields: Vec<_> = if required_fields.is_empty() {
+                                (0..schema.field_count()).collect()
+                            } else {
+                                required_fields.to_vec()
+                            };
+                            BatchSchema {
+                                names: fields.iter().map(|&i| schema.field_name(i).to_string()).collect(),
+                                types: fields
+                                    .iter()
+                                    .map(|&i| {
+                                        crate::execution::batch_scan::datatype_to_column_type(&schema.field_type(i))
+                                    })
+                                    .collect(),
+                            }
+                        };
+                        let mut paths = paths.clone().into_iter();
+                        let file_format = file_format.clone();
+                        let table_name = table_name.clone();
+                        let variables = variables.clone();
+                        let registry = registry.clone();
+                        let required_fields = required_fields.to_vec();
+                        let json_fields = json_fields.map(<[String]>::to_vec);
+                        let memory = memory.clone();
+                        let stream = crate::execution::batch::LazyConcatBatchStream::new(batch_schema, move || {
+                            let Some(path) = paths.next() else {
+                                return Ok(None);
+                            };
                             let node = Node::DataSource(
-                                DataSource::File(path.clone(), file_format.clone(), table_name.clone()),
+                                DataSource::File(path, file_format.clone(), table_name.clone()),
                                 vec![],
                             );
-                            match node.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
-                                Some(Ok(stream)) => {
-                                    if batch_schema.is_none() {
-                                        batch_schema = Some(stream.schema().clone());
-                                    }
-                                    streams.push(stream);
-                                }
-                                Some(Err(error)) => return Some(Err(error)),
-                                None => return None,
-                            }
-                        }
-                        Some(Ok(Box::new(ConcatBatchStream::new(
-                            streams,
-                            batch_schema.expect("non-empty path list has a schema"),
-                        ))))
+                            node.try_get_batch_limited(
+                                &variables,
+                                &registry,
+                                &required_fields,
+                                row_limit,
+                                BatchOptions {
+                                    threads,
+                                    json_fields: json_fields.as_deref(),
+                                    memory: &memory,
+                                },
+                            )
+                            .unwrap_or(Err(CreateStreamError::Stream))
+                            .map(Some)
+                            .map_err(StreamError::from)
+                        });
+                        Some(Ok(Box::new(stream)))
                     }
                     _ => None,
                 }
@@ -1186,31 +1430,22 @@ impl Node {
                                 if threads > 1 {
                                     if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
                                         let pushed = Some((*formula.clone(), variables.clone(), registry.clone()));
-                                        if let Ok(chunk_batches) = parallel::parallel_scan_chunks_limited(
-                                            &mmap,
-                                            threads,
-                                            &schema,
-                                            &all_fields,
-                                            &filter_fields,
-                                            &pushed,
-                                            row_limit,
-                                        ) {
-                                            let batch_schema = BatchSchema {
-                                                names: all_fields
-                                                    .iter()
-                                                    .map(|&i| schema.field_name(i).to_string())
-                                                    .collect(),
-                                                types: all_fields
-                                                    .iter()
-                                                    .map(|&i| datatype_to_column_type(&schema.field_type(i)))
-                                                    .collect(),
-                                            };
-                                            let all_batches: Vec<_> = chunk_batches.into_iter().flatten().collect();
-                                            return Some(Ok(Box::new(PrecomputedBatchStream::new(
-                                                all_batches,
-                                                batch_schema,
-                                            ))));
-                                        }
+                                        return Some(
+                                            parallel::ParallelBatchStream::new(
+                                                mmap,
+                                                threads,
+                                                schema,
+                                                all_fields,
+                                                filter_fields,
+                                                pushed,
+                                                row_limit,
+                                            )
+                                            .map(|stream| {
+                                                Box::new(stream.with_memory_tracker(memory.clone()))
+                                                    as Box<dyn BatchStream>
+                                            })
+                                            .map_err(|_| CreateStreamError::Io),
+                                        );
                                     }
                                 }
 
@@ -1234,7 +1469,17 @@ impl Node {
                     }
                 }
                 // Fallback: wrap with BatchFilterOperator for non-DataSource children
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
+                match source.try_get_batch_limited(
+                    variables,
+                    registry,
+                    required_fields,
+                    None,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
                     Some(Ok(batch_stream)) => {
                         let filter = BatchFilterOperator::new(
                             batch_stream,
@@ -1255,7 +1500,17 @@ impl Node {
                     (Some(a), Some(b)) => Some(a.min(b)),
                     (a, b) => a.or(b),
                 };
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, effective_limit) {
+                match source.try_get_batch_limited(
+                    variables,
+                    registry,
+                    required_fields,
+                    effective_limit,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
                     Some(Ok(batch_stream)) => {
                         let limit = BatchLimitOperator::new(batch_stream, *count);
                         Some(Ok(Box::new(limit) as Box<dyn BatchStream>))
@@ -1266,9 +1521,13 @@ impl Node {
             }
             Node::Map(named_list, source) => {
                 // Only handle simple variable projections in batch path
-                let is_simple = named_list
-                    .iter()
-                    .all(|named| matches!(named, Named::Expression(Expression::Variable(_), _) | Named::Star));
+                let is_simple = named_list.iter().all(|named| match named {
+                    Named::Expression(Expression::Variable(path), _) => {
+                        path.path_segments.len() == 1 && matches!(path.path_segments[0], PathSegment::AttrName(_))
+                    }
+                    Named::Star => true,
+                    _ => false,
+                });
                 if !is_simple {
                     return None; // Complex expressions need row-based MapStream
                 }
@@ -1277,29 +1536,33 @@ impl Node {
                 if named_list.iter().any(|n| matches!(n, Named::Star)) && matches!(**source, Node::DataSource(..)) {
                     return None;
                 }
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, row_limit) {
+                match source.try_get_batch_limited(
+                    variables,
+                    registry,
+                    required_fields,
+                    row_limit,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
                     Some(Ok(batch_stream)) => {
-                        // Extract output column names from named_list
-                        let output_names: Vec<String> = named_list
-                            .iter()
-                            .filter_map(|named| match named {
-                                Named::Expression(Expression::Variable(path), _) => {
-                                    path.path_segments.last().and_then(|seg| {
-                                        if let PathSegment::AttrName(name) = seg {
-                                            Some(name.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
+                        let mut projection = Vec::new();
+                        for (position, named) in named_list.iter().enumerate() {
+                            match named {
+                                Named::Star => projection
+                                    .extend(batch_stream.schema().names.iter().map(|n| (n.clone(), n.clone()))),
+                                Named::Expression(Expression::Variable(path), alias) => {
+                                    if let PathSegment::AttrName(name) = &path.path_segments[0] {
+                                        projection.push((name.clone(), alias.clone().unwrap_or_else(|| name.clone())));
+                                    }
                                 }
-                                _ => None,
-                            })
-                            .collect();
-                        if output_names.is_empty() && named_list.iter().any(|n| matches!(n, Named::Star)) {
-                            // SELECT * — pass through without projection
-                            return Some(Ok(batch_stream));
+                                _ => unreachable!("simple projection {position}"),
+                            }
                         }
-                        let project = BatchProjectOperator::new(batch_stream, output_names);
+                        let project = BatchProjectOperator::with_projection(batch_stream, projection)
+                            .with_scope(variables.clone());
                         Some(Ok(Box::new(project) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
@@ -1312,22 +1575,51 @@ impl Node {
                 // aggregation into the scan operator to avoid constructing columns.
                 if keys.is_empty() && aggregates.len() == 1 {
                     if let Some(scan_agg) = Self::detect_scan_aggregation(&aggregates[0]) {
-                        if let Some(scan_result) =
-                            Self::try_build_scan_with_aggregation(source, &scan_agg, variables, registry, threads)
-                        {
+                        if let Some(scan_result) = Self::try_build_scan_with_aggregation(
+                            source,
+                            &scan_agg,
+                            aggregates[0].name_opt.as_deref().unwrap_or("_1"),
+                            variables,
+                            registry,
+                            threads,
+                            memory,
+                        ) {
                             return Some(scan_result);
                         }
                     }
                 }
 
-                // Try streaming aggregation for time-bucketed queries on ordered sources
-                if let Some(params) = Self::detect_streaming_groupby(keys, source) {
+                if let Some(result) = Self::try_build_parallel_aggregation(
+                    keys,
+                    aggregates,
+                    source,
+                    variables,
+                    registry,
+                    required_fields,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
+                    return Some(result);
+                }
+
+                // Compute constant time buckets in batches, then aggregate without assuming input order.
+                if let Some(params) = Self::detect_time_bucket_groupby(keys, source, variables) {
                     // Bypass the Map node: get batch stream from the Map's child
-                    let required = params.map_source.compute_required_fields_for_batch();
-                    match params
-                        .map_source
-                        .try_get_batch_limited(variables, registry, &required, threads, None)
-                    {
+                    let required = self.compute_required_fields_for_batch();
+                    match params.map_source.try_get_batch_limited(
+                        variables,
+                        registry,
+                        &required,
+                        None,
+                        BatchOptions {
+                            threads,
+                            json_fields,
+                            memory,
+                        },
+                    ) {
                         Some(Ok(batch_stream)) => {
                             let op = crate::execution::batch_streaming_groupby::BatchStreamingGroupByOperator::new(
                                 batch_stream,
@@ -1337,7 +1629,8 @@ impl Node {
                                 aggregates.clone(),
                                 variables.clone(),
                                 registry.clone(),
-                            );
+                            )
+                            .with_memory_tracker(memory.clone());
                             return Some(Ok(Box::new(op) as Box<dyn BatchStream>));
                         }
                         Some(Err(e)) => return Some(Err(e)),
@@ -1345,7 +1638,17 @@ impl Node {
                     }
                 }
                 // Hash-based fallback
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
+                match source.try_get_batch_limited(
+                    variables,
+                    registry,
+                    required_fields,
+                    None,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
                     Some(Ok(batch_stream)) => {
                         let groupby = crate::execution::batch_groupby::BatchGroupByOperator::new(
                             batch_stream,
@@ -1353,7 +1656,8 @@ impl Node {
                             aggregates.clone(),
                             variables.clone(),
                             registry.clone(),
-                        );
+                        )
+                        .with_memory_tracker(memory.clone());
                         Some(Ok(Box::new(groupby) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
@@ -1361,7 +1665,17 @@ impl Node {
                 }
             }
             Node::OrderBy(sort_columns, orderings, source) => {
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
+                match source.try_get_batch_limited(
+                    variables,
+                    registry,
+                    required_fields,
+                    None,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
                     Some(Ok(batch_stream)) => {
                         let op = if let Some(limit) = row_limit {
                             crate::execution::batch_orderby::BatchOrderByOperator::new_top_n(
@@ -1376,7 +1690,8 @@ impl Node {
                                 sort_columns.clone(),
                                 orderings.clone(),
                             )
-                        };
+                        }
+                        .with_memory_tracker(memory.clone());
                         Some(Ok(Box::new(op) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
@@ -1384,9 +1699,20 @@ impl Node {
                 }
             }
             Node::Distinct(source) => {
-                match source.try_get_batch_limited(variables, registry, required_fields, threads, None) {
+                match source.try_get_batch_limited(
+                    variables,
+                    registry,
+                    required_fields,
+                    None,
+                    BatchOptions {
+                        threads,
+                        json_fields,
+                        memory,
+                    },
+                ) {
                     Some(Ok(batch_stream)) => {
-                        let op = crate::execution::batch_distinct::BatchDistinctOperator::new(batch_stream);
+                        let op = crate::execution::batch_distinct::BatchDistinctOperator::new(batch_stream)
+                            .with_memory_tracker(memory.clone());
                         Some(Ok(Box::new(op) as Box<dyn BatchStream>))
                     }
                     Some(Err(e)) => Some(Err(e)),
@@ -1428,13 +1754,38 @@ impl Node {
         threads: usize,
         memory: crate::execution::memory::MemoryTracker,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
+        let required_roots = crate::execution::field_analysis::extract_required_root_names(self).map(|names| {
+            names
+                .into_iter()
+                .filter(|name| !variables.contains_key(name))
+                .collect::<Vec<_>>()
+        });
+        self.get_with_context(
+            variables,
+            registry,
+            resolve_threads(threads),
+            memory,
+            required_roots.as_deref(),
+        )
+    }
+
+    fn get_with_context(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+        memory: crate::execution::memory::MemoryTracker,
+        required_roots: Option<&[String]>,
+    ) -> CreateStreamResult<Box<dyn RecordStream>> {
         // Try batch pipeline first for supported node patterns.
         // Skip for bare DataSource — the columnar round-trip (parse to columns →
         // BatchToRowAdapter back to rows) is slower than direct row-based parsing
         // when there's no downstream operator (Filter, GroupBy) that benefits.
-        if memory.limit().is_none() && !matches!(self, Node::DataSource(..)) {
+        if !matches!(self, Node::DataSource(..)) && self.batch_support(required_roots.is_some(), &variables).is_ok() {
             let required = self.compute_required_fields_for_batch();
-            if let Some(batch_result) = self.try_get_batch(&variables, &registry, &required, threads) {
+            if let Some(batch_result) =
+                self.try_get_batch(&variables, &registry, &required, threads, required_roots, &memory)
+            {
                 let batch_stream = batch_result?;
                 return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
             }
@@ -1443,13 +1794,13 @@ impl Node {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream =
-                    source.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory)?;
+                    source.get_with_context(variables.clone(), registry.clone(), threads, memory, required_roots)?;
                 let stream = FilterStream::new(*formula.clone(), variables, record_stream, registry);
                 Ok(Box::new(stream))
             }
             Node::Map(named_list, source) => {
                 let record_stream =
-                    source.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory)?;
+                    source.get_with_context(variables.clone(), registry.clone(), threads, memory, required_roots)?;
 
                 let stream = MapStream::new(named_list.clone(), variables, record_stream, registry);
 
@@ -1457,7 +1808,7 @@ impl Node {
             }
             Node::DataSource(data_source, bindings) => match data_source {
                 DataSource::File(path, file_format, _table_name) => {
-                    let reader = ReaderBuilder::new(file_format.clone()).with_path(path)?;
+                    let reader = projected_reader(file_format, required_roots).with_path(path)?;
                     let file_stream = LogFileStream::new(Box::new(reader));
 
                     if !bindings.is_empty() {
@@ -1469,7 +1820,7 @@ impl Node {
                     }
                 }
                 DataSource::Files(paths, file_format, _table_name) => {
-                    let reader = ReaderBuilder::new(file_format.clone()).with_paths(paths);
+                    let reader = projected_reader(file_format, required_roots).with_paths(paths);
                     let file_stream = LogFileStream::new(Box::new(reader));
 
                     if !bindings.is_empty() {
@@ -1480,15 +1831,20 @@ impl Node {
                     }
                 }
                 DataSource::Stdin(file_format, _table_name) => {
-                    let reader = ReaderBuilder::new(file_format.clone()).with_reader(io::stdin())?;
+                    let reader = projected_reader(file_format, required_roots).with_reader(io::stdin())?;
                     let stream = LogFileStream::new(Box::new(reader));
 
                     Ok(Box::new(stream))
                 }
             },
             Node::GroupBy(fields, named_aggregates, source) => {
-                let record_stream =
-                    source.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let record_stream = source.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
                 let stream = GroupByStream::new_with_memory_tracker(
                     fields.clone(),
                     variables,
@@ -1502,7 +1858,7 @@ impl Node {
             Node::Limit(row_count, source) => {
                 if let Node::OrderBy(column_names, orderings, order_source) = source.as_ref() {
                     let mut record_stream =
-                        order_source.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                        order_source.get_with_context(variables, registry, threads, memory.clone(), required_roots)?;
                     let mut top_n = super::prefix_sort::BoundedTopN::new_with_memory_tracker(
                         *row_count as usize,
                         column_names.clone(),
@@ -1514,13 +1870,14 @@ impl Node {
                     }
                     return Ok(Box::new(InMemoryStream::new(top_n.finish())));
                 }
-                let record_stream = source.get_with_memory_tracker(variables.clone(), registry, threads, memory)?;
+                let record_stream =
+                    source.get_with_context(variables.clone(), registry, threads, memory, required_roots)?;
                 let stream = LimitStream::new(*row_count, record_stream);
                 Ok(Box::new(stream))
             }
             Node::OrderBy(column_names, orderings, source) => {
                 let mut record_stream =
-                    source.get_with_memory_tracker(variables.clone(), registry, threads, memory.clone())?;
+                    source.get_with_context(variables.clone(), registry, threads, memory.clone(), required_roots)?;
                 let mut records = Vec::new();
 
                 while let Some(record) = record_stream.next()? {
@@ -1535,12 +1892,18 @@ impl Node {
                 Ok(Box::new(stream))
             }
             Node::Distinct(source) => {
-                let record_stream = source.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                let record_stream =
+                    source.get_with_context(variables, registry, threads, memory.clone(), required_roots)?;
                 Ok(Box::new(DistinctStream::new_with_memory_tracker(record_stream, memory)))
             }
             Node::CrossJoin(left, right) => {
-                let left_stream =
-                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let left_stream = left.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
                 let right_node = *right.clone();
                 let right_variables = variables;
                 Ok(Box::new(CrossJoinStream::new_with_memory_tracker(
@@ -1553,8 +1916,13 @@ impl Node {
                 )))
             }
             Node::LeftJoin(left, right, condition) => {
-                let left_stream =
-                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let left_stream = left.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
                 let right_node = *right.clone();
                 let right_variables = variables;
                 Ok(Box::new(LeftJoinStream::new_with_memory_tracker(
@@ -1574,10 +1942,20 @@ impl Node {
                 residual,
                 join_type,
             } => {
-                let left_stream =
-                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
-                let right_stream =
-                    right.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
+                let left_stream = left.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
+                let right_stream = right.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
                 // Keep qualified keys so residual predicates can evaluate against
                 // the same table scopes. HashJoinStream falls back to bare fields
                 // for unaliased source records.
@@ -1603,15 +1981,26 @@ impl Node {
                 )))
             }
             Node::Union(left, right) => {
-                let left_stream =
-                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
-                let right_stream = right.get_with_memory_tracker(variables, registry, threads, memory)?;
+                let left_stream = left.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
+                let right_stream = right.get_with_context(variables, registry, threads, memory, required_roots)?;
                 Ok(Box::new(UnionStream::new(left_stream, right_stream)))
             }
             Node::Intersect(left, right, all) => {
-                let left_stream =
-                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
-                let right_stream = right.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                let left_stream = left.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
+                let right_stream =
+                    right.get_with_context(variables, registry, threads, memory.clone(), required_roots)?;
                 Ok(Box::new(IntersectStream::new_with_memory_tracker(
                     left_stream,
                     right_stream,
@@ -1620,9 +2009,15 @@ impl Node {
                 )?))
             }
             Node::Except(left, right, all) => {
-                let left_stream =
-                    left.get_with_memory_tracker(variables.clone(), registry.clone(), threads, memory.clone())?;
-                let right_stream = right.get_with_memory_tracker(variables, registry, threads, memory.clone())?;
+                let left_stream = left.get_with_context(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory.clone(),
+                    required_roots,
+                )?;
+                let right_stream =
+                    right.get_with_context(variables, registry, threads, memory.clone(), required_roots)?;
                 Ok(Box::new(ExceptStream::new_with_memory_tracker(
                     left_stream,
                     right_stream,
@@ -1675,6 +2070,7 @@ pub enum Aggregate {
 
 impl Aggregate {
     #[cfg(test)]
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         match self {
             Aggregate::GroupAs(agg, _) => agg.add_record(key, value),
@@ -1691,6 +2087,7 @@ impl Aggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
         match self {
             Aggregate::GroupAs(agg, _) => agg.get_aggregated(key),
@@ -1724,6 +2121,7 @@ impl PercentileDiscAggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         let v = self.partitions.entry(key.clone()).or_default();
         v.push(value.clone());
@@ -1731,6 +2129,7 @@ impl PercentileDiscAggregate {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         //FIXME: expensive operation
         let mut v = self.partitions.get(key).unwrap().clone();
@@ -1804,6 +2203,7 @@ impl ApproxPercentileAggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         let buf = self.buffer.entry(key.clone()).or_default();
         buf.push(value.clone());
@@ -1839,6 +2239,7 @@ impl ApproxPercentileAggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&mut self, key: &Option<Tuple>) -> AggregateResult<Value> {
         let buf = self.buffer.entry(key.clone()).or_default();
         let t = if !buf.is_empty() {
@@ -1889,6 +2290,7 @@ impl AvgAggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         let new_value: f64 = match *value {
             Value::Int(i) => i as f64,
@@ -1903,6 +2305,7 @@ impl AvgAggregate {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let (Some(&sum), Some(&count)) = (self.sums.get(key), self.counts.get(key)) {
             Ok(Value::Float(OrderedFloat::from(
@@ -1916,7 +2319,7 @@ impl AvgAggregate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SumAggregate {
-    pub(crate) sums: HashMap<Option<Tuple>, OrderedFloat<f32>>,
+    pub(crate) sums: HashMap<Option<Tuple>, OrderedFloat<f64>>,
 }
 
 impl SumAggregate {
@@ -1924,28 +2327,28 @@ impl SumAggregate {
         SumAggregate { sums: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
-        let new_value: OrderedFloat<f32> = match *value {
-            Value::Int(i) => OrderedFloat::from(i as f32),
-            Value::Float(f) => f,
+        let new_value: OrderedFloat<f64> = match *value {
+            Value::Int(i) => OrderedFloat::from(i as f64),
+            Value::Float(f) => OrderedFloat(f.into_inner() as f64),
             _ => {
                 return Err(AggregateError::InvalidType);
             }
         };
 
         if let Some(sum) = self.sums.get_mut(key) {
-            let f32_sum: f32 = (*sum).into();
-            let f32_new_value: f32 = new_value.into();
-            *sum = OrderedFloat::from(f32_sum + f32_new_value);
+            *sum += new_value;
         } else {
             self.sums.insert(key.clone(), new_value);
         }
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&average) = self.sums.get(key) {
-            Ok(Value::Float(average))
+            Ok(Value::Float(OrderedFloat(average.into_inner() as f32)))
         } else {
             Err(AggregateError::KeyNotFound)
         }
@@ -1962,6 +2365,7 @@ impl CountAggregate {
         CountAggregate { counts: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         if let &Value::Null = value {
             //Null value doesn't contribute to the total count
@@ -1976,15 +2380,7 @@ impl CountAggregate {
         Ok(())
     }
 
-    pub(crate) fn add_row(&mut self, key: &Option<Tuple>) -> AggregateResult<()> {
-        if let Some(count) = self.counts.get_mut(key) {
-            *count += 1;
-        } else {
-            self.counts.insert(key.clone(), 1);
-        }
-        Ok(())
-    }
-
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&counts) = self.counts.get(key) {
             Ok(Value::Int(counts as i32))
@@ -2004,6 +2400,7 @@ impl GroupAsAggregate {
         GroupAsAggregate { tuples: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         if let Some(tuples) = self.tuples.get_mut(key) {
             tuples.push(value.clone());
@@ -2013,6 +2410,7 @@ impl GroupAsAggregate {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(tuples) = self.tuples.get(key) {
             Ok(Value::Array(tuples.clone()))
@@ -2032,6 +2430,7 @@ impl MaxAggregate {
         MaxAggregate { maxs: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         match self.maxs.entry(key.clone()) {
             hashbrown::hash_map::Entry::Occupied(mut e) => {
@@ -2054,6 +2453,7 @@ impl MaxAggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(first) = self.maxs.get(key) {
             Ok(first.clone())
@@ -2073,6 +2473,7 @@ impl MinAggregate {
         MinAggregate { mins: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         match self.mins.entry(key.clone()) {
             hashbrown::hash_map::Entry::Occupied(mut e) => {
@@ -2095,6 +2496,7 @@ impl MinAggregate {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(first) = self.mins.get(key) {
             Ok(first.clone())
@@ -2114,6 +2516,7 @@ impl FirstAggregate {
         FirstAggregate { firsts: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         if !self.firsts.contains_key(key) {
             self.firsts.insert(key.clone(), value.clone());
@@ -2121,6 +2524,7 @@ impl FirstAggregate {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(first) = self.firsts.get(key) {
             Ok(first.clone())
@@ -2140,11 +2544,13 @@ impl LastAggregate {
         LastAggregate { lasts: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         self.lasts.insert(key.clone(), value.clone());
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(last) = self.lasts.get(key) {
             Ok(last.clone())
@@ -2179,6 +2585,7 @@ impl ApproxCountDistinctAggregate {
         ApproxCountDistinctAggregate { counts: HashMap::new() }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_record(&mut self, key: &Option<Tuple>, value: &Value) -> AggregateResult<()> {
         if let &Value::Null = value {
             //Null value doesn't contribute to the total count
@@ -2195,6 +2602,7 @@ impl ApproxCountDistinctAggregate {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(hll) = self.counts.get(key) {
             Ok(Value::Int(hll.count() as i32))
@@ -2250,7 +2658,7 @@ pub(crate) enum AccumulatorKind {
 pub(crate) enum AccumulatorState {
     Count(i64),
     CountStar(i64),
-    Sum(Option<OrderedFloat<f32>>),
+    Sum(Option<OrderedFloat<f64>>),
     Avg {
         sum: OrderedFloat<f64>,
         count: i64,
@@ -2329,8 +2737,8 @@ impl AccumulatorState {
                     return Ok(());
                 }
                 let fval = match val {
-                    Value::Int(i) => OrderedFloat::from(*i as f32),
-                    Value::Float(f) => *f,
+                    Value::Int(i) => OrderedFloat::from(*i as f64),
+                    Value::Float(f) => OrderedFloat(f.into_inner() as f64),
                     _ => return Err(AggregateError::InvalidType),
                 };
                 *opt_sum = Some(match opt_sum {
@@ -2429,7 +2837,9 @@ impl AccumulatorState {
     pub(crate) fn finalize(&mut self) -> AggregateResult<Value> {
         match self {
             AccumulatorState::Count(c) | AccumulatorState::CountStar(c) => Ok(Value::Int(*c as i32)),
-            AccumulatorState::Sum(opt_sum) => Ok(opt_sum.map(Value::Float).unwrap_or(Value::Null)),
+            AccumulatorState::Sum(opt_sum) => Ok(opt_sum
+                .map(|v| Value::Float(OrderedFloat(v.into_inner() as f32)))
+                .unwrap_or(Value::Null)),
             AccumulatorState::Avg { sum, count } => {
                 if *count == 0 {
                     return Ok(Value::Null);
@@ -2711,17 +3121,7 @@ pub(crate) fn value_less_than(a: &Value, b: &Value) -> bool {
 /// Compare two Values with a given ordering direction.
 /// Used by PercentileDisc finalize for sorting.
 pub(crate) fn value_cmp(a: &Value, b: &Value, ordering: &Ordering) -> std::cmp::Ordering {
-    let base = match (a, b) {
-        (Value::Int(i1), Value::Int(i2)) => i1.cmp(i2),
-        (Value::Float(f1), Value::Float(f2)) => f1.cmp(f2),
-        (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
-        (Value::DateTime(d1), Value::DateTime(d2)) => d1.cmp(d2),
-        (Value::Boolean(b1), Value::Boolean(b2)) => b1.cmp(b2),
-        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
-        (Value::Host(h1), Value::Host(h2)) => h1.to_string().cmp(&h2.to_string()),
-        (Value::HttpRequest(h1), Value::HttpRequest(h2)) => h1.to_string().cmp(&h2.to_string()),
-        _ => std::cmp::Ordering::Equal,
-    };
+    let base = crate::execution::prefix_sort::compare_values(a, b);
     match ordering {
         Ordering::Asc => base,
         Ordering::Desc => base.reverse(),
@@ -3904,7 +4304,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_streaming_groupby_pattern() {
+    fn test_detect_time_bucket_groupby_pattern() {
         let ts_path = PathExpr::new(vec![PathSegment::AttrName("timestamp".to_string())]);
         let time_bucket_expr = Expression::Function(
             "time_bucket".to_string(),
@@ -3924,7 +4324,7 @@ mod tests {
         let map_node = Node::Map(map_named, Box::new(ds));
         let group_key = PathExpr::new(vec![PathSegment::AttrName("bucket".to_string())]);
 
-        let result = Node::detect_streaming_groupby(&[group_key], &map_node);
+        let result = Node::detect_time_bucket_groupby(&[group_key], &map_node, &Variables::new());
         assert!(result.is_some());
         let params = result.unwrap();
         assert_eq!(params.timestamp_column, "timestamp");
@@ -3933,7 +4333,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_streaming_groupby_rejects_multiple_keys() {
+    fn test_detect_time_bucket_groupby_rejects_multiple_keys() {
         let key1 = PathExpr::new(vec![PathSegment::AttrName("bucket".to_string())]);
         let key2 = PathExpr::new(vec![PathSegment::AttrName("status".to_string())]);
         let ds = Node::DataSource(
@@ -3941,12 +4341,12 @@ mod tests {
             vec![],
         );
         let map_node = Node::Map(vec![], Box::new(ds));
-        let result = Node::detect_streaming_groupby(&[key1, key2], &map_node);
+        let result = Node::detect_time_bucket_groupby(&[key1, key2], &map_node, &Variables::new());
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_detect_streaming_groupby_rejects_jsonl() {
+    fn test_detect_time_bucket_groupby_rejects_jsonl() {
         let ts_path = PathExpr::new(vec![PathSegment::AttrName("timestamp".to_string())]);
         let time_bucket_expr = Expression::Function(
             "time_bucket".to_string(),
@@ -3970,7 +4370,7 @@ mod tests {
         let map_node = Node::Map(map_named, Box::new(ds));
         let group_key = PathExpr::new(vec![PathSegment::AttrName("bucket".to_string())]);
 
-        let result = Node::detect_streaming_groupby(&[group_key], &map_node);
+        let result = Node::detect_time_bucket_groupby(&[group_key], &map_node, &Variables::new());
         assert!(result.is_none());
     }
 }
@@ -4088,6 +4488,18 @@ mod accumulator_tests {
         state.accumulate_row().unwrap();
         state.accumulate_row().unwrap();
         assert!(matches!(state, AccumulatorState::CountStar(3)));
+    }
+
+    #[test]
+    fn test_sum_accumulates_before_rounding_to_public_float() {
+        let mut state = AccumulatorState::new(&AccumulatorKind::Sum);
+        let mut legacy = SumAggregate::new();
+        for value in [16_777_216, 1, -16_777_216] {
+            state.accumulate(&Value::Int(value)).unwrap();
+            legacy.add_record(&None, &Value::Int(value)).unwrap();
+        }
+        assert_eq!(state.finalize().unwrap(), Value::Float(OrderedFloat(1.0)));
+        assert_eq!(legacy.get_aggregated(&None).unwrap(), Value::Float(OrderedFloat(1.0)));
     }
 
     #[test]
@@ -4379,8 +4791,8 @@ mod accumulator_tests {
 
     #[test]
     fn test_accumulator_merge_sum() {
-        let mut a = AccumulatorState::Sum(Some(OrderedFloat(3.0f32)));
-        let b = AccumulatorState::Sum(Some(OrderedFloat(7.0f32)));
+        let mut a = AccumulatorState::Sum(Some(OrderedFloat(3.0f64)));
+        let b = AccumulatorState::Sum(Some(OrderedFloat(7.0f64)));
         a.merge(&b);
         assert_eq!(a.finalize().unwrap(), Value::Float(OrderedFloat(10.0f32)));
     }
@@ -4388,7 +4800,7 @@ mod accumulator_tests {
     #[test]
     fn test_accumulator_merge_sum_none_left() {
         let mut a = AccumulatorState::Sum(None);
-        let b = AccumulatorState::Sum(Some(OrderedFloat(5.0f32)));
+        let b = AccumulatorState::Sum(Some(OrderedFloat(5.0f64)));
         a.merge(&b);
         assert_eq!(a.finalize().unwrap(), Value::Float(OrderedFloat(5.0f32)));
     }
@@ -4455,11 +4867,11 @@ mod accumulator_tests {
         ];
         let mut gs_a = GroupState::new(&defs);
         gs_a.accumulators[0] = AccumulatorState::CountStar(3);
-        gs_a.accumulators[1] = AccumulatorState::Sum(Some(OrderedFloat(10.0f32)));
+        gs_a.accumulators[1] = AccumulatorState::Sum(Some(OrderedFloat(10.0f64)));
 
         let mut gs_b = GroupState::new(&defs);
         gs_b.accumulators[0] = AccumulatorState::CountStar(2);
-        gs_b.accumulators[1] = AccumulatorState::Sum(Some(OrderedFloat(5.0f32)));
+        gs_b.accumulators[1] = AccumulatorState::Sum(Some(OrderedFloat(5.0f64)));
 
         gs_a.merge(&gs_b);
         assert_eq!(gs_a.accumulators[0].finalize().unwrap(), Value::Int(5));

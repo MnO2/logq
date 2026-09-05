@@ -18,7 +18,11 @@ fn bench_udfs(c: &mut Criterion) {
     let args_upper = vec![Value::String("hello world".into())];
     group.bench_function("upper", |b| {
         b.iter(|| {
-            let _ = black_box(registry.call("upper", black_box(&args_upper)));
+            let _ = black_box(
+                registry
+                    .call("upper", black_box(&args_upper))
+                    .expect("upper benchmark failed"),
+            );
         });
     });
 
@@ -26,7 +30,11 @@ fn bench_udfs(c: &mut Criterion) {
     let args_round = vec![Value::Float(OrderedFloat::from(std::f32::consts::PI)), Value::Int(2)];
     group.bench_function("round", |b| {
         b.iter(|| {
-            let _ = black_box(registry.call("round", black_box(&args_round)));
+            let _ = black_box(
+                registry
+                    .call("round", black_box(&args_round))
+                    .expect("round benchmark failed"),
+            );
         });
     });
 
@@ -35,7 +43,11 @@ fn bench_udfs(c: &mut Criterion) {
     let args_datepart = vec![Value::String("month".into()), Value::DateTime(fixed_dt)];
     group.bench_function("date_part", |b| {
         b.iter(|| {
-            let _ = black_box(registry.call("date_part", black_box(&args_datepart)));
+            let _ = black_box(
+                registry
+                    .call("date_part", black_box(&args_datepart))
+                    .expect("date_part benchmark failed"),
+            );
         });
     });
 
@@ -52,7 +64,11 @@ fn bench_udfs(c: &mut Criterion) {
     ];
     group.bench_function("array_contains", |b| {
         b.iter(|| {
-            let _ = black_box(registry.call("array_contains", black_box(&args_array)));
+            let _ = black_box(
+                registry
+                    .call("array_contains", black_box(&args_array))
+                    .expect("array_contains benchmark failed"),
+            );
         });
     });
 
@@ -63,17 +79,27 @@ fn bench_udfs(c: &mut Criterion) {
     let args_map = vec![Value::Object(Box::new(map))];
     group.bench_function("map_keys", |b| {
         b.iter(|| {
-            let _ = black_box(registry.call("map_keys", black_box(&args_map)));
+            let _ = black_box(
+                registry
+                    .call("map_keys", black_box(&args_map))
+                    .expect("map_keys benchmark failed"),
+            );
         });
     });
 
     // U6: regexp_like("foo123", "\d+") -- Regex (steady-state cached)
     let args_regex = vec![Value::String("foo123".into()), Value::String(r"\d+".into())];
     // Warm the cache
-    let _ = registry.call("regexp_like", &args_regex);
+    registry
+        .call("regexp_like", &args_regex)
+        .expect("regex cache warmup failed");
     group.bench_function("regexp_like", |b| {
         b.iter(|| {
-            let _ = black_box(registry.call("regexp_like", black_box(&args_regex)));
+            let _ = black_box(
+                registry
+                    .call("regexp_like", black_box(&args_regex))
+                    .expect("regexp_like benchmark failed"),
+            );
         });
     });
 

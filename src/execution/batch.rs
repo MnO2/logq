@@ -196,6 +196,76 @@ impl BatchStream for ConcatBatchStream {
     }
 }
 
+type BatchStreamFactory = dyn FnMut() -> StreamResult<Option<Box<dyn BatchStream>>>;
+
+/// Opens one file at a time, so glob size does not determine open descriptors,
+/// mapped regions or idle scanner buffers. A LIMIT never opens later files.
+pub(crate) struct LazyConcatBatchStream {
+    next_stream: Box<BatchStreamFactory>,
+    current: Option<Box<dyn BatchStream>>,
+    batch_schema: BatchSchema,
+    closed: std::cell::Cell<bool>,
+}
+
+impl LazyConcatBatchStream {
+    pub(crate) fn new(
+        batch_schema: BatchSchema,
+        next_stream: impl FnMut() -> StreamResult<Option<Box<dyn BatchStream>>> + 'static,
+    ) -> Self {
+        Self {
+            next_stream: Box::new(next_stream),
+            current: None,
+            batch_schema,
+            closed: std::cell::Cell::new(false),
+        }
+    }
+}
+
+impl BatchStream for LazyConcatBatchStream {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        if self.closed.get() {
+            return Ok(None);
+        }
+        loop {
+            if let Some(stream) = &mut self.current {
+                match stream.next_batch() {
+                    Ok(Some(batch)) => return Ok(Some(batch)),
+                    Ok(None) => stream.close(),
+                    Err(error) => {
+                        stream.close();
+                        self.current = None;
+                        self.closed.set(true);
+                        return Err(error);
+                    }
+                }
+                self.current = None;
+            }
+            match (self.next_stream)() {
+                Ok(Some(stream)) => self.current = Some(stream),
+                Ok(None) => {
+                    self.closed.set(true);
+                    return Ok(None);
+                }
+                Err(error) => {
+                    self.closed.set(true);
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.batch_schema
+    }
+
+    fn close(&self) {
+        self.closed.set(true);
+        if let Some(stream) = &self.current {
+            stream.close();
+        }
+    }
+}
+
 /// Converts a [`BatchStream`] into a [`RecordStream`] by materializing each
 /// columnar batch into individual [`Record`] rows, respecting the
 /// [`SelectionVector`] (skipping inactive rows).
@@ -291,8 +361,8 @@ impl BatchToRowAdapter {
                     return Value::Null;
                 }
                 let micros = data[row];
-                let secs = micros / 1_000_000;
-                let nanos = ((micros % 1_000_000) * 1000) as u32;
+                let secs = micros.div_euclid(1_000_000);
+                let nanos = (micros.rem_euclid(1_000_000) * 1000) as u32;
                 let fixed = chrono::DateTime::from_timestamp(secs, nanos)
                     .expect("invalid timestamp")
                     .fixed_offset();
@@ -543,7 +613,116 @@ impl BatchStream for RowToBatchAdapter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn datetime_column_extracts_negative_fractional_epoch_without_panicking() {
+        let column = super::TypedColumn::DateTime {
+            data: crate::simd::padded_vec::PaddedVec::from_vec(vec![-1, -1_000_001]),
+            null: crate::simd::bitmap::Bitmap::all_set(2),
+            missing: crate::simd::bitmap::Bitmap::all_set(2),
+        };
+        for (row, micros) in [-1, -1_000_001].into_iter().enumerate() {
+            let crate::common::types::Value::DateTime(timestamp) =
+                super::BatchToRowAdapter::extract_value(&column, row)
+            else {
+                panic!("expected timestamp")
+            };
+            assert_eq!(timestamp.timestamp_micros(), micros);
+        }
+    }
     use super::*;
+
+    #[test]
+    fn lazy_concat_opens_only_the_requested_file_and_stops_after_close() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let opened = Rc::new(Cell::new(0));
+        let opened_by_factory = opened.clone();
+        let schema = BatchSchema {
+            names: vec![],
+            types: vec![],
+        };
+        let child_schema = schema.clone();
+        let mut stream = LazyConcatBatchStream::new(schema, move || {
+            opened_by_factory.set(opened_by_factory.get() + 1);
+            Ok(Some(Box::new(PrecomputedBatchStream::new(
+                vec![ColumnBatch {
+                    columns: vec![],
+                    names: vec![],
+                    selection: SelectionVector::All,
+                    len: 1,
+                }],
+                child_schema.clone(),
+            )) as Box<dyn BatchStream>))
+        });
+        assert_eq!(opened.get(), 0);
+        assert_eq!(stream.next_batch().unwrap().unwrap().len, 1);
+        assert_eq!(opened.get(), 1);
+        stream.close();
+        assert!(stream.next_batch().unwrap().is_none());
+        assert_eq!(opened.get(), 1);
+    }
+
+    #[test]
+    fn lazy_concat_releases_previous_file_before_opening_next_and_preserves_errors() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        struct TrackedBatch {
+            active: Rc<Cell<usize>>,
+            schema: BatchSchema,
+            remaining: usize,
+        }
+        impl BatchStream for TrackedBatch {
+            fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+                if self.remaining == 0 {
+                    return Ok(None);
+                }
+                self.remaining = 0;
+                Ok(Some(ColumnBatch {
+                    columns: vec![],
+                    names: vec![],
+                    selection: SelectionVector::All,
+                    len: 1,
+                }))
+            }
+            fn schema(&self) -> &BatchSchema {
+                &self.schema
+            }
+            fn close(&self) {}
+        }
+        impl Drop for TrackedBatch {
+            fn drop(&mut self) {
+                self.active.set(self.active.get() - 1);
+            }
+        }
+        let active = Rc::new(Cell::new(0));
+        let factory_active = active.clone();
+        let schema = BatchSchema {
+            names: vec![],
+            types: vec![],
+        };
+        let child_schema = schema.clone();
+        let mut opened = 0;
+        let mut stream = LazyConcatBatchStream::new(schema, move || {
+            assert_eq!(factory_active.get(), 0, "previous file remains open");
+            opened += 1;
+            if opened == 3 {
+                return Err(crate::execution::types::StreamError::Reader);
+            }
+            factory_active.set(1);
+            Ok(Some(Box::new(TrackedBatch {
+                active: factory_active.clone(),
+                schema: child_schema.clone(),
+                remaining: opened - 1,
+            }) as Box<dyn BatchStream>))
+        });
+        assert_eq!(stream.next_batch().unwrap().unwrap().len, 1);
+        assert_eq!(active.get(), 1);
+        assert!(matches!(
+            stream.next_batch(),
+            Err(crate::execution::types::StreamError::Reader)
+        ));
+        assert_eq!(active.get(), 0);
+    }
     use crate::simd::bitmap::Bitmap;
     use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
 
