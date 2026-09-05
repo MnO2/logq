@@ -1,7 +1,135 @@
 // src/execution/batch_project.rs
 
+use crate::common::types::{Value, Variables};
 use crate::execution::batch::*;
+use crate::execution::batch_expression::BoundExpression;
+use crate::execution::memory::{MemoryReservation, MemoryTracker, estimate_batch};
 use crate::execution::types::StreamResult;
+use crate::execution::types::{Expression, Named};
+use crate::functions::FunctionRegistry;
+use std::sync::Arc;
+
+/// General projections retain batches while executing bound scalar kernels.
+/// The existing move-only column projection remains the path for simple maps.
+pub(crate) struct BatchExpressionOperator {
+    child: Box<dyn BatchStream>,
+    expressions: Vec<Expression>,
+    bound: Vec<BoundExpression>,
+    output_positions: Vec<usize>,
+    input_schema: BatchSchema,
+    schema: BatchSchema,
+    scope: Variables,
+    registry: Arc<FunctionRegistry>,
+    output_memory: MemoryReservation,
+}
+
+impl BatchExpressionOperator {
+    pub(crate) fn supports(named: &[Named]) -> bool {
+        named.iter().all(|named| {
+            matches!(named,
+                Named::Expression(expression, _) if BoundExpression::supports(expression)
+            )
+        })
+    }
+
+    pub(crate) fn new(
+        child: Box<dyn BatchStream>,
+        named: &[Named],
+        scope: Variables,
+        registry: Arc<FunctionRegistry>,
+    ) -> Self {
+        let mut names = Vec::new();
+        let mut original_names = Vec::with_capacity(named.len());
+        let mut expressions = Vec::with_capacity(named.len());
+        for (position, named) in named.iter().enumerate() {
+            let Named::Expression(expression, alias) = named else {
+                unreachable!("supported expression map");
+            };
+            let output = alias.clone().unwrap_or_else(|| format!("_{position}"));
+            if let Some(position) = names.iter().position(|name| name == &output) {
+                names.remove(position);
+            }
+            names.push(output.clone());
+            original_names.push(output);
+            expressions.push(expression.clone());
+        }
+        let output_positions = original_names
+            .iter()
+            .map(|name| names.iter().position(|output| name == output).unwrap())
+            .collect();
+        let input_schema = child.schema().clone();
+        let bound = expressions
+            .iter()
+            .map(|expression| BoundExpression::bind(expression, &input_schema, &scope))
+            .collect();
+        Self {
+            child,
+            expressions,
+            bound,
+            output_positions,
+            input_schema,
+            schema: BatchSchema {
+                types: vec![ColumnType::Mixed; names.len()],
+                names,
+            },
+            scope,
+            registry,
+            output_memory: MemoryReservation::default(),
+        }
+    }
+
+    pub(crate) fn with_memory_tracker(mut self, memory: MemoryTracker) -> Self {
+        self.output_memory = MemoryReservation::new(memory);
+        self
+    }
+}
+
+impl BatchStream for BatchExpressionOperator {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        self.output_memory.resize(0)?;
+        let Some(batch) = self.child.next_batch()? else {
+            return Ok(None);
+        };
+        if batch.names != self.input_schema.names {
+            self.input_schema.names = batch.names.clone();
+            self.bound = self
+                .expressions
+                .iter()
+                .map(|expression| BoundExpression::bind(expression, &self.input_schema, &self.scope))
+                .collect();
+        }
+        let mut columns: Vec<Vec<Value>> = (0..self.schema.names.len())
+            .map(|_| vec![Value::Missing; batch.len])
+            .collect();
+        for row in (0..batch.len).filter(|&row| batch.selection.is_active(row, batch.len)) {
+            // Keep row/SELECT-list evaluation order, including overwritten
+            // aliases whose expressions can still report an error.
+            for (expression, output) in self.bound.iter_mut().zip(&self.output_positions) {
+                columns[*output][row] = expression.evaluate(&batch, row, &self.registry)?;
+            }
+        }
+        let output = ColumnBatch {
+            columns: columns
+                .into_iter()
+                .map(crate::execution::json_batch_scan::typed_column)
+                .collect(),
+            names: self.schema.names.clone(),
+            selection: batch.selection,
+            len: batch.len,
+        };
+        if self.output_memory.is_enabled() {
+            self.output_memory.resize(estimate_batch(&output))?;
+        }
+        Ok(Some(output))
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.schema
+    }
+    fn close(&self) {
+        self.child.close();
+    }
+}
 
 /// Projects (selects) a subset of columns from a ColumnBatch.
 pub(crate) struct BatchProjectOperator {

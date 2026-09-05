@@ -56,5 +56,42 @@ fn bench_datasource(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_datasource);
+fn bench_json_batch_scan(c: &mut Criterion) {
+    let mut group = c.benchmark_group("json_batch_scan");
+    let rows = 4096u64;
+    for (name, length, unique) in [
+        ("short_repeated", 8, false),
+        ("short_unique", 8, true),
+        ("long_repeated", 256, false),
+        ("long_unique", 256, true),
+    ] {
+        let mut input = Vec::new();
+        for row in 0..rows {
+            let key = if unique { row } else { row % 5 };
+            let value = format!("{key:08}-{}", "payload".repeat(length / 7));
+            use std::io::Write;
+            writeln!(&mut input, "{{\"n\":{row},\"s\":\"{value}\"}}").unwrap();
+        }
+        let data: std::sync::Arc<[u8]> = input.into();
+        group.throughput(Throughput::Bytes(data.len() as u64));
+        for dictionary in [false, true] {
+            group.bench_function(format!("{name}/dictionary_{dictionary}"), |b| {
+                b.iter(|| {
+                    let reader = Box::new(std::io::Cursor::new(std::sync::Arc::clone(&data)));
+                    let mut scanner = json_batch_scanner(reader, vec!["n".into(), "s".into()], dictionary);
+                    let mut count = 0;
+                    while let Some(batch) = scanner.next_batch().expect("JSON batch benchmark failed") {
+                        count += batch.len as u64;
+                        black_box(batch);
+                    }
+                    assert_eq!(count, rows);
+                    black_box(count)
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_datasource, bench_json_batch_scan);
 criterion_main!(benches);

@@ -4,6 +4,7 @@
 //! numeric range checks, string decoding and nesting limits match full decoding.
 
 use crate::common::types::{Value, Variables};
+use crate::execution::json_column_builder::JsonColumnBuilder;
 use ordered_float::OrderedFloat;
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
@@ -25,10 +26,10 @@ pub(crate) fn parse_record(
 pub(crate) fn parse_columns(
     line: &str,
     field_indices: &HashMap<String, usize>,
-    columns: &mut [Vec<Value>],
+    columns: &mut [JsonColumnBuilder],
 ) -> Result<(), serde_json::Error> {
     for column in columns.iter_mut() {
-        column.push(Value::Missing);
+        column.begin_row();
     }
     let mut deserializer = serde_json::Deserializer::from_str(line);
     (&mut deserializer).deserialize_map(ColumnsVisitor { field_indices, columns })?;
@@ -37,7 +38,7 @@ pub(crate) fn parse_columns(
 
 struct ColumnsVisitor<'a> {
     field_indices: &'a HashMap<String, usize>,
-    columns: &'a mut [Vec<Value>],
+    columns: &'a mut [JsonColumnBuilder],
 }
 
 impl<'de> Visitor<'de> for ColumnsVisitor<'_> {
@@ -50,13 +51,81 @@ impl<'de> Visitor<'de> for ColumnsVisitor<'_> {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
         while let Some(index) = map.next_key_seed(ColumnKeySeed(self.field_indices))? {
             if let Some(index) = index {
-                let value = map.next_value_seed(ValueSeed::<true>)?.unwrap();
-                // parse_columns appended this row's placeholder before visiting.
-                *self.columns[index].last_mut().unwrap() = value;
+                map.next_value_seed(ColumnValueSeed(&mut self.columns[index]))?;
             } else {
                 map.next_value_seed(ValueSeed::<false>)?;
             }
         }
+        Ok(())
+    }
+}
+
+/// Scalars are written into their final column storage. Only nested selected
+/// values require the dynamic visitor used by the row reader.
+struct ColumnValueSeed<'a>(&'a mut JsonColumnBuilder);
+
+impl<'de> DeserializeSeed<'de> for ColumnValueSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for ColumnValueSeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<(), E> {
+        self.0.put_bool(value);
+        Ok(())
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<(), E> {
+        match i32::try_from(value) {
+            Ok(value) => self.0.put_int(value),
+            Err(_) => self.0.put_float(value as f64 as f32),
+        }
+        Ok(())
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<(), E> {
+        match i32::try_from(value) {
+            Ok(value) => self.0.put_int(value),
+            Err(_) => self.0.put_float(value as f64 as f32),
+        }
+        Ok(())
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<(), E> {
+        self.0.put_float(value as f32);
+        Ok(())
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<(), E> {
+        self.0.put_str(value);
+        Ok(())
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<(), E> {
+        self.visit_str(&value)
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        self.0.put_null();
+        Ok(())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<(), A::Error> {
+        self.0.put_value(ValueSeed::<true>.visit_seq(seq)?.unwrap());
+        Ok(())
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<(), A::Error> {
+        self.0.put_value(ValueSeed::<true>.visit_map(map)?.unwrap());
         Ok(())
     }
 }

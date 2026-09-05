@@ -1,5 +1,6 @@
 pub mod batch;
 pub(crate) mod batch_distinct;
+pub(crate) mod batch_expression;
 pub mod batch_filter;
 pub mod batch_groupby;
 pub mod batch_limit;
@@ -13,6 +14,7 @@ pub mod datasource;
 pub mod field_analysis;
 pub mod field_parser;
 pub(crate) mod json_batch_scan;
+pub(crate) mod json_column_builder;
 pub(crate) mod json_reader;
 pub mod log_schema;
 pub(crate) mod memory;

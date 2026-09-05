@@ -280,7 +280,7 @@ pub type VariableName = String;
 pub type Variables = LinkedHashMap<String, Value>;
 
 /// Apply remaining path segments (starting at index `from`) to a single Value.
-fn apply_path_to_value(path_expr: &ast::PathExpr, from: usize, value: &Value) -> Value {
+pub(crate) fn apply_path_to_value(path_expr: &ast::PathExpr, from: usize, value: &Value) -> Value {
     if from >= path_expr.path_segments.len() {
         return value.clone();
     }

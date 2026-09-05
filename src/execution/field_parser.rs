@@ -379,7 +379,7 @@ pub(crate) fn parse_field_column_selected<L: AsRef<[u8]>, F: AsRef<[(usize, usiz
 /// Attempt to dictionary-encode a Utf8 column.
 /// If the number of unique values is less than half the row count (and <= 4096),
 /// returns a DictUtf8 column; otherwise returns the original Utf8 unchanged.
-fn try_dict_encode(col: TypedColumn) -> TypedColumn {
+pub(crate) fn try_dict_encode(col: TypedColumn) -> TypedColumn {
     let (data, offsets, null, missing) = match col {
         TypedColumn::Utf8 {
             data,
@@ -397,6 +397,28 @@ fn try_dict_encode(col: TypedColumn) -> TypedColumn {
             null,
             missing,
         };
+    }
+
+    // Sample spread-out rows before allocating per-row codes. Unique request
+    // identifiers should stay Utf8 without hashing half a full batch first.
+    // A false negative only forgoes compression; the full pass below still
+    // checks cardinality when a sample happens to contain repeated values.
+    if len >= 128 {
+        let mut sample = hashbrown::HashSet::with_capacity(32);
+        for index in 0..32 {
+            let row = index * (len - 1) / 31;
+            sample.insert(&data[offsets[row] as usize..offsets[row + 1] as usize]);
+        }
+        let high_cardinality = sample.len() > 16;
+        drop(sample);
+        if high_cardinality {
+            return TypedColumn::Utf8 {
+                data,
+                offsets,
+                null,
+                missing,
+            };
+        }
     }
 
     // Phase 1: determine unique strings and assign codes.

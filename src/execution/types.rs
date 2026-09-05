@@ -8,7 +8,7 @@ use crate::common::types::{DataSource, Tuple, Value, VariableName, Variables};
 use crate::execution::batch::{BatchSchema, BatchStream, BatchToRowAdapter, ColumnType};
 use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
-use crate::execution::batch_project::BatchProjectOperator;
+use crate::execution::batch_project::{BatchExpressionOperator, BatchProjectOperator};
 use crate::execution::batch_scan::BatchScanOperator;
 use crate::execution::log_schema::LogSchema;
 use crate::execution::parallel;
@@ -95,8 +95,11 @@ impl From<ReaderError> for StreamError {
 }
 
 impl From<AggregateError> for StreamError {
-    fn from(_: AggregateError) -> StreamError {
-        StreamError::Aggregate
+    fn from(error: AggregateError) -> StreamError {
+        match error {
+            AggregateError::CardinalityOverflow => StreamError::General(error.to_string()),
+            _ => StreamError::Aggregate,
+        }
     }
 }
 
@@ -222,38 +225,7 @@ impl Expression {
             }
             Expression::Cast(inner, cast_type) => {
                 let val = inner.expression_value_impl(variables, scope, registry)?;
-                match (&val, cast_type) {
-                    (Value::Null, _) => Ok(Value::Null),
-                    (Value::Missing, _) => Ok(Value::Missing),
-                    // To Int
-                    (Value::Int(_), CastType::Int) => Ok(val),
-                    (Value::Float(f), CastType::Int) => Ok(Value::Int(f.into_inner() as i32)),
-                    (Value::String(s), CastType::Int) => s
-                        .parse::<i32>()
-                        .map(Value::Int)
-                        .map_err(|_| ExpressionError::TypeMismatch),
-                    (Value::Boolean(b), CastType::Int) => Ok(Value::Int(if *b { 1 } else { 0 })),
-                    // To Float
-                    (Value::Float(_), CastType::Float) => Ok(val),
-                    (Value::Int(i), CastType::Float) => Ok(Value::Float(OrderedFloat::from(*i as f32))),
-                    (Value::String(s), CastType::Float) => s
-                        .parse::<f32>()
-                        .map(|f| Value::Float(OrderedFloat::from(f)))
-                        .map_err(|_| ExpressionError::TypeMismatch),
-                    // To String (Varchar)
-                    (Value::String(_), CastType::Varchar) => Ok(val),
-                    (Value::Int(i), CastType::Varchar) => Ok(Value::String(i.to_string().into())),
-                    (Value::Float(f), CastType::Varchar) => Ok(Value::String(f.to_string().into())),
-                    (Value::Boolean(b), CastType::Varchar) => Ok(Value::String(b.to_string().into())),
-                    // To Boolean
-                    (Value::Boolean(_), CastType::Boolean) => Ok(val),
-                    (Value::String(s), CastType::Boolean) => match s.to_lowercase().as_str() {
-                        "true" => Ok(Value::Boolean(true)),
-                        "false" => Ok(Value::Boolean(false)),
-                        _ => Err(ExpressionError::TypeMismatch),
-                    },
-                    _ => Err(ExpressionError::TypeMismatch),
-                }
+                cast_value(val, cast_type)
             }
             Expression::Subquery(node) => {
                 let mut stream = node
@@ -271,6 +243,38 @@ impl Expression {
                 }
             }
         }
+    }
+}
+
+/// Shared scalar cast semantics for row evaluation and bound batch kernels.
+pub(crate) fn cast_value(val: Value, cast_type: &CastType) -> ExpressionResult<Value> {
+    match (&val, cast_type) {
+        (Value::Null, _) => Ok(Value::Null),
+        (Value::Missing, _) => Ok(Value::Missing),
+        (Value::Int(_), CastType::Int) => Ok(val),
+        (Value::Float(f), CastType::Int) => Ok(Value::Int(f.into_inner() as i32)),
+        (Value::String(s), CastType::Int) => s
+            .parse::<i32>()
+            .map(Value::Int)
+            .map_err(|_| ExpressionError::TypeMismatch),
+        (Value::Boolean(b), CastType::Int) => Ok(Value::Int(if *b { 1 } else { 0 })),
+        (Value::Float(_), CastType::Float) => Ok(val),
+        (Value::Int(i), CastType::Float) => Ok(Value::Float(OrderedFloat::from(*i as f32))),
+        (Value::String(s), CastType::Float) => s
+            .parse::<f32>()
+            .map(|f| Value::Float(OrderedFloat::from(f)))
+            .map_err(|_| ExpressionError::TypeMismatch),
+        (Value::String(_), CastType::Varchar) => Ok(val),
+        (Value::Int(i), CastType::Varchar) => Ok(Value::String(i.to_string().into())),
+        (Value::Float(f), CastType::Varchar) => Ok(Value::String(f.to_string().into())),
+        (Value::Boolean(b), CastType::Varchar) => Ok(Value::String(b.to_string().into())),
+        (Value::Boolean(_), CastType::Boolean) => Ok(val),
+        (Value::String(s), CastType::Boolean) => match s.to_lowercase().as_str() {
+            "true" => Ok(Value::Boolean(true)),
+            "false" => Ok(Value::Boolean(false)),
+            _ => Err(ExpressionError::TypeMismatch),
+        },
+        _ => Err(ExpressionError::TypeMismatch),
     }
 }
 
@@ -825,7 +829,14 @@ impl Node {
                 }
                 Ok(())
             }
-            Node::Filter(source, _) | Node::Limit(_, source) | Node::Distinct(source) => {
+            Node::Filter(source, _) | Node::Distinct(source) => source.batch_support(projected_json, variables),
+            Node::Limit(_, source) => {
+                if source.prefix_requires_row_expressions() {
+                    return Err(BatchFallback {
+                        node: "Limit",
+                        reason: "prefix LIMIT keeps expression evaluation and JSON parsing demand-driven".into(),
+                    });
+                }
                 source.batch_support(projected_json, variables)
             }
             Node::OrderBy(keys, _, source) => {
@@ -847,10 +858,17 @@ impl Node {
                     Named::Star => true,
                     _ => false,
                 });
-                if !is_simple {
+                if !is_simple && !BatchExpressionOperator::supports(named_list) {
                     return Err(BatchFallback {
                         node: "Map",
-                        reason: "complex projection expression".to_string(),
+                        reason: "unsupported projection expression (subquery or wildcard scope)".to_string(),
+                    });
+                }
+                if !is_simple && !source.has_batch_expression_source() {
+                    return Err(BatchFallback {
+                        node: "Map",
+                        reason: "general batch expressions require JSONL input; fixed-format row values are preserved"
+                            .into(),
                     });
                 }
                 if named_list.iter().any(|named| matches!(named, Named::Star))
@@ -914,6 +932,87 @@ impl Node {
         }
     }
 
+    fn has_batch_expression_source(&self) -> bool {
+        // Fixed-format row and batch readers still differ for quoted strings
+        // and invalid numeric tokens. Expanding a Map onto those scans would
+        // change existing values or turn parse errors into NULLs. Keep the new
+        // general kernels on strict JSONL; dedicated existing operators remain.
+        self.find_datasource_format()
+            .is_some_and(|(format, _)| format == "jsonl")
+    }
+
+    fn prefix_requires_row_expressions(&self) -> bool {
+        match self {
+            Node::Map(named, source) => {
+                let complex = named.iter().any(|named| {
+                    !matches!(named,
+                        Named::Expression(Expression::Variable(path), _)
+                            if matches!(path.path_segments.as_slice(), [PathSegment::AttrName(_)])
+                    )
+                });
+                (complex && BatchExpressionOperator::supports(named) && source.has_batch_expression_source())
+                    || source.prefix_requires_row_expressions()
+            }
+            Node::Filter(source, _) | Node::Distinct(source) | Node::Limit(_, source) => {
+                source.prefix_requires_row_expressions()
+            }
+            // These operators must consume all input before LIMIT can emit.
+            Node::OrderBy(..) | Node::GroupBy(..) => false,
+            _ => false,
+        }
+    }
+
+    /// A newly supported expression under a prefix LIMIT must not read or
+    /// evaluate rows after the requested result. Row Map/Filter/Distinct stages
+    /// preserve that demand all the way to the reader, not merely an outer mask
+    /// applied after a JSON batch has already been parsed.
+    fn get_expression_prefix_rows(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+        memory: crate::execution::memory::MemoryTracker,
+        required_roots: Option<&[String]>,
+    ) -> CreateStreamResult<Box<dyn RecordStream>> {
+        match self {
+            Node::Map(named, source) => {
+                let child = source.get_expression_prefix_rows(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory,
+                    required_roots,
+                )?;
+                Ok(Box::new(MapStream::new(named.clone(), variables, child, registry)))
+            }
+            Node::Filter(source, formula) => {
+                let child = source.get_expression_prefix_rows(
+                    variables.clone(),
+                    registry.clone(),
+                    threads,
+                    memory,
+                    required_roots,
+                )?;
+                Ok(Box::new(FilterStream::new(
+                    *formula.clone(),
+                    variables,
+                    child,
+                    registry,
+                )))
+            }
+            Node::Distinct(source) => {
+                let child =
+                    source.get_expression_prefix_rows(variables, registry, threads, memory.clone(), required_roots)?;
+                Ok(Box::new(DistinctStream::new_with_memory_tracker(child, memory)))
+            }
+            Node::Limit(count, source) => {
+                let child = source.get_expression_prefix_rows(variables, registry, threads, memory, required_roots)?;
+                Ok(Box::new(LimitStream::new(*count, child)))
+            }
+            _ => self.get_with_context(variables, registry, threads, memory, required_roots),
+        }
+    }
+
     /// Compute the set of field indices needed by this plan tree.
     /// Returns an empty vec for JSONL or when the format is unknown.
     fn compute_required_fields_for_batch(&self) -> Vec<usize> {
@@ -935,6 +1034,76 @@ impl Node {
             // aggregate operator rather than substituting a row count.
             _ => None,
         }
+    }
+
+    /// Aggregates read their already-computed projection, rather than evaluating
+    /// the input expression a second time against a row that no longer contains
+    /// its source fields. Physical literals have distinct hoisted names in the
+    /// aggregate and Map trees, so compare them after resolving those literals.
+    fn materialized_aggregate_inputs(
+        aggregates: &[NamedAggregate],
+        source: &Node,
+        variables: &Variables,
+    ) -> Vec<NamedAggregate> {
+        use crate::execution::batch_expression::resolve_literal_names;
+        let mut resolved = aggregates.to_vec();
+        let Node::Map(projections, _) = source else {
+            return resolved;
+        };
+        let outputs: Vec<_> = projections
+            .iter()
+            .enumerate()
+            .map(|(index, projection)| match projection {
+                Named::Expression(_, alias) => Some(alias.clone().unwrap_or_else(|| format!("_{index}"))),
+                Named::Star => None,
+            })
+            .collect();
+        // Equal-looking occurrences can call volatile functions. Each aggregate
+        // consumes its own projected occurrence, not another occurrence's value.
+        let mut assigned = vec![false; projections.len()];
+        for aggregate in &mut resolved {
+            let named = match &mut aggregate.aggregate {
+                Aggregate::Avg(_, named)
+                | Aggregate::Count(_, named)
+                | Aggregate::Sum(_, named)
+                | Aggregate::Min(_, named)
+                | Aggregate::Max(_, named)
+                | Aggregate::First(_, named)
+                | Aggregate::Last(_, named)
+                | Aggregate::ApproxCountDistinct(_, named) => named,
+                _ => continue,
+            };
+            let Named::Expression(expression, _) = named else {
+                continue;
+            };
+            if matches!(expression, Expression::Variable(_)) {
+                continue;
+            }
+            let target = resolve_literal_names(expression, variables);
+            for (index, projection) in projections.iter().enumerate() {
+                if assigned[index] {
+                    continue;
+                }
+                let Named::Expression(projected, _) = projection else {
+                    continue;
+                };
+                let output = outputs[index].as_ref().unwrap();
+                // An overwritten alias no longer denotes this expression. A
+                // later star can also overwrite it; keep such shapes unchanged.
+                if outputs[index + 1..]
+                    .iter()
+                    .any(|later| later.as_ref().is_none_or(|later| later == output))
+                {
+                    continue;
+                }
+                if resolve_literal_names(projected, variables) == target {
+                    assigned[index] = true;
+                    *expression = Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(output.clone())]));
+                    break;
+                }
+            }
+        }
+        resolved
     }
 
     /// Try to build a scan operator with aggregation pushed down.
@@ -1049,13 +1218,19 @@ impl Node {
             Node::Map(named_list, source) => (named_list, source.as_ref()),
             _ => return None,
         };
+        if !BatchExpressionOperator::supports(named_list) {
+            return None;
+        }
         let mut projection = Vec::with_capacity(named_list.len());
+        let mut complex = false;
         for named in named_list {
             let Named::Expression(Expression::Variable(path), alias) = named else {
-                return None;
+                complex = true;
+                break;
             };
             if path.path_segments.len() != 1 {
-                return None;
+                complex = true;
+                break;
             }
             let PathSegment::AttrName(name) = &path.path_segments[0] else {
                 return None;
@@ -1070,6 +1245,9 @@ impl Node {
             return None;
         };
         if !bindings.is_empty() {
+            return None;
+        }
+        if complex && format != "jsonl" {
             return None;
         }
         let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) else {
@@ -1104,12 +1282,29 @@ impl Node {
             Ok(scan) => scan,
             Err(_) => return Some(Err(CreateStreamError::Io)),
         };
+        let mut mapped_names = Vec::new();
+        for (index, named) in named_list.iter().enumerate() {
+            let name = if complex {
+                let Named::Expression(_, alias) = named else {
+                    unreachable!("expression projection");
+                };
+                alias.clone().unwrap_or_else(|| format!("_{index}"))
+            } else {
+                projection[index].1.clone()
+            };
+            if let Some(index) = mapped_names.iter().position(|existing| existing == &name) {
+                mapped_names.remove(index);
+            }
+            mapped_names.push(name);
+        }
         let mapped_schema = BatchSchema {
-            names: projection.iter().map(|(_, output)| output.clone()).collect(),
-            types: vec![ColumnType::Mixed; projection.len()],
+            types: vec![ColumnType::Mixed; mapped_names.len()],
+            names: mapped_names,
         };
+        let named_list = named_list.clone();
         let scope = variables.clone();
         let functions = registry.clone();
+        let worker_memory = memory.clone();
         let stream = scan
             .map_workers(mapped_schema, move |mut child| {
                 if is_json {
@@ -1122,7 +1317,14 @@ impl Node {
                         ));
                     }
                 }
-                Box::new(BatchProjectOperator::with_projection(child, projection.clone()).with_scope(scope.clone()))
+                if complex {
+                    Box::new(
+                        BatchExpressionOperator::new(child, &named_list, scope.clone(), functions.clone())
+                            .with_memory_tracker(worker_memory.clone()),
+                    )
+                } else {
+                    Box::new(BatchProjectOperator::with_projection(child, projection.clone()).with_scope(scope.clone()))
+                }
             })
             .into_aggregate(
                 keys.to_vec(),
@@ -1290,7 +1492,7 @@ impl Node {
                                 crate::execution::datasource::open_path(path)
                                     .map(|reader| {
                                         Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
-                                            Box::new(std::io::BufReader::new(reader)),
+                                            Box::new(std::io::BufReader::with_capacity(64 * 1024, reader)),
                                             fields,
                                         )) as Box<dyn BatchStream>
                                     })
@@ -1528,8 +1730,11 @@ impl Node {
                     Named::Star => true,
                     _ => false,
                 });
-                if !is_simple {
-                    return None; // Complex expressions need row-based MapStream
+                if !is_simple && !BatchExpressionOperator::supports(named_list) {
+                    return None;
+                }
+                if !is_simple && !source.has_batch_expression_source() {
+                    return None;
                 }
                 // SELECT * over a bare DataSource gains nothing from batch —
                 // columnar parse + BatchToRowAdapter is pure overhead.
@@ -1548,6 +1753,24 @@ impl Node {
                     },
                 ) {
                     Some(Ok(batch_stream)) => {
+                        if !is_simple {
+                            // A row Map below LIMIT is evaluated only for the
+                            // requested active rows. Scan limits are hints and
+                            // sequential scans can return a larger batch.
+                            let batch_stream: Box<dyn BatchStream> = match row_limit {
+                                Some(limit) => Box::new(BatchLimitOperator::new(batch_stream, limit as u32)),
+                                None => batch_stream,
+                            };
+                            return Some(Ok(Box::new(
+                                BatchExpressionOperator::new(
+                                    batch_stream,
+                                    named_list,
+                                    variables.clone(),
+                                    registry.clone(),
+                                )
+                                .with_memory_tracker(memory.clone()),
+                            )));
+                        }
                         let mut projection = Vec::new();
                         for (position, named) in named_list.iter().enumerate() {
                             match named {
@@ -1570,6 +1793,8 @@ impl Node {
                 }
             }
             Node::GroupBy(keys, aggregates, source) => {
+                let materialized = Self::materialized_aggregate_inputs(aggregates, source, variables);
+                let aggregates = &materialized;
                 // Scan-time aggregation pushdown: for ungrouped single-aggregate
                 // queries (e.g. SELECT COUNT(*) FROM t WHERE ...), push the
                 // aggregation into the scan operator to avoid constructing columns.
@@ -1777,6 +2002,12 @@ impl Node {
         memory: crate::execution::memory::MemoryTracker,
         required_roots: Option<&[String]>,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
+        if let Node::Limit(count, source) = self {
+            if source.prefix_requires_row_expressions() {
+                let child = source.get_expression_prefix_rows(variables, registry, threads, memory, required_roots)?;
+                return Ok(Box::new(LimitStream::new(*count, child)));
+            }
+        }
         // Try batch pipeline first for supported node patterns.
         // Skip for bare DataSource — the columnar round-trip (parse to columns →
         // BatchToRowAdapter back to rows) is slower than direct row-based parsing
@@ -1847,8 +2078,8 @@ impl Node {
                 )?;
                 let stream = GroupByStream::new_with_memory_tracker(
                     fields.clone(),
-                    variables,
-                    named_aggregates.clone(),
+                    variables.clone(),
+                    Self::materialized_aggregate_inputs(named_aggregates, source, &variables),
                     record_stream,
                     registry,
                     memory,
@@ -2037,6 +2268,16 @@ pub enum AggregateError {
     KeyNotFound,
     #[error("Invalid Type")]
     InvalidType,
+    #[error("aggregate cardinality exceeds the supported Int32 range (0..=2147483647)")]
+    CardinalityOverflow,
+}
+
+pub(crate) fn cardinality_value(count: impl TryInto<i32>) -> AggregateResult<Value> {
+    let count = count.try_into().map_err(|_| AggregateError::CardinalityOverflow)?;
+    if count < 0 {
+        return Err(AggregateError::CardinalityOverflow);
+    }
+    Ok(Value::Int(count))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2383,7 +2624,7 @@ impl CountAggregate {
     #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(&counts) = self.counts.get(key) {
-            Ok(Value::Int(counts as i32))
+            cardinality_value(counts)
         } else {
             Err(AggregateError::KeyNotFound)
         }
@@ -2605,7 +2846,7 @@ impl ApproxCountDistinctAggregate {
     #[cfg(test)]
     pub(crate) fn get_aggregated(&self, key: &Option<Tuple>) -> AggregateResult<Value> {
         if let Some(hll) = self.counts.get(key) {
-            Ok(Value::Int(hll.count() as i32))
+            cardinality_value(hll.count())
         } else {
             Err(AggregateError::KeyNotFound)
         }
@@ -2836,7 +3077,7 @@ impl AccumulatorState {
     /// buffer into the TDigest before computing the quantile.
     pub(crate) fn finalize(&mut self) -> AggregateResult<Value> {
         match self {
-            AccumulatorState::Count(c) | AccumulatorState::CountStar(c) => Ok(Value::Int(*c as i32)),
+            AccumulatorState::Count(c) | AccumulatorState::CountStar(c) => cardinality_value(*c),
             AccumulatorState::Sum(opt_sum) => Ok(opt_sum
                 .map(|v| Value::Float(OrderedFloat(v.into_inner() as f32)))
                 .unwrap_or(Value::Null)),
@@ -2851,7 +3092,7 @@ impl AccumulatorState {
             | AccumulatorState::First(v)
             | AccumulatorState::Last(v) => Ok(v.clone().unwrap_or(Value::Null)),
             AccumulatorState::GroupAs(vals) => Ok(Value::Array(vals.clone())),
-            AccumulatorState::ApproxCountDistinct(hll) => Ok(Value::Int(hll.count() as i32)),
+            AccumulatorState::ApproxCountDistinct(hll) => cardinality_value(hll.count()),
             AccumulatorState::PercentileDisc {
                 values,
                 percentile,
@@ -4422,6 +4663,35 @@ mod accumulator_tests {
     fn test_accumulator_state_new_count_star() {
         let state = AccumulatorState::new(&AccumulatorKind::CountStar);
         assert!(matches!(state, AccumulatorState::CountStar(0)));
+    }
+
+    #[test]
+    fn count_result_rejects_out_of_range_instead_of_wrapping() {
+        for count in [i64::from(i32::MAX) + 1, i64::from(u32::MAX) + 1, i64::MAX] {
+            assert!(AccumulatorState::Count(count).finalize().is_err());
+            assert!(AccumulatorState::CountStar(count).finalize().is_err());
+            let mut legacy = CountAggregate::new();
+            legacy.counts.insert(None, count);
+            assert!(legacy.get_aggregated(&None).is_err());
+        }
+        assert_eq!(
+            AccumulatorState::CountStar(i64::from(i32::MAX)).finalize().unwrap(),
+            Value::Int(i32::MAX)
+        );
+    }
+
+    #[test]
+    fn cardinality_estimates_use_the_same_checked_public_range() {
+        assert_eq!(cardinality_value(0usize), Ok(Value::Int(0)));
+        assert_eq!(cardinality_value(i32::MAX as usize), Ok(Value::Int(i32::MAX)));
+        assert_eq!(
+            cardinality_value(i32::MAX as usize + 1),
+            Err(AggregateError::CardinalityOverflow)
+        );
+        assert_eq!(cardinality_value(usize::MAX), Err(AggregateError::CardinalityOverflow));
+        assert_eq!(cardinality_value(-1i64), Err(AggregateError::CardinalityOverflow));
+        let error: StreamError = cardinality_value(i64::MAX).unwrap_err().into();
+        assert!(error.to_string().contains("Int32 range"));
     }
 
     #[test]

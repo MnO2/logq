@@ -1,5 +1,13 @@
 # CHANGELOG — PartiQL Implementation Progress
 
+## Unreleased — performance expansion (2026-09-05)
+
+- Build homogeneous JSONL primitive columns directly, avoiding per-row owned values and long-string allocations; preserve strict parsing, duplicate keys, mixed types and validity masks. Use a 64 KiB sequential JSON buffer.
+- Execute supported JSONL projections and computed aggregate inputs with bound batch expressions. Preserve active-row masks, lazy CASE branches, duplicate aliases and demand-driven expression LIMIT behavior; fixed-format expressions retain their existing reader semantics.
+- Correct computed SUM/AVG/COUNT inputs that previously read missing projection fields. Keep separate function occurrences independent and report COUNT/approximate cardinality outside the public Int32 range instead of silently narrowing, including the fixed-format COUNT scan fast path.
+- Add deterministic paired workloads with independent answer checking, thread/CPU/RSS controls and reproducible provenance. Add identical-kernel JSON reader and allocation probes; JSON dictionary construction remains experimental because measured total query cost did not show a stable benefit.
+- Track implementation and the acceptance criteria for subsequent aggregation, Top-K, shard scheduling, spilling, columnar reuse and numeric-width work in [the expansion plan](docs/plans/2026-09-05-performance-expansion.md).
+
 ## Unreleased — performance corrections (2026-09-05)
 
 - Parse JSONL directly into required root fields and typed batches while validating ignored input; preserve nested values, NULL/MISSING, duplicate keys and aliases. Keep unsupported dynamic projections on the strict row reader.

@@ -74,6 +74,10 @@ name = "bench_sort"
 harness = false
 required-features = ["bench-internals"]
 
+[[example]]
+name = "json_scan_probe"
+required-features = ["bench-internals"]
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

@@ -54,4 +54,31 @@ pub mod bench_internals {
 
     // Batch execution types
     pub use crate::execution::batch::{BATCH_SIZE, BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn};
+
+    /// Exercise the same JSON scanner with controlled reader and dictionary choices.
+    /// This diagnostic surface is available only in benchmark builds.
+    pub fn json_batch_scanner(
+        reader: Box<dyn std::io::BufRead>,
+        fields: Vec<String>,
+        dictionary: bool,
+    ) -> Box<dyn BatchStream> {
+        Box::new(
+            crate::execution::json_batch_scan::JsonBatchScanOperator::new(reader, fields)
+                .with_dictionary_encoding(dictionary),
+        )
+    }
+
+    pub fn json_like_filter(scanner: Box<dyn BatchStream>, field: &str, pattern: &str) -> Box<dyn BatchStream> {
+        Box::new(crate::execution::batch_filter::BatchFilterOperator::new(
+            scanner,
+            Formula::Like(
+                Box::new(Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(
+                    field.into(),
+                )]))),
+                Box::new(Expression::Constant(Value::String(pattern.into()))),
+            ),
+            Variables::new(),
+            std::sync::Arc::new(crate::functions::FunctionRegistry::new()),
+        ))
+    }
 }

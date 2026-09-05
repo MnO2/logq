@@ -117,18 +117,26 @@ fn explain_reports_batch_pipeline() {
 }
 
 #[test]
-fn explain_names_complex_projection_row_fallback() {
+fn explain_reports_batch_for_bound_function_projection() {
     let stdout = output(&[
         "explain",
-        "select upper(elb_status_code) from it",
+        "select upper(status) from it",
         "--table",
-        "it:elb=data/AWSELB.log",
+        "it:jsonl=input.jsonl",
+    ]);
+    assert!(stdout.contains("Execution pipeline: batch"), "{stdout}");
+}
+
+#[test]
+fn explain_keeps_subquery_projection_in_row_execution() {
+    let stdout = output(&[
+        "explain",
+        "select x, (select count(*) from it) as total from it",
+        "--table",
+        "it:jsonl=input.jsonl",
     ]);
     assert!(stdout.contains("Execution pipeline: row"), "{stdout}");
-    assert!(
-        stdout.contains("Batch fallback: Map (complex projection expression)"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("unsupported projection expression"), "{stdout}");
 }
 
 #[test]

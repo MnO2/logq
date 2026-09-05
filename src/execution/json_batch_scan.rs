@@ -1,5 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::batch::{BATCH_SIZE, BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn};
+use crate::execution::json_column_builder::JsonColumnBuilder;
 use crate::execution::json_reader::parse_columns;
 use crate::execution::types::{StreamError, StreamResult};
 use crate::simd::bitmap::Bitmap;
@@ -16,6 +17,7 @@ pub(crate) struct JsonBatchScanOperator {
     field_indices: HashMap<String, usize>,
     line: String,
     done: bool,
+    dictionary: bool,
 }
 
 impl JsonBatchScanOperator {
@@ -37,7 +39,14 @@ impl JsonBatchScanOperator {
             field_indices,
             line: String::with_capacity(512),
             done: false,
+            dictionary: false,
         }
+    }
+
+    #[cfg(any(test, feature = "bench-internals"))]
+    pub(crate) fn with_dictionary_encoding(mut self, enabled: bool) -> Self {
+        self.dictionary = enabled;
+        self
     }
 }
 
@@ -46,9 +55,7 @@ impl BatchStream for JsonBatchScanOperator {
         if self.done {
             return Ok(None);
         }
-        let mut values: Vec<Vec<Value>> = (0..self.schema.names.len())
-            .map(|_| Vec::with_capacity(BATCH_SIZE))
-            .collect();
+        let mut columns: Vec<_> = (0..self.schema.names.len()).map(|_| JsonColumnBuilder::new()).collect();
         let mut len = 0;
         while len < BATCH_SIZE {
             self.line.clear();
@@ -56,14 +63,17 @@ impl BatchStream for JsonBatchScanOperator {
                 self.done = true;
                 break;
             }
-            parse_columns(&self.line, &self.field_indices, &mut values).map_err(|_| StreamError::Reader)?;
+            parse_columns(&self.line, &self.field_indices, &mut columns).map_err(|_| StreamError::Reader)?;
             len += 1;
         }
         if len == 0 {
             return Ok(None);
         }
         Ok(Some(ColumnBatch {
-            columns: values.into_iter().map(typed_column).collect(),
+            columns: columns
+                .into_iter()
+                .map(|column| column.finish(self.dictionary))
+                .collect(),
             names: self.schema.names.clone(),
             selection: SelectionVector::All,
             len,
@@ -77,7 +87,7 @@ impl BatchStream for JsonBatchScanOperator {
     fn close(&self) {}
 }
 
-fn typed_column(values: Vec<Value>) -> TypedColumn {
+pub(crate) fn typed_column(values: Vec<Value>) -> TypedColumn {
     let len = values.len();
     let mut null = Bitmap::all_set(len);
     let mut missing = Bitmap::all_set(len);
@@ -314,5 +324,102 @@ mod tests {
         assert_eq!(batch.len, 2);
         assert_eq!(BatchToRowAdapter::extract_value(&batch.columns[0], 1), Value::Int(2));
         assert!(scanner(Vec::new(), &[]).next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_json_batch_dictionary_preserves_escaped_strings_null_and_missing() {
+        let rows = [
+            r#"{"s":"Chrome\\Agent"}"#,
+            r#"{"s":"\u0043hrome\\Agent"}"#,
+            r#"{"s":""}"#,
+            r#"{"s":null}"#,
+            "{}",
+        ];
+        let input = (0..BATCH_SIZE)
+            .map(|row| format!("{}\n", rows[row % rows.len()]))
+            .collect::<String>();
+        let mut scan = scanner(input, &["s"]).with_dictionary_encoding(true);
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert!(matches!(batch.columns[0], TypedColumn::DictUtf8 { .. }));
+        for row in 0..batch.len {
+            let expected = match row % rows.len() {
+                0 | 1 => Value::String("Chrome\\Agent".into()),
+                2 => Value::String("".into()),
+                3 => Value::Null,
+                _ => Value::Missing,
+            };
+            assert_eq!(BatchToRowAdapter::extract_value(&batch.columns[0], row), expected);
+        }
+    }
+
+    #[test]
+    fn test_json_batch_dictionary_adapts_to_cardinality_between_batches() {
+        let mut input = "{\"s\":\"a moderately long repeated user agent string\"}\n".repeat(BATCH_SIZE);
+        for row in 0..BATCH_SIZE {
+            input.push_str(&format!("{{\"s\":\"unique request identifier {row:08}\"}}\n"));
+        }
+        let mut scan = scanner(input, &["s"]).with_dictionary_encoding(true);
+        assert!(matches!(
+            scan.next_batch().unwrap().unwrap().columns[0],
+            TypedColumn::DictUtf8 { .. }
+        ));
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert!(matches!(batch.columns[0], TypedColumn::Utf8 { .. }));
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&batch.columns[0], BATCH_SIZE - 1),
+            Value::String(format!("unique request identifier {:08}", BATCH_SIZE - 1).into())
+        );
+    }
+
+    #[test]
+    fn test_json_batch_dictionary_can_be_disabled_for_control_measurements() {
+        let input = "{\"s\":\"a repeated long string for dictionary encoding\"}\n".repeat(BATCH_SIZE);
+        let mut scan = scanner(input, &["s"]).with_dictionary_encoding(false);
+        assert!(matches!(
+            scan.next_batch().unwrap().unwrap().columns[0],
+            TypedColumn::Utf8 { .. }
+        ));
+    }
+
+    #[test]
+    fn test_json_batch_duplicate_scalar_types_and_presence_match_row_reader() {
+        let rows = [
+            r#"{"x":"old long string that must not survive","x":7}"#,
+            r#"{"x":null,"x":true,"x":false}"#,
+            r#"{"x":"long obsolete payload","x":"a"}"#,
+            r#"{"x":1,"x":null}"#,
+            "{}",
+            r#"{"x":false,"x":1.5}"#,
+            r#"{"x":{"a":[1,2]},"x":"last"}"#,
+            r#"{"x":"obsolete","x":{"a":1,"a":2}}"#,
+            r#"{"x":18446744073709551615}"#,
+            r#"{"x":-2147483649}"#,
+        ];
+        // Rotate the first retained type to cover every typed-to-Mixed upgrade.
+        for start in 0..rows.len() {
+            let input = (0..rows.len())
+                .map(|offset| format!("{}\n", rows[(start + offset) % rows.len()]))
+                .collect::<String>();
+            let mut reader = ReaderBuilder::new("jsonl".into())
+                .with_reader(input.as_bytes())
+                .unwrap();
+            let mut scan = scanner(input.as_bytes().to_vec(), &["x"]);
+            let batch = scan.next_batch().unwrap().unwrap();
+            for row in 0..rows.len() {
+                let expected = reader
+                    .read_record()
+                    .unwrap()
+                    .unwrap()
+                    .into_variables()
+                    .get("x")
+                    .cloned()
+                    .unwrap_or(Value::Missing);
+                assert_eq!(
+                    BatchToRowAdapter::extract_value(&batch.columns[0], row),
+                    expected,
+                    "start {start}, row {row}"
+                );
+            }
+        }
     }
 }

@@ -257,8 +257,15 @@ impl BatchScanOperator {
             return Ok(None);
         }
         let count = self.consume_count()?;
+        self.count_batch(count)
+    }
+
+    fn count_batch(&self, count: i64) -> StreamResult<Option<ColumnBatch>> {
+        let crate::common::types::Value::Int(count) = crate::execution::types::cardinality_value(count)? else {
+            unreachable!("checked cardinalities are Int32 values");
+        };
         let mut builder = PaddedVecBuilder::<i32>::with_capacity(1);
-        builder.push(count as i32);
+        builder.push(count);
         let column = TypedColumn::Int32 {
             data: builder.seal(),
             null: Bitmap::all_set(1),
@@ -442,6 +449,24 @@ mod tests {
                 types: vec![ColumnType::Int32],
             },
         )
+    }
+
+    #[test]
+    fn count_scan_output_rejects_cardinality_overflow_without_reading_billions_of_rows() {
+        let scan = count_scan(Box::new(Cursor::new(Vec::<u8>::new())));
+        for count in [0, i64::from(i32::MAX)] {
+            let batch = scan.count_batch(count).unwrap().unwrap();
+            assert_eq!(
+                BatchToRowAdapter::extract_value(&batch.columns[0], 0),
+                Value::Int(count as i32)
+            );
+        }
+        for count in [i64::from(i32::MAX) + 1, i64::from(u32::MAX) + 1, i64::MAX, -1] {
+            assert!(
+                matches!(scan.count_batch(count), Err(StreamError::General(message)) if message.contains("cardinality exceeds")),
+                "invalid count {count} must not be narrowed to Int32"
+            );
+        }
     }
 
     #[test]
