@@ -41,7 +41,7 @@ JSON validation, output ordering and public numeric representation are constrain
 - [x] Remaining allocation hotspots: measured group key allocation, tokenizer
   offsets, repeated timestamp work and early TopK payload materialization.
   Apply changes only with meaningful semantic tests and representative timings.
-- [ ] Final verification: full Rust tests, feature/benchmark build, Python
+- [x] Final verification: full Rust tests, feature/benchmark build, Python
   harness tests, formatting/clippy, 100 MiB and 1 GiB answer-checked comparisons,
   RSS/CPU scaling, independent review and resolution of findings.
 
@@ -70,3 +70,8 @@ push, tag or release is included in this authorization.
 - JSON globs open one file at a time; an 80-shard fixture succeeds with a 64-file
   descriptor process limit. General nested sort keys conservatively use row path
   evaluation with the shared stable comparator.
+
+- Final controls identified unchanged memory charges contending on the shared
+  mutex. A failing concurrency regression preceded the no-op guard in `874153c`;
+  full tests/Clippy passed and comparisons were rerun. See
+  [final measurements and boundaries](../performance-2026-09-05.md).

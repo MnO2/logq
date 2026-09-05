@@ -5,7 +5,11 @@ JSONL parsing, query execution, and result formatting. They are intended to make
 performance work reproducible and to identify gaps, not to claim that the tools
 have identical goals or execution models.
 
-## Headline results
+See [the 2026-09-05 implementation and measurements](performance-2026-09-05.md)
+for current results, thread controls and memory tradeoffs. The results below are
+the historical 0.2.0 baseline.
+
+## Historical 0.2.0 results
 
 Dataset: `jsonl-100mb.jsonl` (100.0 MiB, 457,048 rows). Host: Apple M4 Pro with
 24 GiB RAM. OS: macOS 26.1 arm64. Date: 2026-07-11. Hyperfine: five measured runs

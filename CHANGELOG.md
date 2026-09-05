@@ -10,6 +10,7 @@
 - Reuse LIKE regex search caches and dictionary matching, tokenizer offset storage and group key buffers. Compare TopK keys before constructing rejected payloads, and move full-sort output through its permutation.
 - Compile time-bucket intervals once and aggregate computed batch buckets without assuming raw logs are sorted. Preserve timezone offsets, fractional timestamps and arbitrary input ordering.
 - Make benchmark queries fail visibly, validate answers against an independent oracle, fix multi-key ORDER BY parsing and LIMIT timing, and record thread settings, data/query/binary hashes and build provenance.
+- Recorded answer-checked 100 MiB/1 GiB comparisons, 1/2/4/8-thread scaling and memory-ceiling controls in [the performance report](docs/performance-2026-09-05.md).
 
 ## 0.2.0 - 2026-07-11
 
