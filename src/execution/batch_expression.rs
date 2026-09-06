@@ -4,9 +4,10 @@
 //! evaluated lazily per active row, including their three-valued conditions.
 
 use crate::common::types::{Value, Variables, apply_path_to_value, get_value_by_path_expr_scoped};
-use crate::execution::batch::{BatchSchema, BatchToRowAdapter, ColumnBatch};
+use crate::execution::batch::{BatchSchema, BatchToRowAdapter, ColumnBatch, TypedColumn};
 use crate::execution::types::{
-    Expression, ExpressionError, ExpressionResult, Formula, Named, Relation, cast_value, with_like_regex,
+    EvaluateResult, Expression, ExpressionError, ExpressionResult, Formula, Named, Relation, cast_value,
+    with_like_regex,
 };
 use crate::functions::FunctionRegistry;
 use crate::syntax::ast::{CastType, PathExpr, PathSegment};
@@ -108,7 +109,27 @@ impl BoundExpression {
         match self {
             Self::Constant(value) => Ok(value.clone()),
             Self::Column { index, path } => {
-                let value = BatchToRowAdapter::extract_value(&batch.columns[*index], row);
+                if matches!(path.path_segments.as_slice(), [PathSegment::AttrName(_)]) {
+                    return Ok(BatchToRowAdapter::extract_value(&batch.columns[*index], row));
+                }
+                // A nested lookup only owns its selected result. Borrow Mixed
+                // roots so unrelated object fields/array elements are not cloned.
+                let owned;
+                let value = match &batch.columns[*index] {
+                    TypedColumn::Mixed { data, null, missing } => {
+                        if !missing.is_set(row) {
+                            &Value::Missing
+                        } else if !null.is_set(row) {
+                            &Value::Null
+                        } else {
+                            &data[row]
+                        }
+                    }
+                    column => {
+                        owned = BatchToRowAdapter::extract_value(column, row);
+                        &owned
+                    }
+                };
                 if let PathSegment::ArrayIndex(_, index) = &path.path_segments[0] {
                     return Ok(match value {
                         Value::Array(values) => values
@@ -118,11 +139,7 @@ impl BoundExpression {
                         _ => Value::Missing,
                     });
                 }
-                if path.path_segments.len() == 1 {
-                    Ok(value)
-                } else {
-                    Ok(apply_path_to_value(path, 1, &value))
-                }
+                Ok(apply_path_to_value(path, 1, value))
             }
             Self::Function {
                 name,
@@ -162,6 +179,17 @@ impl BoundExpression {
             }
         }
     }
+
+    /// A plain column read is total and can be replaced by ownership transfer
+    /// after all computed expressions have finished reading the input batch.
+    pub(crate) fn direct_column(&self) -> Option<usize> {
+        match self {
+            Self::Column { index, path } if matches!(path.path_segments.as_slice(), [PathSegment::AttrName(_)]) => {
+                Some(*index)
+            }
+            _ => None,
+        }
+    }
 }
 
 pub(crate) enum BoundFormula {
@@ -178,7 +206,7 @@ pub(crate) enum BoundFormula {
 }
 
 impl BoundFormula {
-    fn supports(formula: &Formula) -> bool {
+    pub(crate) fn supports(formula: &Formula) -> bool {
         match formula {
             Formula::Constant(_) => true,
             Formula::And(left, right) | Formula::Or(left, right) => Self::supports(left) && Self::supports(right),
@@ -197,7 +225,7 @@ impl BoundFormula {
         }
     }
 
-    fn bind(formula: &Formula, schema: &BatchSchema, scope: &Variables) -> Self {
+    pub(crate) fn bind(formula: &Formula, schema: &BatchSchema, scope: &Variables) -> Self {
         let bind = |expression: &Expression| BoundExpression::bind(expression, schema, scope);
         match formula {
             Formula::Constant(value) => Self::Constant(*value),
@@ -223,12 +251,12 @@ impl BoundFormula {
         }
     }
 
-    fn evaluate(
+    pub(crate) fn evaluate(
         &mut self,
         batch: &ColumnBatch,
         row: usize,
         registry: &FunctionRegistry,
-    ) -> ExpressionResult<Option<bool>> {
+    ) -> EvaluateResult<Option<bool>> {
         match self {
             Self::Constant(value) => Ok(Some(*value)),
             Self::And(left, right) => {
@@ -256,10 +284,10 @@ impl BoundFormula {
                 })
             }
             Self::Not(inner) => Ok(inner.evaluate(batch, row, registry)?.map(|value| !value)),
-            Self::Predicate(relation, left, right) => relation.compare_ref(
+            Self::Predicate(relation, left, right) => Ok(relation.compare_ref(
                 &left.evaluate(batch, row, registry)?,
                 &right.evaluate(batch, row, registry)?,
-            ),
+            )?),
             Self::IsNull(value, negated) => {
                 Ok(Some((value.evaluate(batch, row, registry)? == Value::Null) != *negated))
             }
@@ -279,7 +307,7 @@ impl BoundFormula {
                     (Value::String(value), Value::String(pattern)) => Ok(Some(
                         with_like_regex(pattern, |regex| regex.is_match(value))? != *negated,
                     )),
-                    _ => Err(ExpressionError::TypeMismatch),
+                    _ => Err(ExpressionError::TypeMismatch.into()),
                 }
             }
             Self::In(value, items, negated) => {
@@ -385,6 +413,90 @@ mod tests {
             Box::new(Expression::Constant(Value::String("bad".into()))),
             CastType::Int,
         )
+    }
+
+    #[test]
+    fn nested_bound_paths_match_scalar_with_masks_wildcards_and_scope() {
+        let root = Value::Object(Box::new(
+            [
+                ("leaf".into(), Value::Int(7)),
+                (
+                    "unused".into(),
+                    Value::String("large unused payload ".repeat(512).into()),
+                ),
+                (
+                    "array".into(),
+                    Value::Array(vec![Value::Int(3), Value::Null, Value::Missing]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let inputs = vec![
+            root.clone(),
+            Value::Array(vec![root.clone()]),
+            Value::Null,
+            Value::Missing,
+            Value::Int(4),
+            root.clone(),
+            root,
+        ];
+        let len = inputs.len();
+        let mut null = Bitmap::all_set(len);
+        null.unset(5);
+        let mut missing = Bitmap::all_set(len);
+        missing.unset(6);
+        let schema = BatchSchema {
+            names: vec!["root".into()],
+            types: vec![ColumnType::Mixed],
+        };
+        let batch = ColumnBatch {
+            columns: vec![TypedColumn::Mixed {
+                data: inputs,
+                null,
+                missing,
+            }],
+            names: schema.names.clone(),
+            selection: SelectionVector::All,
+            len,
+        };
+        let scope = [("root".into(), Value::Int(99))].into_iter().collect();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        for path in [
+            vec![PathSegment::AttrName("root".into())],
+            vec![
+                PathSegment::AttrName("root".into()),
+                PathSegment::AttrName("leaf".into()),
+            ],
+            vec![
+                PathSegment::AttrName("root".into()),
+                PathSegment::ArrayIndex("array".into(), 1),
+            ],
+            vec![
+                PathSegment::AttrName("root".into()),
+                PathSegment::AttrName("array".into()),
+                PathSegment::Wildcard,
+            ],
+            vec![PathSegment::AttrName("root".into()), PathSegment::WildcardAttr],
+            vec![
+                PathSegment::ArrayIndex("root".into(), 0),
+                PathSegment::AttrName("leaf".into()),
+            ],
+            vec![PathSegment::ArrayIndex("root".into(), 8)],
+        ] {
+            let expression = Expression::Variable(PathExpr::new(path));
+            let mut bound = BoundExpression::bind(&expression, &schema, &scope);
+            for row in 0..len {
+                let variables = [("root".into(), BatchToRowAdapter::extract_value(&batch.columns[0], row))]
+                    .into_iter()
+                    .collect();
+                assert_eq!(
+                    bound.evaluate(&batch, row, &registry),
+                    expression.expression_value_impl(&variables, Some(&scope), &registry),
+                    "{expression:?}, row={row}"
+                );
+            }
+        }
     }
 
     fn assert_scalar_parity(expression: Expression) {

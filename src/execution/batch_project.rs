@@ -98,20 +98,51 @@ impl BatchStream for BatchExpressionOperator {
                 .map(|expression| BoundExpression::bind(expression, &self.input_schema, &self.scope))
                 .collect();
         }
-        let mut columns: Vec<Vec<Value>> = (0..self.schema.names.len())
-            .map(|_| vec![Value::Missing; batch.len])
+        let mut passthrough = vec![None; self.schema.names.len()];
+        // Moving an arena can retain inactive rows or spare capacity that the
+        // old materialization discarded. Preserve budgeted-query behavior until
+        // ownership transfer and compaction have shared memory accounting.
+        if !self.output_memory.is_enabled() {
+            let mut final_expressions = vec![None; self.schema.names.len()];
+            for (expression, output) in self.bound.iter().zip(&self.output_positions) {
+                final_expressions[*output] = expression.direct_column();
+            }
+            let mut used = vec![false; batch.columns.len()];
+            for (output, source) in final_expressions.into_iter().enumerate().rev() {
+                if let Some(source) = source {
+                    if !used[source] {
+                        passthrough[output] = Some(source);
+                        used[source] = true;
+                    }
+                }
+            }
+        }
+        let mut columns: Vec<Option<Vec<Value>>> = passthrough
+            .iter()
+            .map(|source| source.is_none().then(|| vec![Value::Missing; batch.len]))
             .collect();
         for row in (0..batch.len).filter(|&row| batch.selection.is_active(row, batch.len)) {
             // Keep row/SELECT-list evaluation order, including overwritten
             // aliases whose expressions can still report an error.
             for (expression, output) in self.bound.iter_mut().zip(&self.output_positions) {
-                columns[*output][row] = expression.evaluate(&batch, row, &self.registry)?;
+                if columns[*output].is_none() && expression.direct_column().is_some() {
+                    continue;
+                }
+                let value = expression.evaluate(&batch, row, &self.registry)?;
+                if let Some(column) = &mut columns[*output] {
+                    column[row] = value;
+                }
             }
         }
+        let mut input: Vec<_> = batch.columns.into_iter().map(Some).collect();
         let output = ColumnBatch {
             columns: columns
                 .into_iter()
-                .map(crate::execution::json_batch_scan::typed_column)
+                .zip(passthrough)
+                .map(|(values, source)| match source {
+                    Some(source) => input[source].take().expect("each passthrough moves its source once"),
+                    None => crate::execution::json_batch_scan::typed_column(values.expect("computed output storage")),
+                })
                 .collect(),
             names: self.schema.names.clone(),
             selection: batch.selection,
@@ -273,6 +304,199 @@ mod tests {
     use crate::simd::bitmap::Bitmap;
     use crate::simd::padded_vec::PaddedVec;
     use crate::simd::selection::SelectionVector;
+    use crate::syntax::ast::{CastType, PathExpr, PathSegment};
+
+    struct ExpressionBatch {
+        batch: Option<ColumnBatch>,
+        schema: BatchSchema,
+    }
+
+    impl BatchStream for ExpressionBatch {
+        fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+            Ok(self.batch.take())
+        }
+        fn schema(&self) -> &BatchSchema {
+            &self.schema
+        }
+        fn close(&self) {}
+    }
+
+    fn expression_operator(
+        batch: ColumnBatch,
+        expressions: Vec<Named>,
+        registry: Arc<FunctionRegistry>,
+    ) -> BatchExpressionOperator {
+        let schema = BatchSchema {
+            names: batch.names.clone(),
+            types: vec![ColumnType::Mixed; batch.names.len()],
+        };
+        BatchExpressionOperator::new(
+            Box::new(ExpressionBatch {
+                batch: Some(batch),
+                schema,
+            }),
+            &expressions,
+            Variables::new(),
+            registry,
+        )
+    }
+
+    fn field(name: &str) -> Expression {
+        Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(name.into())]))
+    }
+
+    #[test]
+    fn mixed_projection_moves_passthrough_after_computed_readers() {
+        let payload = "large payload ".repeat(1024);
+        let column = crate::execution::json_batch_scan::typed_column(vec![
+            Value::String(payload.clone().into()),
+            Value::Null,
+            Value::Missing,
+        ]);
+        let pointer = match &column {
+            TypedColumn::Utf8 { data, .. } => data.as_ptr(),
+            _ => panic!("utf8"),
+        };
+        let mut selected = Bitmap::all_unset(3);
+        selected.set(0);
+        selected.set(2);
+        let batch = ColumnBatch {
+            columns: vec![column],
+            names: vec!["payload".into()],
+            selection: SelectionVector::Bitmap(selected),
+            len: 3,
+        };
+        let mut operator = expression_operator(
+            batch,
+            vec![
+                Named::Expression(field("payload"), Some("original".into())),
+                Named::Expression(
+                    Expression::Cast(Box::new(field("payload")), CastType::Varchar),
+                    Some("computed".into()),
+                ),
+                Named::Expression(field("payload"), Some("again".into())),
+            ],
+            Arc::new(crate::functions::register_all().unwrap()),
+        );
+        let output = operator.next_batch().unwrap().unwrap();
+        assert_eq!(output.selection.count_active(output.len), 2);
+        for column in &output.columns {
+            assert_eq!(
+                BatchToRowAdapter::extract_value(column, 0),
+                Value::String(payload.clone().into())
+            );
+            assert_eq!(BatchToRowAdapter::extract_value(column, 2), Value::Missing);
+        }
+        assert!(
+            output
+                .columns
+                .iter()
+                .any(|column| matches!(column, TypedColumn::Utf8 { data, .. } if data.as_ptr() == pointer)),
+            "one passthrough must retain the original string arena"
+        );
+    }
+
+    #[test]
+    fn mixed_projection_preserves_overwritten_effects_and_row_order() {
+        use crate::functions::{Arity, FunctionDef, NullHandling};
+        use std::sync::Mutex;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        let mut registry = FunctionRegistry::new();
+        registry
+            .register(FunctionDef {
+                name: "record".into(),
+                arity: Arity::Exact(1),
+                null_handling: NullHandling::Custom,
+                func: Box::new(move |values| {
+                    recorded.lock().unwrap().push(values[0].clone());
+                    Ok(values[0].clone())
+                }),
+            })
+            .unwrap();
+        let expression = Expression::Function("record".into(), vec![Named::Expression(field("x"), None)]);
+        let batch = ColumnBatch {
+            columns: vec![crate::execution::json_batch_scan::typed_column(vec![
+                Value::Int(1),
+                Value::Int(2),
+            ])],
+            names: vec!["x".into()],
+            selection: SelectionVector::All,
+            len: 2,
+        };
+        let mut operator = expression_operator(
+            batch,
+            vec![
+                Named::Expression(expression.clone(), Some("alias".into())),
+                Named::Expression(field("x"), Some("alias".into())),
+                Named::Expression(expression, Some("other".into())),
+            ],
+            Arc::new(registry),
+        );
+        let output = operator.next_batch().unwrap().unwrap();
+        assert_eq!(output.names, ["alias", "other"]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![Value::Int(1), Value::Int(1), Value::Int(2), Value::Int(2)]
+        );
+        assert_eq!(BatchToRowAdapter::extract_value(&output.columns[0], 1), Value::Int(2));
+    }
+
+    #[test]
+    fn mixed_projection_does_not_skip_overwritten_errors() {
+        let batch = ColumnBatch {
+            columns: vec![crate::execution::json_batch_scan::typed_column(vec![Value::String(
+                "bad".into(),
+            )])],
+            names: vec!["x".into()],
+            selection: SelectionVector::All,
+            len: 1,
+        };
+        let mut operator = expression_operator(
+            batch,
+            vec![
+                Named::Expression(
+                    Expression::Cast(Box::new(field("x")), CastType::Int),
+                    Some("alias".into()),
+                ),
+                Named::Expression(field("x"), Some("alias".into())),
+            ],
+            Arc::new(crate::functions::register_all().unwrap()),
+        );
+        assert!(operator.next_batch().is_err());
+    }
+
+    #[test]
+    fn mixed_projection_budget_drops_inactive_payload() {
+        let batch = ColumnBatch {
+            columns: vec![crate::execution::json_batch_scan::typed_column(vec![
+                Value::String("ok".into()),
+                Value::String("unused".repeat(128 * 1024).into()),
+            ])],
+            names: vec!["payload".into()],
+            selection: SelectionVector::Bitmap({
+                let mut selected = Bitmap::all_unset(2);
+                selected.set(0);
+                selected
+            }),
+            len: 2,
+        };
+        let mut operator = expression_operator(
+            batch,
+            vec![
+                Named::Expression(field("payload"), Some("payload".into())),
+                Named::Expression(Expression::Constant(Value::Int(1)), Some("computed".into())),
+            ],
+            Arc::new(crate::functions::register_all().unwrap()),
+        )
+        .with_memory_tracker(MemoryTracker::new(Some(4096)));
+        let output = operator.next_batch().unwrap().unwrap();
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&output.columns[0], 0),
+            Value::String("ok".into())
+        );
+        assert_eq!(BatchToRowAdapter::extract_value(&output.columns[0], 1), Value::Missing);
+    }
 
     #[test]
     fn test_project_selects_columns() {

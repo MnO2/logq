@@ -1,7 +1,8 @@
 // src/execution/batch_predicate.rs
 
 use crate::common::types::{Value, Variables};
-use crate::execution::batch::{BatchToRowAdapter, ColumnBatch, TypedColumn};
+use crate::execution::batch::{BatchSchema, BatchToRowAdapter, ColumnBatch, TypedColumn};
+use crate::execution::batch_expression::BoundFormula;
 use crate::execution::types::{Expression, Formula, Relation, StreamResult};
 use crate::functions::FunctionRegistry;
 use crate::simd::bitmap::Bitmap;
@@ -471,6 +472,27 @@ fn evaluate_scalar_truth(
     active: &Bitmap,
 ) -> StreamResult<PredicateTruth> {
     let mut result = PredicateTruth::known(Bitmap::all_unset(batch.len), batch.len);
+    if BoundFormula::supports(formula) {
+        // Bind once for this batch, reading only actual expression dependencies.
+        // The enclosing evaluator retains its column kernels and AND/OR masks.
+        let schema = BatchSchema {
+            names: batch.names.clone(),
+            types: Vec::new(),
+        };
+        let mut bound = BoundFormula::bind(formula, &schema, variables);
+        for row in 0..batch.len {
+            if !active.is_set(row) {
+                continue;
+            }
+            match bound.evaluate(batch, row, registry)? {
+                Some(true) => result.yes.set(row),
+                None => result.unknown.set(row),
+                Some(false) => {}
+            }
+        }
+        return Ok(result);
+    }
+    // Unsupported expressions (notably subqueries) keep their row context.
     // Reuse row-map nodes and keys; scope is borrowed rather than cloned per row.
     let mut row_vars = Variables::with_capacity(batch.columns.len());
     for row in 0..batch.len {
@@ -538,6 +560,76 @@ fn get_null_missing_bitmaps(col: &TypedColumn) -> (&Bitmap, &Bitmap) {
 mod tests {
     use super::*;
     use crate::simd::padded_vec::PaddedVecBuilder;
+
+    #[test]
+    fn complex_predicate_preserves_scope_shadowing_masks_and_errors() {
+        use crate::syntax::ast::CastType;
+        let values = vec![
+            Value::String("12".into()),
+            Value::Null,
+            Value::Missing,
+            Value::String("bad".into()),
+        ];
+        let mut batch = mixed_batch(values);
+        batch.names.insert(0, "value".into());
+        batch.columns.insert(
+            0,
+            crate::execution::json_batch_scan::typed_column(vec![Value::Int(99); 4]),
+        );
+        batch.names.push("unrelated".into());
+        batch.columns.push(crate::execution::json_batch_scan::typed_column(vec![
+            Value::String(
+                "unrelated payload ".repeat(512).into()
+            );
+            4
+        ]));
+        let scope = [("value".into(), Value::Int(77)), ("minimum".into(), Value::Int(10))]
+            .into_iter()
+            .collect();
+        let registry = Arc::new(crate::functions::register_all().unwrap());
+        let cast = Expression::Cast(Box::new(variable("value")), CastType::Int);
+        let invalid = Formula::ExpressionPredicate(Box::new(Expression::Function("unknown".into(), vec![])));
+        for formula in [
+            Formula::Predicate(
+                Relation::MoreThan,
+                Box::new(cast.clone()),
+                Box::new(variable("minimum")),
+            ),
+            Formula::IsMissing(Box::new(cast.clone())),
+            Formula::IsNull(Box::new(cast.clone())),
+            Formula::In(
+                Box::new(cast.clone()),
+                vec![
+                    Expression::Constant(Value::Int(12)),
+                    Expression::Function("unknown".into(), vec![]),
+                ],
+            ),
+            Formula::And(Box::new(Formula::Constant(false)), Box::new(invalid.clone())),
+            Formula::Or(Box::new(Formula::Constant(true)), Box::new(invalid)),
+        ] {
+            for row in 0..batch.len {
+                let mut active = Bitmap::all_unset(batch.len);
+                active.set(row);
+                batch.selection = crate::simd::selection::SelectionVector::Bitmap(active);
+                let variables = batch
+                    .names
+                    .iter()
+                    .zip(&batch.columns)
+                    .map(|(name, column)| (name.clone(), BatchToRowAdapter::extract_value(column, row)))
+                    .collect();
+                let expected = formula.evaluate_in_scope(&variables, &scope, &registry);
+                let actual = evaluate_batch_predicate(&formula, &batch, &scope, &registry);
+                match (actual, expected) {
+                    (Ok(actual), Ok(expected)) => assert_eq!(actual.is_set(row), expected == Some(true)),
+                    (Err(actual), Err(expected)) => assert_eq!(
+                        format!("{actual:?}"),
+                        format!("{:?}", crate::execution::types::StreamError::from(expected))
+                    ),
+                    _ => panic!("predicate success/error mismatch: {formula:?}, row {row}"),
+                }
+            }
+        }
+    }
 
     fn variable(name: &str) -> Expression {
         Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(name.into())]))

@@ -1,5 +1,10 @@
 # CHANGELOG — PartiQL Implementation Progress
 
+## Unreleased — next performance milestones (2026-09-05)
+
+- Borrow nested batch values when resolving paths, retain movable columns in mixed projections, and evaluate supported complex predicates without copying unrelated columns. Preserve aliases, active masks, lazy errors and demand-driven LIMIT; budgeted mixed projections retain their existing materialization policy.
+- Add answer-checked narrow/wide, predicate-selectivity, plain/gzip and 1/8/32/125-file controls, with paired CPU/wall measurements and reproducible input manifests. Track independent follow-on work in [the milestone plan](docs/plans/2026-09-05-performance-next-milestones.md).
+
 ## Unreleased — performance expansion (2026-09-05)
 
 - Build homogeneous JSONL primitive columns directly, avoiding per-row owned values and long-string allocations; preserve strict parsing, duplicate keys, mixed types and validity masks. Use a 64 KiB sequential JSON buffer.
