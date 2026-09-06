@@ -61,7 +61,13 @@ impl FunctionDef {
 /// No name lookup or registry identity check is needed at execution time.
 struct RegisteredFunction {
     definition: FunctionDef,
-    builtin_plus: bool,
+    builtin_arithmetic: Option<BuiltinArithmetic>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BuiltinArithmetic {
+    Plus,
+    Times,
 }
 
 pub(crate) struct ResolvedFunction(Arc<RegisteredFunction>);
@@ -72,7 +78,11 @@ impl ResolvedFunction {
     }
 
     pub(crate) fn is_builtin_plus(&self) -> bool {
-        self.0.builtin_plus
+        self.0.builtin_arithmetic == Some(BuiltinArithmetic::Plus)
+    }
+
+    pub(crate) fn is_builtin_times(&self) -> bool {
+        self.0.builtin_arithmetic == Some(BuiltinArithmetic::Times)
     }
 }
 
@@ -129,16 +139,24 @@ impl FunctionRegistry {
     }
 
     pub fn register(&mut self, def: FunctionDef) -> Result<(), RegistryError> {
-        self.register_entry(def, false)
+        self.register_entry(def, None)
     }
 
     // Only arithmetic registration supplies this trusted implementation tag.
-    // Public registration is always opaque, including a function named Plus.
+    // Public registration is always opaque, including functions named Plus or Times.
     pub(super) fn register_builtin_plus(&mut self, def: FunctionDef) -> Result<(), RegistryError> {
-        self.register_entry(def, true)
+        self.register_entry(def, Some(BuiltinArithmetic::Plus))
     }
 
-    fn register_entry(&mut self, def: FunctionDef, builtin_plus: bool) -> Result<(), RegistryError> {
+    pub(super) fn register_builtin_times(&mut self, def: FunctionDef) -> Result<(), RegistryError> {
+        self.register_entry(def, Some(BuiltinArithmetic::Times))
+    }
+
+    fn register_entry(
+        &mut self,
+        def: FunctionDef,
+        builtin_arithmetic: Option<BuiltinArithmetic>,
+    ) -> Result<(), RegistryError> {
         let key = def.name.to_ascii_lowercase();
         if self.functions.contains_key(&key) {
             return Err(RegistryError::DuplicateFunction(def.name.clone()));
@@ -147,7 +165,7 @@ impl FunctionRegistry {
             key,
             Arc::new(RegisteredFunction {
                 definition: def,
-                builtin_plus,
+                builtin_arithmetic,
             }),
         );
         Ok(())

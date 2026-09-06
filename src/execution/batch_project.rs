@@ -118,7 +118,7 @@ impl BatchStream for BatchExpressionOperator {
                         passthrough[output] = Some(source);
                         used[source] = true;
                     }
-                } else if let Some(column) = expression.float_plus_column(&batch) {
+                } else if let Some(column) = expression.float_arithmetic_column(&batch) {
                     // Only this final, pure and non-throwing occurrence is
                     // precomputed. Overwritten expressions still execute below.
                     typed[output] = Some(column);
@@ -211,7 +211,7 @@ impl BatchProjectOperator {
                         .schema()
                         .names
                         .iter()
-                        .position(|n| n == source)
+                        .rposition(|n| n == source)
                         .map(|i| child.schema().types[i].clone())
                         .unwrap_or(ColumnType::Mixed)
                 })
@@ -245,7 +245,7 @@ impl BatchStream for BatchProjectOperator {
                 let mut new_columns = Vec::with_capacity(self.projection.len());
                 let mut new_names = Vec::with_capacity(self.projection.len());
                 for (index, (source, output)) in self.projection.iter().enumerate() {
-                    let column = if let Some(pos) = names.iter().position(|name| name == source) {
+                    let column = if let Some(pos) = names.iter().rposition(|name| name == source) {
                         if self.projection[index + 1..].iter().any(|(name, _)| name == source) {
                             let data: Vec<_> = (0..len)
                                 .map(|row| {

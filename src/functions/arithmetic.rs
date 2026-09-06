@@ -38,7 +38,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         }),
     })?;
 
-    registry.register(FunctionDef {
+    registry.register_builtin_times(FunctionDef {
         name: "Times".to_string(),
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,

@@ -12,9 +12,6 @@
     {"upstream_path":"eval/primitives/date-time.ion","reason":"PartiQL DATE/TIME literal constructors differ from logq's parsed log timestamps."},
     {"upstream_path":"eval/query/limitoffset.ion#offset","reason":"LIMIT is covered, but OFFSET is not currently implemented."},
     {"upstream_path":"eval/query/select/projection.ion#nested-from-values","reason":"Nested collection iteration in FROM requires the upstream in-memory environment model."},
-    {"upstream_path":"eval/query/select/projection.ion#aliases","reason":"Projection aliases are parsed but the current JSON output retains the source field name."},
-    {"upstream_path":"eval/query/group-by/group-by.ion#having","reason":"Simple GROUP BY cases pass, but aggregate expressions in HAVING currently fail during streaming execution."},
-    {"upstream_path":"eval/primitives/operators/in-operator.ion#followed-by-order-by","reason":"IN and ORDER BY pass independently; the combined form currently leaves the ORDER BY clause unconsumed."},
     {"upstream_path":"eval-equiv/**","reason":"Equivalence fixtures use Ion bags and global environments; equivalent log-backed cases should be added separately."}
   ]
 }

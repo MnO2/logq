@@ -4,6 +4,7 @@ use crate::common::types::Variables;
 use crate::execution::batch::*;
 use crate::execution::batch_groupby::{BatchGroupByOperator, PartialAggregateState, output_names};
 use crate::execution::batch_scan::BatchScanOperator;
+use crate::execution::field_analysis::JsonProjection;
 use crate::execution::log_schema::LogSchema;
 use crate::execution::memory::{MemoryReservation, MemoryTracker, estimate_batch};
 #[cfg(test)]
@@ -263,6 +264,7 @@ impl BufRead for MmapRangeReader {
 struct JsonFileScan {
     path: PathBuf,
     schema: BatchSchema,
+    projection: JsonProjection,
     cancelled: Arc<AtomicBool>,
     stream: Option<crate::execution::json_batch_scan::JsonBatchScanOperator>,
 }
@@ -289,7 +291,7 @@ impl BatchStream for JsonFileScan {
         if self.stream.is_none() {
             let reader = crate::execution::datasource::open_path(&self.path)
                 .map_err(|_| StreamError::Get(CreateStreamError::Io))?;
-            self.stream = Some(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
+            self.stream = Some(crate::execution::json_batch_scan::JsonBatchScanOperator::new_projected(
                 Box::new(BufReader::with_capacity(
                     64 * 1024,
                     CancellableReader {
@@ -297,7 +299,7 @@ impl BatchStream for JsonFileScan {
                         cancelled: self.cancelled.clone(),
                     },
                 )),
-                self.schema.names.clone(),
+                self.projection.clone(),
             ));
         }
         self.stream.as_mut().unwrap().next_batch()
@@ -420,35 +422,50 @@ impl ParallelBatchStream {
         })
     }
 
+    #[cfg(any(test, feature = "bench-internals"))]
     pub(crate) fn new_json(
         mmap: memmap2::Mmap,
         num_threads: usize,
         fields: Vec<String>,
         row_limit: Option<usize>,
     ) -> io::Result<Self> {
-        let mut seen = std::collections::HashSet::new();
-        let fields: Vec<String> = fields.into_iter().filter(|field| seen.insert(field.clone())).collect();
+        Self::new_json_projected(mmap, num_threads, JsonProjection::from_roots(fields), row_limit)
+    }
+
+    pub(crate) fn new_json_projected(
+        mmap: memmap2::Mmap,
+        num_threads: usize,
+        projection: JsonProjection,
+        row_limit: Option<usize>,
+    ) -> io::Result<Self> {
         let batch_schema = BatchSchema {
-            names: fields.clone(),
-            types: vec![ColumnType::Mixed; fields.len()],
+            names: projection.names().to_vec(),
+            types: vec![ColumnType::Mixed; projection.names().len()],
         };
         Self::from_mmap(mmap, num_threads, batch_schema, row_limit, move |reader| {
-            Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
+            Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new_projected(
                 Box::new(reader),
-                fields.clone(),
+                projection.clone(),
             ))
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_json_files(paths: Vec<PathBuf>, num_threads: usize, fields: Vec<String>) -> io::Result<Self> {
+        Self::new_json_files_projected(paths, num_threads, JsonProjection::from_roots(fields))
     }
 
     /// Run complete JSON pipelines across files, including shards below the
     /// mmap threshold and independent gzip inputs. File order is task order;
     /// the existing bounded queues merge each file's partial state in that order.
-    pub(crate) fn new_json_files(paths: Vec<PathBuf>, num_threads: usize, fields: Vec<String>) -> io::Result<Self> {
-        let mut seen = std::collections::HashSet::new();
-        let fields: Vec<String> = fields.into_iter().filter(|field| seen.insert(field.clone())).collect();
+    pub(crate) fn new_json_files_projected(
+        paths: Vec<PathBuf>,
+        num_threads: usize,
+        projection: JsonProjection,
+    ) -> io::Result<Self> {
         let schema = BatchSchema {
-            types: vec![ColumnType::Mixed; fields.len()],
-            names: fields,
+            types: vec![ColumnType::Mixed; projection.names().len()],
+            names: projection.names().to_vec(),
         };
         let threads = if num_threads == 0 {
             std::thread::available_parallelism().map_or(1, usize::from)
@@ -464,6 +481,7 @@ impl ParallelBatchStream {
                 Box::new(JsonFileScan {
                     path: paths[task].clone(),
                     schema: schema.clone(),
+                    projection: projection.clone(),
                     cancelled,
                     stream: None,
                 })
@@ -1960,6 +1978,60 @@ mod streaming_tests {
         assert_eq!(memory.used(), 0);
         assert!(stream.workers.borrow().is_empty());
         assert!(stream.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn parallel_json_nested_projection_reaches_mmap_and_mixed_file_workers() {
+        use crate::common::types::DataSource;
+        use crate::execution::field_analysis::extract_required_json_fields;
+        use crate::execution::types::{Expression, Named, Node};
+        use crate::syntax::ast::PathSegment;
+        use std::io::Write;
+        let path = PathExpr::new(vec![
+            PathSegment::AttrName("n".into()),
+            PathSegment::AttrName("x".into()),
+        ]);
+        let plan = Node::Map(
+            vec![Named::Expression(Expression::Variable(path), None)],
+            Box::new(Node::DataSource(DataSource::Stdin("jsonl".into(), "it".into()), vec![])),
+        );
+        let fields = extract_required_json_fields(&plan).unwrap();
+        let row = r#"{"n":{"x":7,"payload":{"large":[1,2,3],"unused":"discarded"}},"unused":4}
+"#;
+        let data = row.repeat(BATCH_SIZE * 3 + 1);
+        let directory = tempfile::tempdir().unwrap();
+        let plain = directory.path().join("a.jsonl");
+        std::fs::write(&plain, &data).unwrap();
+        let compressed = directory.path().join("b.jsonl.gz");
+        let mut encoder =
+            flate2::write::GzEncoder::new(std::fs::File::create(&compressed).unwrap(), flate2::Compression::fast());
+        encoder.write_all(data.as_bytes()).unwrap();
+        encoder.finish().unwrap();
+        let streams = [
+            (
+                ParallelBatchStream::new_json_projected(mmap_input(data.as_bytes()), 4, fields.clone(), None).unwrap(),
+                BATCH_SIZE * 3 + 1,
+            ),
+            (
+                ParallelBatchStream::new_json_files_projected(vec![plain, compressed], 4, fields).unwrap(),
+                (BATCH_SIZE * 3 + 1) * 2,
+            ),
+        ];
+        for (mut stream, expected_rows) in streams {
+            let mut rows = 0;
+            while let Some(batch) = stream.next_batch().unwrap() {
+                assert_eq!(batch.names, ["n"]);
+                for row in 0..batch.len {
+                    let Value::Object(object) = BatchToRowAdapter::extract_value(&batch.columns[0], row) else {
+                        panic!("expected object")
+                    };
+                    assert_eq!(object.len(), 1, "unused siblings reached a worker batch");
+                    assert_eq!(object.get("x"), Some(&Value::Int(7)));
+                }
+                rows += batch.len;
+            }
+            assert_eq!(rows, expected_rows);
+        }
     }
 
     #[test]

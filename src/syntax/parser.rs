@@ -324,6 +324,10 @@ fn expression(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>
     }
 
     let (i1, expr) = parse_expression_at_precedence(i, 1, &PRECEDENCE_TABLE)?;
+    // Atoms historically consumed trailing whitespace, but CAST/CASE and
+    // postfix forms such as IN do not. Normalize at the expression boundary
+    // so the next SQL clause sees its keyword consistently for every shape.
+    let (i1, _) = multispace0(i1)?;
     Ok((i1, expr))
 }
 
@@ -2015,6 +2019,21 @@ mod test {
 
         let result = select_query("select a from it where a IS NULL");
         assert!(result.is_ok(), "IS NULL uppercase should parse, got: {:?}", result);
+    }
+
+    #[test]
+    fn postfix_and_cast_expressions_leave_following_clauses_parseable() {
+        for sql in [
+            "select x from it where x in (1,2) order by x asc",
+            "select x from it where x not in (1,2) limit 1",
+            "select x from it where x is not null order by x desc limit 2",
+            "select x from it where cast(x as boolean) order by x asc",
+            "select count(*) as n from it where x in (1,2) group by x having n > 0 order by x asc",
+            "select x from it where x in (1,2)\norder by x asc",
+        ] {
+            let (remaining, _) = query(sql).unwrap_or_else(|error| panic!("{sql}: {error:?}"));
+            assert!(remaining.trim().is_empty(), "{sql}: unconsumed {remaining:?}");
+        }
     }
 
     #[test]

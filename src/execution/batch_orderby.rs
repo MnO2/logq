@@ -118,7 +118,7 @@ impl BatchOrderByOperator {
             .iter()
             .map(|path| {
                 if let Some(PathSegment::AttrName(name)) = path.path_segments.last() {
-                    self.schema.names.iter().position(|n| n == name)
+                    self.schema.names.iter().rposition(|n| n == name)
                 } else {
                     None
                 }
@@ -181,7 +181,7 @@ impl BatchOrderByOperator {
             .iter()
             .map(|path| {
                 path.path_segments.first().and_then(|part| match part {
-                    PathSegment::AttrName(name) => self.schema.names.iter().position(|column| column == name),
+                    PathSegment::AttrName(name) => self.schema.names.iter().rposition(|column| column == name),
                     _ => None,
                 })
             })
@@ -229,8 +229,23 @@ impl BatchOrderByOperator {
         let num_cols = self.schema.names.len();
         let mut sorted_values = vec![Vec::with_capacity(total_rows); num_cols];
         for record in records {
-            for (index, (_, value)) in record.into_tuples().into_iter().enumerate() {
-                sorted_values[index].push(value);
+            if record.to_variables().len() == num_cols {
+                for (index, (_, value)) in record.into_tuples().into_iter().enumerate() {
+                    sorted_values[index].push(value);
+                }
+            } else {
+                // Record collapses duplicate aliases to their last value.
+                // Reconstruct every declared column by name so duplicate
+                // schema slots cannot become short or misaligned columns.
+                let mut values = record.into_variables();
+                for (index, name) in self.schema.names.iter().enumerate() {
+                    let value = if self.schema.names[index + 1..].contains(name) {
+                        values.get(name).cloned().unwrap_or(Value::Missing)
+                    } else {
+                        values.remove(name).unwrap_or(Value::Missing)
+                    };
+                    sorted_values[index].push(value);
+                }
             }
         }
         self.emit_sorted_values(sorted_values, total_rows)?;

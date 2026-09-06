@@ -5,12 +5,13 @@ use crate::common::types::Value;
 use ordered_float::OrderedFloat;
 use url;
 
+use crate::execution::field_analysis::JsonProjection;
 use flate2::read::MultiGzDecoder;
 #[cfg(test)]
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use serde_json::Value as JsonValue;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -766,7 +767,7 @@ pub enum ReaderError {
 pub struct ReaderBuilder {
     capacity: usize,
     file_format: String,
-    required_fields: Option<Arc<HashSet<String>>>,
+    required_fields: Option<Arc<JsonProjection>>,
 }
 
 pub trait RecordRead {
@@ -836,7 +837,12 @@ impl ReaderBuilder {
     /// An empty list retains no fields; the default builder retains every field.
     /// Other log formats keep their existing fixed-schema decoding.
     pub fn with_required_fields(mut self, fields: Vec<String>) -> Self {
-        self.required_fields = Some(Arc::new(fields.into_iter().collect()));
+        self.required_fields = Some(Arc::new(JsonProjection::from_roots(fields)));
+        self
+    }
+
+    pub(crate) fn with_json_projection(mut self, fields: JsonProjection) -> Self {
+        self.required_fields = Some(Arc::new(fields));
         self
     }
 
@@ -937,7 +943,7 @@ pub struct Reader<R> {
     datatypes: Vec<DataType>,
     field_count: usize,
     regex_format: Option<RegexFormat>,
-    required_fields: Option<Arc<HashSet<String>>>,
+    required_fields: Option<Arc<JsonProjection>>,
 }
 
 impl<R: io::Read> Reader<R> {

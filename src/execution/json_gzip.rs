@@ -8,6 +8,7 @@ use crate::common::types::Variables;
 use crate::execution::batch::BatchToRowAdapter;
 use crate::execution::batch::{BatchSchema, BatchStream, ColumnBatch, ColumnType, PrecomputedBatchStream};
 use crate::execution::batch_groupby::{BatchGroupByOperator, PartialAggregateState, output_names};
+use crate::execution::field_analysis::JsonProjection;
 use crate::execution::json_batch_scan::JsonBatchScanOperator;
 use crate::execution::memory::{MemoryReservation, MemoryTracker};
 #[cfg(feature = "bench-internals")]
@@ -39,7 +40,7 @@ pub(crate) struct GzipAggregateStream {
     reader_factory: Option<ReaderFactory>,
     parser_workers: usize,
     chunk_bytes: usize,
-    fields: Vec<String>,
+    fields: JsonProjection,
     keys: Vec<PathExpr>,
     aggregates: Vec<NamedAggregate>,
     variables: Variables,
@@ -58,7 +59,7 @@ impl GzipAggregateStream {
     pub(crate) fn new(
         path: PathBuf,
         parser_workers: usize,
-        fields: Vec<String>,
+        fields: JsonProjection,
         keys: Vec<PathExpr>,
         aggregates: Vec<NamedAggregate>,
         variables: Variables,
@@ -84,7 +85,7 @@ impl GzipAggregateStream {
     fn from_reader(
         reader_factory: ReaderFactory,
         parser_workers: usize,
-        fields: Vec<String>,
+        fields: JsonProjection,
         keys: Vec<PathExpr>,
         aggregates: Vec<NamedAggregate>,
         variables: Variables,
@@ -127,8 +128,8 @@ impl GzipAggregateStream {
     fn consume(&self, reader_factory: ReaderFactory) -> StreamResult<(ColumnBatch, MemoryReservation)> {
         let threads = self.parser_workers;
         let schema = BatchSchema {
-            names: self.fields.clone(),
-            types: vec![ColumnType::Mixed; self.fields.len()],
+            names: self.fields.names().to_vec(),
+            types: vec![ColumnType::Mixed; self.fields.names().len()],
         };
         let fields = Arc::new(self.fields.clone());
         let aggregates = Arc::new(self.aggregates.clone());
@@ -185,7 +186,7 @@ impl GzipAggregateStream {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             let chunk = input?;
                             BatchGroupByOperator::new(
-                                wrapper(Box::new(JsonBatchScanOperator::new(
+                                wrapper(Box::new(JsonBatchScanOperator::new_projected(
                                     Box::new(ChunkReader {
                                         cursor: io::Cursor::new(chunk.data),
                                         _reservation: chunk.reservation,
@@ -590,7 +591,7 @@ fn run_profile(
     let mut stream = GzipAggregateStream::from_reader(
         factory,
         threads,
-        fields,
+        JsonProjection::from_roots(fields),
         vec![],
         aggregates,
         Variables::new(),

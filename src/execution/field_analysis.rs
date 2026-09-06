@@ -2,24 +2,149 @@ use hashbrown::HashSet;
 
 use crate::execution::log_schema::LogSchema;
 use crate::execution::types::{Aggregate, Expression, Formula, Named, NamedAggregate, Node};
-use crate::syntax::ast::PathSegment;
+use crate::syntax::ast::{PathExpr, PathSegment};
+use std::collections::HashMap;
+
+/// A required value either escapes as a whole or is only traversed through
+/// named object attributes. Arrays and wildcard paths retain complete roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum JsonFieldProjection {
+    All,
+    Object(HashMap<String, JsonFieldProjection>),
+}
+
+impl JsonFieldProjection {
+    fn insert(&mut self, path: &[PathSegment]) {
+        if path.is_empty() {
+            *self = Self::All;
+        } else if let Self::Object(fields) = self {
+            let PathSegment::AttrName(name) = &path[0] else {
+                *self = Self::All;
+                return;
+            };
+            fields
+                .entry(name.clone())
+                .or_insert_with(|| Self::Object(HashMap::new()))
+                .insert(&path[1..]);
+        }
+    }
+
+    pub(crate) fn children(&self) -> Option<&HashMap<String, Self>> {
+        match self {
+            Self::All => None,
+            Self::Object(fields) => Some(fields),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct JsonProjection {
+    names: Vec<String>,
+    fields: HashMap<String, JsonFieldProjection>,
+    all: bool,
+}
+
+impl JsonProjection {
+    pub(crate) fn from_roots(roots: Vec<String>) -> Self {
+        let mut projection = Self::default();
+        for root in roots {
+            projection.root(&root);
+        }
+        projection
+    }
+
+    pub(crate) fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    pub(crate) fn fields(&self) -> &HashMap<String, JsonFieldProjection> {
+        &self.fields
+    }
+
+    pub(crate) fn retain_roots(&mut self, mut retain: impl FnMut(&str) -> bool) {
+        self.fields.retain(|name, _| retain(name));
+        self.names.retain(|name| self.fields.contains_key(name));
+    }
+}
+
+/// Reuse the same plan walk for fixed-schema roots and JSON object paths.
+trait FieldCollector {
+    fn path(&mut self, path: &PathExpr);
+    fn root(&mut self, name: &str);
+    fn all(&mut self);
+}
+
+impl FieldCollector for HashSet<String> {
+    fn path(&mut self, path: &PathExpr) {
+        if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) = path.path_segments.first() {
+            self.root(name);
+        }
+        if path
+            .path_segments
+            .iter()
+            .any(|segment| matches!(segment, PathSegment::Wildcard | PathSegment::WildcardAttr))
+        {
+            self.all();
+        }
+    }
+
+    fn root(&mut self, name: &str) {
+        self.insert(name.to_owned());
+    }
+
+    fn all(&mut self) {
+        self.root("*");
+    }
+}
+
+impl FieldCollector for JsonProjection {
+    fn path(&mut self, path: &PathExpr) {
+        if path
+            .path_segments
+            .iter()
+            .any(|segment| matches!(segment, PathSegment::Wildcard | PathSegment::WildcardAttr))
+        {
+            self.all();
+            return;
+        }
+        let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) = path.path_segments.first() else {
+            self.all();
+            return;
+        };
+        // Indexed access has separate runtime semantics; keep its entire root.
+        if path
+            .path_segments
+            .iter()
+            .any(|segment| matches!(segment, PathSegment::ArrayIndex(..)))
+        {
+            self.root(name);
+            return;
+        }
+        if !self.fields.contains_key(name) {
+            self.names.push(name.clone());
+        }
+        self.fields
+            .entry(name.clone())
+            .or_insert_with(|| JsonFieldProjection::Object(HashMap::new()))
+            .insert(&path.path_segments[1..]);
+    }
+
+    fn root(&mut self, name: &str) {
+        if self.fields.insert(name.to_owned(), JsonFieldProjection::All).is_none() {
+            self.names.push(name.to_owned());
+        }
+    }
+
+    fn all(&mut self) {
+        self.all = true;
+    }
+}
 
 /// Walk an Expression, collecting all field names it references.
-fn collect_expr_fields(expr: &Expression, out: &mut HashSet<String>) {
+fn collect_expr_fields(expr: &Expression, out: &mut impl FieldCollector) {
     match expr {
         Expression::Variable(path_expr) => {
-            // Extract attribute name from the first segment of the path
-            if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) =
-                path_expr.path_segments.first()
-            {
-                out.insert(name.clone());
-            }
-            // Wildcards in path mean we need all fields
-            for seg in &path_expr.path_segments {
-                if matches!(seg, PathSegment::Wildcard | PathSegment::WildcardAttr) {
-                    out.insert("*".to_string());
-                }
-            }
+            out.path(path_expr);
         }
         Expression::Constant(_) => {}
         Expression::Function(_, args) => {
@@ -44,13 +169,13 @@ fn collect_expr_fields(expr: &Expression, out: &mut HashSet<String>) {
         }
         Expression::Subquery(_) => {
             // Conservative: subquery may reference any field
-            out.insert("*".to_string());
+            out.all();
         }
     }
 }
 
 /// Walk a Formula, collecting all field names it references.
-fn collect_formula_fields(formula: &Formula, out: &mut HashSet<String>) {
+fn collect_formula_fields(formula: &Formula, out: &mut impl FieldCollector) {
     match formula {
         Formula::Constant(_) => {}
         Formula::Predicate(_, left, right) => {
@@ -85,19 +210,19 @@ fn collect_formula_fields(formula: &Formula, out: &mut HashSet<String>) {
 }
 
 /// Handle Named::Expression and Named::Star.
-fn collect_named_fields(named: &Named, out: &mut HashSet<String>) {
+fn collect_named_fields(named: &Named, out: &mut impl FieldCollector) {
     match named {
         Named::Expression(expr, _) => {
             collect_expr_fields(expr, out);
         }
         Named::Star => {
-            out.insert("*".to_string());
+            out.all();
         }
     }
 }
 
 /// Walk a plan tree Node, collecting all field names referenced.
-fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
+fn collect_node_fields(node: &Node, out: &mut impl FieldCollector) {
     match node {
         Node::Map(named_list, source) => {
             for named in named_list {
@@ -112,11 +237,7 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
         Node::GroupBy(keys, aggregates, source) => {
             // Collect key path names
             for key_path in keys {
-                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) =
-                    key_path.path_segments.first()
-                {
-                    out.insert(name.clone());
-                }
+                out.path(key_path);
             }
             // Collect aggregate field references
             collect_aggregate_fields(aggregates, out);
@@ -127,11 +248,7 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
         }
         Node::OrderBy(columns, _, source) => {
             for col_path in columns {
-                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) =
-                    col_path.path_segments.first()
-                {
-                    out.insert(name.clone());
-                }
+                out.path(col_path);
             }
             collect_node_fields(source, out);
         }
@@ -161,12 +278,8 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
             collect_node_fields(left, out);
             collect_node_fields(right, out);
             for (lk, rk) in equi_keys {
-                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) = lk.path_segments.first() {
-                    out.insert(name.clone());
-                }
-                if let Some(PathSegment::AttrName(name) | PathSegment::ArrayIndex(name, _)) = rk.path_segments.first() {
-                    out.insert(name.clone());
-                }
+                out.path(lk);
+                out.path(rk);
             }
             if let Some(r) = residual {
                 collect_formula_fields(r, out);
@@ -176,7 +289,7 @@ fn collect_node_fields(node: &Node, out: &mut HashSet<String>) {
 }
 
 /// Collect field names from aggregates in a GroupBy node.
-fn collect_aggregate_fields(aggregates: &[NamedAggregate], out: &mut HashSet<String>) {
+fn collect_aggregate_fields(aggregates: &[NamedAggregate], out: &mut impl FieldCollector) {
     for na in aggregates {
         match &na.aggregate {
             Aggregate::Count(_, Named::Star) => {}
@@ -192,7 +305,7 @@ fn collect_aggregate_fields(aggregates: &[NamedAggregate], out: &mut HashSet<Str
                 collect_named_fields(named, out);
             }
             Aggregate::PercentileDisc(_, col_name) | Aggregate::ApproxPercentile(_, col_name) => {
-                out.insert(col_name.clone());
+                out.root(col_name);
             }
         }
     }
@@ -227,7 +340,7 @@ pub(crate) fn extract_required_fields(node: &Node, schema: &LogSchema) -> Vec<us
 
 /// Required JSON root fields. None preserves complete objects for wildcard,
 /// bound-table, join and subquery shapes; Some(empty) is a validation-only scan.
-pub(crate) fn extract_required_root_names(node: &Node) -> Option<Vec<String>> {
+pub(crate) fn extract_required_json_fields(node: &Node) -> Option<JsonProjection> {
     fn has_output_projection(node: &Node) -> bool {
         match node {
             Node::Map(..) | Node::GroupBy(..) => true,
@@ -256,14 +369,18 @@ pub(crate) fn extract_required_root_names(node: &Node) -> Option<Vec<String>> {
     if has_scoped_source(node) {
         return None;
     }
-    let mut names = HashSet::new();
-    collect_node_fields(node, &mut names);
-    if names.contains("*") {
+    let mut fields = JsonProjection::default();
+    collect_node_fields(node, &mut fields);
+    if fields.all {
         return None;
     }
-    let mut names: Vec<_> = names.into_iter().collect();
-    names.sort();
-    Some(names)
+    fields.names.sort();
+    Some(fields)
+}
+
+/// Root-only view for pipeline eligibility and fixed-schema diagnostics.
+pub(crate) fn extract_required_root_names(node: &Node) -> Option<Vec<String>> {
+    extract_required_json_fields(node).map(|fields| fields.names)
 }
 
 #[cfg(test)]
@@ -411,5 +528,38 @@ mod tests {
         let schema = elb_schema();
         let fields = extract_fields_from_formula(&formula, &schema);
         assert_eq!(fields.len(), 0);
+    }
+
+    #[test]
+    fn json_projection_array_paths_retain_complete_roots_and_wildcards_disable_pruning() {
+        let source = || Box::new(Node::DataSource(DataSource::Stdin("jsonl".into(), "it".into()), vec![]));
+        for segments in [
+            vec![
+                PathSegment::ArrayIndex("items".into(), 0),
+                PathSegment::AttrName("v".into()),
+            ],
+            vec![
+                PathSegment::AttrName("items".into()),
+                PathSegment::ArrayIndex("nested".into(), 0),
+                PathSegment::AttrName("v".into()),
+            ],
+        ] {
+            let node = Node::Map(
+                vec![Named::Expression(Expression::Variable(PathExpr::new(segments)), None)],
+                source(),
+            );
+            let fields = extract_required_json_fields(&node).unwrap();
+            assert_eq!(fields.fields().get("items"), Some(&JsonFieldProjection::All));
+        }
+        for segment in [PathSegment::Wildcard, PathSegment::WildcardAttr] {
+            let node = Node::Map(
+                vec![Named::Expression(
+                    Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("items".into()), segment])),
+                    None,
+                )],
+                source(),
+            );
+            assert!(extract_required_json_fields(&node).is_none());
+        }
     }
 }

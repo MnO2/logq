@@ -239,13 +239,13 @@ impl Expression {
     ) -> PhysicalResult<(Box<execution::Expression>, common::Variables)> {
         match self {
             Expression::Constant(value) => {
-                let constant_name = physical_plan_creator.new_constant_name();
-                let path_expr = ast::PathExpr::new(vec![ast::PathSegment::AttrName(constant_name.clone())]);
-                let node = Box::new(execution::Expression::Variable(path_expr));
-                let mut variables = common::Variables::default();
-                variables.insert(constant_name, value.clone());
-
-                Ok((node, variables))
+                // Literal values have no row name. Hoisting them as variables
+                // lets JSON fields shadow literals and makes field pruning
+                // mistake real source columns for constant bindings.
+                Ok((
+                    Box::new(execution::Expression::Constant(value.clone())),
+                    common::Variables::default(),
+                ))
             }
             Expression::Variable(name) => {
                 let node = Box::new(execution::Expression::Variable(name.clone()));
@@ -457,19 +457,11 @@ impl Formula {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PhysicalPlanCreator {
-    counter: u32,
-}
+pub(crate) struct PhysicalPlanCreator;
 
 impl PhysicalPlanCreator {
     pub(crate) fn new() -> Self {
-        PhysicalPlanCreator { counter: 0 }
-    }
-
-    pub(crate) fn new_constant_name(&mut self) -> VariableName {
-        let constant_name = format!("const_{:09}", self.counter);
-        self.counter += 1;
-        constant_name
+        PhysicalPlanCreator
     }
 }
 
@@ -761,15 +753,12 @@ mod test {
 
     #[test]
     fn test_expression_gen_physical() {
-        let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
-
         let expr = Expression::Constant(common::Value::Int(1));
         let mut physical_plan_creator = PhysicalPlanCreator::new();
         let (physical_expr, variables) = expr.physical(&mut physical_plan_creator).unwrap();
-        let expected_formula = execution::Expression::Variable(path_expr_const.clone());
+        let expected_formula = execution::Expression::Constant(common::Value::Int(1));
 
-        let mut expected_variables = common::Variables::default();
-        expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
+        let expected_variables = common::Variables::default();
         assert_eq!(expected_formula, *physical_expr);
         assert_eq!(expected_variables, variables);
     }
@@ -778,7 +767,6 @@ mod test {
     fn test_filter_with_map_gen_physical() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
-        let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
 
         let filtered_formula = Formula::Predicate(
             Relation::Equal,
@@ -814,7 +802,7 @@ mod test {
         let expected_filtered_formula = execution::Formula::Predicate(
             execution::Relation::Equal,
             Box::new(execution::Expression::Variable(path_expr_a.clone())),
-            Box::new(execution::Expression::Variable(path_expr_const.clone())),
+            Box::new(execution::Expression::Constant(common::Value::Int(1))),
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
@@ -843,8 +831,7 @@ mod test {
 
         let expected_filter = execution::Node::Filter(Box::new(expected_source), Box::new(expected_filtered_formula));
 
-        let mut expected_variables = common::Variables::default();
-        expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
+        let expected_variables = common::Variables::default();
 
         assert_eq!(expected_filter, *physical_formula);
         assert_eq!(expected_variables, variables);
@@ -854,7 +841,6 @@ mod test {
     fn test_group_by_gen_physical() {
         let path_expr_a = PathExpr::new(vec![PathSegment::AttrName("a".to_string())]);
         let path_expr_b = PathExpr::new(vec![PathSegment::AttrName("b".to_string())]);
-        let path_expr_const = PathExpr::new(vec![PathSegment::AttrName("const_000000000".to_string())]);
 
         let filtered_formula = Formula::Predicate(
             Relation::Equal,
@@ -909,7 +895,7 @@ mod test {
         let expected_filtered_formula = execution::Formula::Predicate(
             execution::Relation::Equal,
             Box::new(execution::Expression::Variable(path_expr_a.clone())),
-            Box::new(execution::Expression::Variable(path_expr_const.clone())),
+            Box::new(execution::Expression::Constant(common::Value::Int(1))),
         );
 
         let path_expr = PathExpr::new(vec![PathSegment::AttrName("it".to_string())]);
@@ -965,8 +951,7 @@ mod test {
             Box::new(expected_filter),
         );
 
-        let mut expected_variables = common::Variables::default();
-        expected_variables.insert("const_000000000".to_string(), common::Value::Int(1));
+        let expected_variables = common::Variables::default();
 
         assert_eq!(expected_group_by, *physical_formula);
         assert_eq!(expected_variables, variables);

@@ -14,6 +14,8 @@ struct Args {
     active_percent: u8,
     #[arg(long)]
     reverse: bool,
+    #[arg(long, default_value = "plus-chain", value_parser = ["plus-chain", "add-columns", "multiply-constant", "add-multiply"])]
+    operation: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         nullable: args.nullable,
         active_percent: args.active_percent,
         reverse: args.reverse,
+        operation: args.operation,
     })?;
     println!("{}", serde_json::to_string(&report)?);
     Ok(())

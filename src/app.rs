@@ -11,6 +11,9 @@ use crate::functions;
 use crate::logical;
 use crate::syntax;
 
+#[cfg(any(test, feature = "bench-internals"))]
+pub mod lifecycle_probe;
+
 pub type AppResult<T> = result::Result<T, AppError>;
 
 #[derive(thiserror::Error, Debug)]
@@ -409,6 +412,132 @@ pub(crate) fn write_json_record<W: Write>(writer: W, record: &execution::stream:
     serde_json::to_writer(writer, &JsonRecord(record))
 }
 
+struct JsonColumnValue<'a>(execution::batch::ColumnValueRef<'a>);
+
+impl serde::Serialize for JsonColumnValue<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use execution::batch::ColumnValueRef;
+        match &self.0 {
+            ColumnValueRef::Owned(value) => JsonValue(value).serialize(serializer),
+            ColumnValueRef::Borrowed(value) => JsonValue(value).serialize(serializer),
+            ColumnValueRef::Utf8(value) => serializer.serialize_str(value),
+        }
+    }
+}
+
+/// LinkedHashMap insertion moves an overwritten alias to the end. Keep only
+/// each name's last column, in last-occurrence order, once for the whole batch.
+fn json_output_columns(batch: &execution::batch::ColumnBatch) -> Vec<usize> {
+    let mut seen = hashbrown::HashSet::with_capacity(batch.columns.len());
+    let mut columns: Vec<_> = (0..batch.columns.len())
+        .rev()
+        .filter(|&index| seen.insert(batch.names[index].as_str()))
+        .collect();
+    columns.reverse();
+    columns
+}
+
+struct JsonBatchRecord<'a> {
+    batch: &'a execution::batch::ColumnBatch,
+    row: usize,
+    columns: &'a [usize],
+}
+
+impl serde::Serialize for JsonBatchRecord<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.columns.len()))?;
+        for &index in self.columns {
+            let value = JsonColumnValue(self.batch.columns[index].value_ref(self.row));
+            map.serialize_entry(&self.batch.names[index], &value)?;
+        }
+        map.end()
+    }
+}
+
+#[cfg(test)]
+fn write_json_batch_record<W: Write>(
+    writer: W,
+    batch: &execution::batch::ColumnBatch,
+    row: usize,
+    columns: &[usize],
+) -> serde_json::Result<()> {
+    serde_json::to_writer(writer, &JsonBatchRecord { batch, row, columns })
+}
+
+fn write_json_stream<W: Write>(
+    mut writer: W,
+    stream: execution::types::ExecutionStream,
+    array: bool,
+    query: &str,
+) -> AppResult<()> {
+    fn write_item<W: Write, T: serde::Serialize>(
+        writer: &mut W,
+        value: &T,
+        array: bool,
+        first: &mut bool,
+    ) -> AppResult<()> {
+        if array && !*first {
+            writer.write_all(b",")?;
+        }
+        serde_json::to_writer(&mut *writer, value)?;
+        if !array {
+            writer.write_all(b"\n")?;
+        }
+        *first = false;
+        Ok(())
+    }
+
+    if array {
+        writer.write_all(b"[")?;
+    }
+    let mut first = true;
+    match stream {
+        execution::types::ExecutionStream::Rows(mut rows) => {
+            while let Some(record) = rows.next().map_err(|error| render_runtime_error(query, error))? {
+                if array && !first {
+                    writer.write_all(b",")?;
+                }
+                write_json_record(&mut writer, &record)?;
+                if !array {
+                    writer.write_all(b"\n")?;
+                }
+                first = false;
+            }
+        }
+        execution::types::ExecutionStream::Batches(mut batches) => {
+            while let Some(batch) = batches
+                .next_batch()
+                .map_err(|error| render_runtime_error(query, error))?
+            {
+                if batch.len == 0 || !batch.selection.any_active(batch.len) {
+                    continue;
+                }
+                let columns = json_output_columns(&batch);
+                for row in 0..batch.len {
+                    if batch.selection.is_active(row, batch.len) {
+                        write_item(
+                            &mut writer,
+                            &JsonBatchRecord {
+                                batch: &batch,
+                                row,
+                                columns: &columns,
+                            },
+                            array,
+                            &mut first,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    if array {
+        writer.write_all(b"]\n")?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
 impl FromStr for OutputMode {
     type Err = String;
 
@@ -481,6 +610,12 @@ pub fn run_with_memory_limit(
     let mut physical_plan_creator = logical::types::PhysicalPlanCreator::new();
     let (physical_plan, variables) = node.physical(&mut physical_plan_creator)?;
 
+    if matches!(output_mode, OutputMode::Json | OutputMode::Ndjson) {
+        let stream = physical_plan.get_output_with_memory_limit(variables, registry, threads, max_memory)?;
+        let stdout = std::io::stdout();
+        let writer = std::io::BufWriter::new(stdout.lock());
+        return write_json_stream(writer, stream, matches!(output_mode, OutputMode::Json), query_str);
+    }
     let mut stream = physical_plan.get_with_memory_limit(variables, registry, threads, max_memory)?;
 
     match output_mode {
@@ -503,30 +638,7 @@ pub fn run_with_memory_limit(
             }
             wtr.flush()?;
         }
-        OutputMode::Json => {
-            let stdout = std::io::stdout();
-            let mut writer = std::io::BufWriter::new(stdout.lock());
-            writer.write_all(b"[")?;
-            let mut first = true;
-            while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
-                if !first {
-                    writer.write_all(b",")?;
-                }
-                write_json_record(&mut writer, &record)?;
-                first = false;
-            }
-            writer.write_all(b"]\n")?;
-            writer.flush()?;
-        }
-        OutputMode::Ndjson => {
-            let stdout = std::io::stdout();
-            let mut writer = std::io::BufWriter::new(stdout.lock());
-            while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
-                write_json_record(&mut writer, &record)?;
-                writeln!(writer)?;
-            }
-            writer.flush()?;
-        }
+        OutputMode::Json | OutputMode::Ndjson => unreachable!("JSON output was handled above"),
     }
 
     Ok(())
@@ -603,6 +715,253 @@ pub fn run_to_records_with_registry(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_json_batch_output_matches_record_adapter_for_every_column_kind() {
+        use crate::execution::batch::{BatchToRowAdapter, ColumnBatch, TypedColumn};
+        use crate::execution::stream::Record;
+        use crate::simd::bitmap::Bitmap;
+        use crate::simd::padded_vec::PaddedVec;
+        use crate::simd::selection::SelectionVector;
+        use ordered_float::OrderedFloat;
+
+        let valid = || Bitmap::all_set(4);
+        let mut null = valid();
+        null.unset(1);
+        let mut missing = valid();
+        missing.unset(2);
+        let masks = || (null.clone(), missing.clone());
+        let (null, missing) = masks();
+        let integer = TypedColumn::Int32 {
+            data: PaddedVec::from_vec(vec![i32::MIN, 0, 0, i32::MAX]),
+            null,
+            missing,
+        };
+        let (null, missing) = masks();
+        let boolean = TypedColumn::Boolean {
+            data: valid(),
+            null,
+            missing,
+        };
+        let (null, missing) = masks();
+        let text = TypedColumn::Utf8 {
+            data: PaddedVec::from_vec(b"a\"\n\xe9\x9b\xaa\xff".to_vec()),
+            offsets: PaddedVec::from_vec(vec![0, 3, 3, 3, 7]),
+            null,
+            missing,
+        };
+        let (null, missing) = masks();
+        let dictionary = TypedColumn::DictUtf8 {
+            dict_data: PaddedVec::from_vec(b"same\n".to_vec()),
+            dict_offsets: PaddedVec::from_vec(vec![0, 5]),
+            codes: PaddedVec::from_vec(vec![0, 0, 0, 0]),
+            null,
+            missing,
+        };
+        let (null, missing) = masks();
+        let timestamp = TypedColumn::DateTime {
+            data: PaddedVec::from_vec(vec![-1, 0, 0, 1_000_001]),
+            null,
+            missing,
+        };
+        let mut object = common::types::Variables::new();
+        object.insert("escaped \" 雪".into(), Value::String("line\nback\\slash".into()));
+        let mixed = TypedColumn::Mixed {
+            data: vec![
+                Value::Object(Box::new(object)),
+                Value::Null,
+                Value::Missing,
+                Value::Array(vec![Value::Int(7), Value::Missing, Value::Float(OrderedFloat(-0.0))]),
+            ],
+            null: valid(),
+            missing: valid(),
+        };
+        let mut batch = ColumnBatch {
+            columns: vec![integer, boolean, text, dictionary, timestamp, mixed],
+            names: vec![
+                "a".into(),
+                "flag".into(),
+                "text".into(),
+                "a".into(),
+                "time".into(),
+                "nested".into(),
+            ],
+            selection: SelectionVector::All,
+            len: 4,
+        };
+        for number in [
+            0.0,
+            -0.0,
+            1.2,
+            f32::MAX,
+            f32::MIN_POSITIVE,
+            1e-12,
+            f32::NAN,
+            f32::INFINITY,
+        ] {
+            batch.columns.push(TypedColumn::Float32 {
+                data: PaddedVec::from_vec(vec![number; 4]),
+                null: valid(),
+                missing: valid(),
+            });
+            batch.names.push("float".into());
+            let indices = super::json_output_columns(&batch);
+            for row in 0..batch.len {
+                let values = batch
+                    .columns
+                    .iter()
+                    .map(|column| BatchToRowAdapter::extract_value(column, row))
+                    .collect();
+                let record = Record::new(&batch.names, values);
+                let mut expected = Vec::new();
+                super::write_json_record(&mut expected, &record).unwrap();
+                let mut actual = Vec::new();
+                super::write_json_batch_record(&mut actual, &batch, row, &indices).unwrap();
+                assert_eq!(actual, expected, "row {row}, number {number}");
+            }
+            batch.columns.pop();
+            batch.names.pop();
+        }
+    }
+
+    #[test]
+    fn native_json_stream_preserves_selection_empty_batches_and_io_failures() {
+        use crate::execution::batch::{BatchSchema, ColumnBatch, PrecomputedBatchStream, TypedColumn};
+        use crate::execution::types::ExecutionStream;
+        use crate::simd::bitmap::Bitmap;
+        use crate::simd::padded_vec::PaddedVec;
+        use crate::simd::selection::SelectionVector;
+
+        let stream = || {
+            let mut active = Bitmap::all_unset(3);
+            active.set(0);
+            active.set(2);
+            ExecutionStream::Batches(Box::new(PrecomputedBatchStream::new(
+                vec![
+                    ColumnBatch {
+                        columns: vec![],
+                        names: vec![],
+                        selection: SelectionVector::All,
+                        len: 0,
+                    },
+                    ColumnBatch {
+                        columns: vec![TypedColumn::Int32 {
+                            data: PaddedVec::from_vec(vec![1, 2, 3]),
+                            null: Bitmap::all_set(3),
+                            missing: Bitmap::all_set(3),
+                        }],
+                        names: vec!["x".into()],
+                        selection: SelectionVector::Bitmap(active),
+                        len: 3,
+                    },
+                    ColumnBatch {
+                        columns: vec![],
+                        names: vec![],
+                        selection: SelectionVector::All,
+                        len: 1,
+                    },
+                ],
+                BatchSchema {
+                    names: vec![],
+                    types: vec![],
+                },
+            )))
+        };
+        for (array, expected) in [
+            (true, &b"[{\"x\":1},{\"x\":3},{}]\n"[..]),
+            (false, &b"{\"x\":1}\n{\"x\":3}\n{}\n"[..]),
+        ] {
+            let mut bytes = Vec::new();
+            super::write_json_stream(&mut bytes, stream(), array, "select x from it").unwrap();
+            assert_eq!(bytes, expected);
+        }
+        struct FailedWriter {
+            fail_write: bool,
+        }
+        impl std::io::Write for FailedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail_write {
+                    Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+                } else {
+                    Ok(bytes.len())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "flush failed"))
+            }
+        }
+        for array in [true, false] {
+            for fail_write in [true, false] {
+                assert!(
+                    super::write_json_stream(FailedWriter { fail_write }, stream(), array, "select x from it").is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_json_query_output_matches_existing_execution_and_limit_errors() {
+        use crate::execution::types::ExecutionStream;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rows.jsonl");
+        for (input, query, batch_expected) in [
+            (
+                "{\"x\":1.25,\"s\":\"雪\\n\",\"o\":{\"n\":1}}\n{\"x\":null,\"s\":null}\n{}\n",
+                "select x as a, s, o, x + 0.5 as a from it",
+                true,
+            ),
+            (
+                "{\"x\":1}\n{\"x\":2}\n{\"x\":1}\n",
+                "select x, count(*) as n from it group by x order by x asc",
+                true,
+            ),
+            (
+                "{\"x\":1}\n{\"x\":2}\n{\"x\":1}\n",
+                "select distinct x from it order by x desc",
+                true,
+            ),
+            ("{\"x\":1}\n{bad}\n", "select x + 1 as x from it limit 1", false),
+            ("{\"x\":1}\n{bad}\n", "select x + 1 as x from it limit 0", false),
+            ("{\"x\":1}\n{bad}\n", "select x from it", true),
+            ("{\"x\":1}\n", "select * from it", false),
+        ] {
+            std::fs::write(&path, input).unwrap();
+            let sources = vec![(
+                "it".into(),
+                common::types::DataSource::File(path.clone(), "jsonl".into(), "it".into()),
+            )]
+            .into_iter()
+            .collect();
+            let registry = Arc::new(functions::register_all().unwrap());
+            let query_ast = super::parse_query_input(query).unwrap();
+            let node = super::plan_query(query, query_ast, sources, registry.clone()).unwrap();
+            let (plan, variables) = node.physical(&mut logical::types::PhysicalPlanCreator::new()).unwrap();
+            for memory in [None, Some(1024 * 1024), Some(1)] {
+                for array in [true, false] {
+                    let native = plan.get_output_with_memory_limit(variables.clone(), registry.clone(), 1, memory);
+                    let row = plan.get_with_memory_limit(variables.clone(), registry.clone(), 1, memory);
+                    match (native, row) {
+                        (Ok(native), Ok(row)) => {
+                            assert_eq!(
+                                matches!(&native, ExecutionStream::Batches(_)),
+                                batch_expected,
+                                "{query}"
+                            );
+                            let mut actual = Vec::new();
+                            let actual_result = super::write_json_stream(&mut actual, native, array, query);
+                            let mut expected = Vec::new();
+                            let expected_result =
+                                super::write_json_stream(&mut expected, ExecutionStream::Rows(row), array, query);
+                            assert_eq!(actual_result, expected_result, "{query}, memory {memory:?}");
+                            assert_eq!(actual, expected, "{query}, memory {memory:?}, array {array}");
+                        }
+                        (Err(actual), Err(expected)) => assert_eq!(actual.to_string(), expected.to_string()),
+                        _ => panic!("native and row stream construction differed for {query}"),
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn json_record_writer_matches_legacy_bytes_for_nested_and_float_values() {
         use crate::common::types::{Value, Variables};

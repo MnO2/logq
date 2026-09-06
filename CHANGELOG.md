@@ -1,5 +1,14 @@
 # CHANGELOG — PartiQL Implementation Progress
 
+## Unreleased — execution, reuse, and capacity milestones (2026-09-06)
+
+- Prune unneeded nested object descendants across JSONL row, batch, gzip and parallel readers, while validating every consumed JSON value. Index column projection masks once per batch and retain safe whole-value fallbacks for arrays, wildcards and scoped paths.
+- Serialize JSON/NDJSON directly from borrowed batch columns, preserving field order, duplicate-alias replacement, Float32 spelling, lazy errors and output failure propagation. Add trusted Float32 column addition and constant multiplication kernels with per-operation rounding and scalar fallbacks.
+- Support HAVING aggregate calls, including hidden aggregate outputs; reject unsupported global and nested-aggregate forms clearly. Bind nested, array and aliased aggregate inputs to their materialized columns without overwriting grouping keys or other aggregate arguments.
+- Keep SQL constants out of the source-field namespace, apply FROM aliases to stdin consistently with files, and fix duplicate-alias full-sort/Top-N binding and a Top-N panic. Accept following clauses after IN, postfix and CAST expressions.
+- Add a same-engine fresh/reused-plan diagnostic and a bounded fixed-schema external-sort example with temporary-disk quotas and exact-output validation. Retain both as experiments: measurements do not justify a production session API, and production spilling still needs lossless dynamic-value storage and shared query accounting.
+- Add generated cross-path correctness checks and a generated conformance index checked in CI. Runtime numbers remain Int32/Float32.
+
 ## Unreleased — correctness, performance, and documentation audit (2026-09-06)
 
 - Read every member of concatenated gzip files, including rows split across members, and report corruption or truncation in later members. Keep JSON prefix LIMIT demand-driven for simple projections, filters, and DISTINCT.

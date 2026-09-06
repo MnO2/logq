@@ -11,7 +11,6 @@ use crate::execution::types::{
 };
 use crate::functions::FunctionRegistry;
 use crate::functions::registry::ResolvedFunction;
-use crate::simd::bitmap::Bitmap;
 use crate::simd::padded_vec::PaddedVecBuilder;
 use crate::syntax::ast::{CastType, PathExpr, PathSegment};
 
@@ -201,11 +200,17 @@ impl BoundExpression {
         }
     }
 
-    /// A deliberately narrow, total kernel: a Float32 root followed by trusted
-    /// built-in Plus calls with Float constants. No user function, branch, cast,
-    /// Mixed value or integer operation can enter this path.
-    pub(crate) fn float_plus_column(&self, batch: &ColumnBatch) -> Option<TypedColumn> {
-        let mut constants = Vec::new();
+    /// A total Float32 chain: trusted Plus with float constants/root columns,
+    /// and trusted Times with float constants. Every intermediate rounds to f32.
+    /// User functions, right-hand expression trees, casts, Mixed values, and
+    /// integer operations remain in row/SELECT-list evaluation order.
+    pub(crate) fn float_arithmetic_column(&self, batch: &ColumnBatch) -> Option<TypedColumn> {
+        enum Step<'a> {
+            PlusConstant(f32),
+            PlusColumn(&'a TypedColumn),
+            TimesConstant(f32),
+        }
+        let mut steps = Vec::new();
         let mut expression = self;
         let index = loop {
             match expression {
@@ -213,17 +218,31 @@ impl BoundExpression {
                     function: Some(function),
                     arguments,
                     ..
-                } if function.is_builtin_plus() => {
-                    let [left, Self::Constant(Value::Float(right))] = arguments.as_slice() else {
+                } if function.is_builtin_plus() || function.is_builtin_times() => {
+                    let [left, right] = arguments.as_slice() else {
                         return None;
                     };
-                    constants.push(right.into_inner());
+                    let step = match right {
+                        Self::Constant(Value::Float(value)) if function.is_builtin_plus() => {
+                            Step::PlusConstant(value.into_inner())
+                        }
+                        Self::Constant(Value::Float(value)) => Step::TimesConstant(value.into_inner()),
+                        right if function.is_builtin_plus() => {
+                            let column = &batch.columns[right.direct_column()?];
+                            if !matches!(column, TypedColumn::Float32 { .. }) {
+                                return None;
+                            }
+                            Step::PlusColumn(column)
+                        }
+                        _ => return None,
+                    };
+                    steps.push(step);
                     expression = left;
                 }
                 other => break other.direct_column()?,
             }
         };
-        if constants.is_empty() {
+        if steps.is_empty() {
             return None;
         }
         let TypedColumn::Float32 {
@@ -234,22 +253,37 @@ impl BoundExpression {
         else {
             return None;
         };
+        let mut null = input_null.clone();
+        let mut missing = input_missing.clone();
+        for step in &steps {
+            if let Step::PlusColumn(TypedColumn::Float32 {
+                null: right_null,
+                missing: right_missing,
+                ..
+            }) = step
+            {
+                null = null.and(right_null);
+                missing = missing.and(right_missing);
+            }
+        }
         let mut output = PaddedVecBuilder::with_capacity(batch.len + 8);
-        let mut null = Bitmap::all_set(batch.len);
-        let mut missing = Bitmap::all_set(batch.len);
         for row in 0..batch.len {
-            if !batch.selection.is_active(row, batch.len) || !input_missing.is_set(row) {
+            if !batch.selection.is_active(row, batch.len) || !missing.is_set(row) {
                 missing.unset(row);
                 output.push(0.0);
-            } else if !input_null.is_set(row) {
-                null.unset(row);
+            } else if !null.is_set(row) {
                 output.push(0.0);
             } else {
                 let mut value = data[row];
                 // Walk from the root outwards and round at every f32 step.
                 // Collapsing/reassociating constants changes values near 2^24.
-                for constant in constants.iter().rev() {
-                    value += constant;
+                for step in steps.iter().rev() {
+                    match step {
+                        Step::PlusConstant(constant) => value += constant,
+                        Step::TimesConstant(constant) => value *= constant,
+                        Step::PlusColumn(TypedColumn::Float32 { data, .. }) => value += data[row],
+                        Step::PlusColumn(_) => unreachable!("runtime Float32 column checked before evaluation"),
+                    }
                 }
                 output.push(value);
             }
@@ -395,9 +429,9 @@ impl BoundFormula {
     }
 }
 
-/// Physical planning hoists each literal into an independently named scope
-/// variable. Compare the resolved trees when locating an aggregate's projection.
-/// Only planner-generated literals are substituted; input variables stay paths.
+/// Resolve explicitly supplied legacy literal bindings when comparing aggregate
+/// projections. SQL planning emits Constant nodes directly, so source field paths
+/// do not share generated names with literals.
 pub(crate) fn resolve_literal_names(expression: &Expression, scope: &Variables) -> Expression {
     fn rewrite_expression(expression: &mut Expression, scope: &Variables) {
         match expression {
@@ -478,6 +512,150 @@ mod tests {
             Box::new(Expression::Constant(Value::String("bad".into()))),
             CastType::Int,
         )
+    }
+
+    fn arithmetic(name: &str, left: Expression, right: Expression) -> Expression {
+        Expression::Function(
+            name.into(),
+            vec![Named::Expression(left, None), Named::Expression(right, None)],
+        )
+    }
+
+    fn float_literal(value: f32) -> Expression {
+        Expression::Constant(Value::Float(value.into()))
+    }
+
+    #[test]
+    fn typed_float_arithmetic_matches_scalar_bits_and_both_columns_validity() {
+        use crate::simd::padded_vec::PaddedVec;
+        let schema = BatchSchema {
+            names: vec!["x".into(), "y".into()],
+            types: vec![ColumnType::Float32; 2],
+        };
+        let values = [16777216.0, -0.0, f32::NAN, f32::MAX, f32::from_bits(1), 2.0, 4.0, 8.0];
+        let len = values.len();
+        let column = |right: bool| {
+            let mut null = Bitmap::all_set(len);
+            let mut missing = Bitmap::all_set(len);
+            null.unset(if right { 6 } else { 5 });
+            missing.unset(if right { 5 } else { 6 });
+            TypedColumn::Float32 {
+                data: PaddedVec::from_vec(if right { vec![0.5; len] } else { values.to_vec() }),
+                null,
+                missing,
+            }
+        };
+        let registry = crate::functions::register_all().unwrap();
+        let mut selected = Bitmap::all_set(len);
+        selected.unset(7);
+        for selection in [
+            SelectionVector::All,
+            SelectionVector::Bitmap(selected),
+            SelectionVector::Bitmap(Bitmap::all_unset(len)),
+        ] {
+            let batch = ColumnBatch {
+                columns: vec![column(false), column(true)],
+                names: schema.names.clone(),
+                selection,
+                len,
+            };
+            let plus = arithmetic("plus", variable("x"), variable("y"));
+            for expression in [
+                plus.clone(),
+                arithmetic("times", variable("x"), float_literal(0.1)),
+                arithmetic(
+                    "plus",
+                    arithmetic("times", plus, float_literal(0.1)),
+                    float_literal(-0.25),
+                ),
+            ] {
+                let mut bound = BoundExpression::bind(&expression, &schema, &Variables::new(), &registry);
+                let output = bound
+                    .float_arithmetic_column(&batch)
+                    .expect("trusted Float32 arithmetic uses a typed kernel");
+                for row in 0..len {
+                    let expected = if batch.selection.is_active(row, len) {
+                        bound.evaluate(&batch, row).unwrap()
+                    } else {
+                        Value::Missing
+                    };
+                    let actual = BatchToRowAdapter::extract_value(&output, row);
+                    match (expected, actual) {
+                        (Value::Float(left), Value::Float(right)) if left.is_nan() => assert!(right.is_nan()),
+                        (Value::Float(left), Value::Float(right)) => {
+                            assert_eq!(left.to_bits(), right.to_bits(), "row {row}, {expression:?}")
+                        }
+                        (left, right) => assert_eq!(left, right, "row {row}, {expression:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn typed_float_arithmetic_rejects_custom_functions_and_non_float_inputs() {
+        use crate::functions::{Arity, FunctionDef, NullHandling};
+        use crate::simd::padded_vec::PaddedVec;
+        let schema = BatchSchema {
+            names: vec!["x".into(), "y".into()],
+            types: vec![ColumnType::Float32; 2],
+        };
+        let column = || TypedColumn::Float32 {
+            data: PaddedVec::from_vec(vec![1.25]),
+            null: Bitmap::all_set(1),
+            missing: Bitmap::all_set(1),
+        };
+        let mut batch = ColumnBatch {
+            columns: vec![column(), column()],
+            names: schema.names.clone(),
+            selection: SelectionVector::All,
+            len: 1,
+        };
+        for name in ["plus", "times"] {
+            let mut registry = FunctionRegistry::new();
+            registry
+                .register(FunctionDef {
+                    name: name.into(),
+                    arity: Arity::Exact(2),
+                    null_handling: NullHandling::Custom,
+                    func: Box::new(|_| Err(ExpressionError::TypeMismatch)),
+                })
+                .unwrap();
+            let expression = arithmetic(name, variable("x"), float_literal(0.5));
+            let mut bound = BoundExpression::bind(&expression, &schema, &Variables::new(), &registry);
+            assert!(bound.float_arithmetic_column(&batch).is_none());
+            assert_eq!(bound.evaluate(&batch, 0), Err(ExpressionError::TypeMismatch));
+        }
+        let registry = crate::functions::register_all().unwrap();
+        for expression in [
+            arithmetic("times", variable("x"), Expression::Constant(Value::Int(2))),
+            arithmetic("plus", variable("x"), invalid_cast()),
+            arithmetic(
+                "plus",
+                variable("x"),
+                arithmetic("times", variable("y"), float_literal(0.5)),
+            ),
+        ] {
+            let bound = BoundExpression::bind(&expression, &schema, &Variables::new(), &registry);
+            assert!(bound.float_arithmetic_column(&batch).is_none());
+        }
+        for column in [
+            TypedColumn::Int32 {
+                data: PaddedVec::from_vec(vec![1]),
+                null: Bitmap::all_set(1),
+                missing: Bitmap::all_set(1),
+            },
+            TypedColumn::Mixed {
+                data: vec![Value::Float(1.25.into())],
+                null: Bitmap::all_set(1),
+                missing: Bitmap::all_set(1),
+            },
+        ] {
+            batch.columns[1] = column;
+            let expression = arithmetic("plus", variable("x"), variable("y"));
+            let bound = BoundExpression::bind(&expression, &schema, &Variables::new(), &registry);
+            assert!(bound.float_arithmetic_column(&batch).is_none());
+        }
     }
 
     #[test]

@@ -120,6 +120,63 @@ fn float_plus_chains_match_rows_across_masks_aliases_and_batch_type_changes() {
 }
 
 #[test]
+fn float_column_add_and_constant_multiply_match_row_pipeline() {
+    let mut input = String::new();
+    for row in 0..2200 {
+        input.push_str(match row % 8 {
+            0 => "{\"x\":16777216.0,\"y\":0.5,\"keep\":true}\n",
+            1 => "{\"x\":1.25,\"y\":2.5,\"keep\":true}\n",
+            2 => "{\"x\":null,\"y\":1.0,\"keep\":true}\n",
+            3 => "{\"y\":null,\"keep\":true}\n",
+            4 => "{\"x\":null,\"keep\":true}\n",
+            5 => "{\"x\":3.0,\"y\":null,\"keep\":true}\n",
+            6 => "{\"x\":-2.5,\"y\":1.5,\"keep\":false}\n",
+            _ => "{\"x\":-0.0,\"y\":-0.0,\"keep\":true}\n",
+        });
+    }
+    // Runtime types can change in later batches; checked integer and mixed
+    // evaluation must continue using scalar semantics.
+    input.push_str("{\"x\":2,\"y\":3,\"keep\":true}\n{\"x\":\"bad\",\"y\":2.5,\"keep\":false}\n");
+    for sql in [
+        "select x + y as added, x * 1.25 as scaled, (x + y) * 0.5 + 0.25 as combined from it where keep = true",
+        "select x + y as n, x * 1.25 as other, (x + y) * 0.5 as n from it where keep = true",
+        "select sum(x + y) as added, sum(x * 1.25) as scaled from it where keep = true",
+        "select (x + y) * 0.5 as n from it where keep = true order by n asc limit 8",
+    ] {
+        assert_batch(sql);
+        let expected = run(&input, sql, 1, true);
+        assert!(
+            expected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&expected.stderr)
+        );
+        for threads in [1, 4] {
+            let actual = run(&input, sql, threads, false);
+            assert!(actual.status.success(), "{}", String::from_utf8_lossy(&actual.stderr));
+            assert_eq!(actual.stdout, expected.stdout, "{sql}, threads={threads}");
+        }
+    }
+    for sql in [
+        "select x + y as n, cast(bad as int) as bad from it limit 1",
+        "select x * 1.25 as n, cast(bad as int) as bad from it limit 1",
+        "select cast(bad as int) as n, x + y as n from it",
+        "select cast(bad as int) as n, x * 1.25 as n from it",
+    ] {
+        let input = "{\"x\":1.25,\"y\":2.5,\"bad\":\"12\"}\n{\"x\":2.5,\"y\":1.0,\"bad\":\"bad\"}\n";
+        let expected = run(input, sql, 1, true);
+        for threads in [1, 4] {
+            let actual = run(input, sql, threads, false);
+            assert_eq!(actual.status.success(), expected.status.success(), "{sql}");
+            if expected.status.success() {
+                assert_eq!(actual.stdout, expected.stdout, "{sql}");
+            } else {
+                assert_eq!(actual.stderr, expected.stderr, "{sql}");
+            }
+        }
+    }
+}
+
+#[test]
 fn float_plus_chains_preserve_prefix_limit_and_overwritten_errors() {
     let input = "{\"v\":1.25,\"x\":\"12\",\"keep\":true}\n{\"v\":2.5,\"x\":\"bad\",\"keep\":true}\n";
     for sql in [

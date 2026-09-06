@@ -1,6 +1,13 @@
 {
   "upstream": "https://github.com/partiql/partiql-tests",
   "cases": [
+    {"name":"having_aggregate_call","source":"eval/query/group-by/group-by.ion","query":"select category, count(*) as n from it group by category having count(*) > 1 order by category asc","expected":[{"category":"alpha","n":2},{"category":"beta","n":2}]},
+    {"name":"having_hidden_aggregate","source":"eval/query/group-by/group-by.ion","query":"select category from it group by category having sum(score) > 25 order by category asc","expected":[{"category":"alpha"}]},
+    {"name":"having_global_aggregate","source":"eval/query/group-by/group-by.ion","query":"select count(*) as n from it having count(*) = 4","expected":[{"n":4}]},
+    {"name":"duplicate_aggregate_alias_topn","source":"eval/query/order-by.ion","query":"select category, count(*) as n, sum(uid) as n from it group by category order by n desc limit 1","expected":[{"category":"beta","n":6}]},
+    {"name":"projection_alias","source":"eval/query/select/projection.ion","query":"select uid as id from it order by id desc limit 2","expected":[{"id":4},{"id":3}]},
+    {"name":"in_followed_by_order","source":"eval/primitives/operators/in-operator.ion","query":"select uid from it where uid in (1,3) order by uid desc","expected":[{"uid":3},{"uid":1}]},
+    {"name":"not_in_followed_by_limit","source":"eval/primitives/operators/in-operator.ion","query":"select uid from it where uid not in (1,3) limit 1","expected":[{"uid":2}]},
     {"name":"projection_one","source":"eval/query/select/projection.ion","query":"select uid from it order by uid asc","expected":[{"uid":1},{"uid":2},{"uid":3},{"uid":4}]},
     {"name":"projection_two","source":"eval/query/select/projection.ion","query":"select uid, person from it order by uid asc","expected":[{"uid":1,"person":"Alice"},{"uid":2,"person":"Bob"},{"uid":3,"person":"Carol"},{"uid":4,"person":"dave"}]},
     {"name":"distinct","source":"eval/query/select/select-distinct.ion","query":"select distinct category from it order by category asc","expected":[{"category":"alpha"},{"category":"beta"}]},

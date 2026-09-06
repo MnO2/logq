@@ -8,6 +8,7 @@ use crate::simd::padded_vec::{PaddedVec, PaddedVecBuilder};
 use crate::simd::selection::SelectionVector;
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 /// Compile-time tunable batch size.
@@ -63,7 +64,46 @@ pub enum TypedColumn {
     },
 }
 
+/// Scalar view of a column cell. Strings and dynamic trees stay borrowed;
+/// fixed-width values use the same conversion as the row adapter.
+pub(crate) enum ColumnValueRef<'a> {
+    Owned(Value),
+    Borrowed(&'a Value),
+    Utf8(Cow<'a, str>),
+}
+
 impl TypedColumn {
+    pub(crate) fn value_ref(&self, row: usize) -> ColumnValueRef<'_> {
+        match self {
+            Self::Utf8 {
+                data,
+                offsets,
+                null,
+                missing,
+            } if missing.is_set(row) && null.is_set(row) => {
+                let start = offsets[row] as usize;
+                let end = offsets[row + 1] as usize;
+                ColumnValueRef::Utf8(String::from_utf8_lossy(&data[start..end]))
+            }
+            Self::DictUtf8 {
+                dict_data,
+                dict_offsets,
+                codes,
+                null,
+                missing,
+            } if missing.is_set(row) && null.is_set(row) => {
+                let code = codes[row] as usize;
+                let start = dict_offsets[code] as usize;
+                let end = dict_offsets[code + 1] as usize;
+                ColumnValueRef::Utf8(String::from_utf8_lossy(&dict_data[start..end]))
+            }
+            Self::Mixed { data, null, missing } if missing.is_set(row) && null.is_set(row) => {
+                ColumnValueRef::Borrowed(&data[row])
+            }
+            _ => ColumnValueRef::Owned(BatchToRowAdapter::extract_value(self, row)),
+        }
+    }
+
     /// Returns a bitmap where bit i is set iff row i is present (non-null and non-missing).
     pub fn validity_bitmap(&self, _len: usize) -> crate::simd::bitmap::Bitmap {
         let (null, missing) = match self {

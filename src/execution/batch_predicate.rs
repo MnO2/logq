@@ -152,8 +152,8 @@ fn evaluate_truth(
     }
 }
 
-// The planner hoists literals into the outer Variables scope. Borrow these
-// values once per batch, while preserving row-column shadowing of scope names.
+// Borrow direct literals and external scope values once per batch, while
+// preserving row-column shadowing of scope names supplied by library callers.
 fn invariant_value<'a>(expression: &'a Expression, batch: &ColumnBatch, variables: &'a Variables) -> Option<&'a Value> {
     match expression {
         Expression::Constant(value) => Some(value),

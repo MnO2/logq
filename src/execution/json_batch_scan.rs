@@ -1,7 +1,8 @@
 use crate::common::types::Value;
 use crate::execution::batch::{BATCH_SIZE, BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn};
+use crate::execution::field_analysis::{JsonFieldProjection, JsonProjection};
 use crate::execution::json_column_builder::JsonColumnBuilder;
-use crate::execution::json_reader::parse_columns;
+use crate::execution::json_reader::parse_projected_columns;
 use crate::execution::types::{StreamError, StreamResult};
 use crate::simd::bitmap::Bitmap;
 use crate::simd::padded_vec::PaddedVecBuilder;
@@ -15,19 +16,28 @@ pub(crate) struct JsonBatchScanOperator {
     reader: Box<dyn BufRead>,
     schema: BatchSchema,
     field_indices: HashMap<String, usize>,
+    field_projections: Vec<JsonFieldProjection>,
     line: String,
     done: bool,
     dictionary: bool,
 }
 
 impl JsonBatchScanOperator {
+    #[cfg(any(test, feature = "bench-internals"))]
     pub(crate) fn new(reader: Box<dyn BufRead>, fields: Vec<String>) -> Self {
+        Self::new_projected(reader, JsonProjection::from_roots(fields))
+    }
+
+    pub(crate) fn new_projected(reader: Box<dyn BufRead>, projection: JsonProjection) -> Self {
+        let fields = projection.names();
         let mut field_indices = HashMap::with_capacity(fields.len());
         let mut names = Vec::with_capacity(fields.len());
+        let mut field_projections = Vec::with_capacity(fields.len());
         for field in fields {
-            if !field_indices.contains_key(&field) {
+            if !field_indices.contains_key(field) {
                 field_indices.insert(field.clone(), names.len());
-                names.push(field);
+                names.push(field.clone());
+                field_projections.push(projection.fields()[field].clone());
             }
         }
         Self {
@@ -37,6 +47,7 @@ impl JsonBatchScanOperator {
                 names,
             },
             field_indices,
+            field_projections,
             line: String::with_capacity(512),
             done: false,
             dictionary: false,
@@ -63,7 +74,13 @@ impl BatchStream for JsonBatchScanOperator {
                 self.done = true;
                 break;
             }
-            parse_columns(&self.line, &self.field_indices, &mut columns).map_err(|_| StreamError::Reader)?;
+            parse_projected_columns(
+                &self.line,
+                &self.field_indices,
+                &mut columns,
+                Some(&self.field_projections),
+            )
+            .map_err(|_| StreamError::Reader)?;
             len += 1;
         }
         if len == 0 {
@@ -196,6 +213,45 @@ mod tests {
             Box::new(Cursor::new(input.into())),
             fields.iter().map(|field| (*field).to_string()).collect(),
         )
+    }
+
+    #[test]
+    fn indexed_nested_projections_follow_columns_not_input_key_order() {
+        use crate::common::types::DataSource;
+        use crate::execution::field_analysis::extract_required_json_fields;
+        use crate::execution::types::{Expression, Named, Node};
+        use crate::syntax::ast::{PathExpr, PathSegment};
+        let expressions = [&["z", "keep"][..], &["a", "deep", "keep"], &["whole"]]
+            .iter()
+            .map(|segments| {
+                Named::Expression(
+                    Expression::Variable(PathExpr::new(
+                        segments
+                            .iter()
+                            .map(|name| PathSegment::AttrName((*name).into()))
+                            .collect(),
+                    )),
+                    None,
+                )
+            })
+            .collect();
+        let plan = Node::Map(
+            expressions,
+            Box::new(Node::DataSource(DataSource::Stdin("jsonl".into(), "it".into()), vec![])),
+        );
+        let projection = extract_required_json_fields(&plan).unwrap();
+        let input = r#"{"z":{"keep":1,"drop":2},"whole":{"left":3,"right":4},"a":{"deep":{"keep":5}},"\u0061":{"deep":{"keep":6,"drop":7},"drop":8}}"#;
+        let mut scan = JsonBatchScanOperator::new_projected(Box::new(Cursor::new(input)), projection);
+        let batch = scan.next_batch().unwrap().unwrap();
+        assert_eq!(batch.names, ["a", "whole", "z"]);
+        let expected = crate::execution::json_reader::parse_record(
+            r#"{"a":{"deep":{"keep":6}},"whole":{"left":3,"right":4},"z":{"keep":1}}"#,
+            None,
+        )
+        .unwrap();
+        for (name, column) in batch.names.iter().zip(&batch.columns) {
+            assert_eq!(&BatchToRowAdapter::extract_value(column, 0), &expected[name], "{name}");
+        }
     }
 
     #[test]

@@ -98,6 +98,10 @@ required-features = ["bench-internals"]
 name = "expression_probe"
 required-features = ["bench-internals"]
 
+[[example]]
+name = "query_lifecycle_probe"
+required-features = ["bench-internals"]
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

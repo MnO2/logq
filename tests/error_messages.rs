@@ -100,8 +100,8 @@ fn representative_failures_have_stable_diagnostic_categories() {
         },
         ErrorCase {
             name: "having_without_group",
-            query: "select count(*) from it having count(*) > 1",
-            expected: "Invalid Star",
+            query: "select a from it having count(*) > 1",
+            expected: "HAVING aggregates require an explicit GROUP BY or an aggregate in SELECT",
         },
         ErrorCase {
             name: "star_group_by",

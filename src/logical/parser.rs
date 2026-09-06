@@ -459,7 +459,7 @@ fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
 }
 
 /// Returns true if the given function name is an aggregate function.
-fn is_aggregate_name(name: &str) -> bool {
+pub(super) fn is_aggregate_name(name: &str) -> bool {
     match name.to_ascii_lowercase().as_str() {
         // from_str() names:
         "avg" | "count" | "first" | "last" | "max" | "min" | "sum"
@@ -920,10 +920,12 @@ pub(crate) fn parse_query_top(
 }
 
 pub(crate) fn parse_query(
-    query: ast::SelectStatement,
+    mut query: ast::SelectStatement,
     data_sources: common::DataSourceRegistry,
     registry: Arc<FunctionRegistry>,
 ) -> ParseResult<types::Node> {
+    let having_rewrite = super::having::rewrite(&mut query)?;
+    let mut aggregate_inputs = super::aggregate_input::InputSlots::new(&query);
     let from_clause = &query.from_clause;
 
     check_env(&data_sources, from_clause)?;
@@ -945,7 +947,7 @@ pub(crate) fn parse_query(
         common::DataSource::Stdin(fmt, _) => fmt.clone(),
     };
 
-    let mut query_aliases = std::collections::HashSet::new();
+    let mut query_aliases: std::collections::HashSet<_> = having_rewrite.referenced.into_iter().collect();
     if let ast::SelectClause::SelectExpressions(expressions) = &query.select_clause {
         for expression in expressions {
             if let ast::SelectExpression::Expression(_, Some(alias)) = expression {
@@ -1068,6 +1070,13 @@ pub(crate) fn parse_query(
                         Err(error) => return Err(error),
                     };
                     if let Some(mut named_aggregate) = aggregate {
+                        if let Some(projection) =
+                            aggregate_inputs.bind_projection(&mut named_aggregate.aggregate, &named_list)
+                        {
+                            named_list.push(projection);
+                            named_aggregates.push(named_aggregate);
+                            continue;
+                        }
                         match &named_aggregate.aggregate {
                             types::Aggregate::GroupAs(_) => {
                                 unreachable!();
@@ -1300,9 +1309,14 @@ pub(crate) fn parse_query(
             root = types::Node::GroupBy(fields, named_aggregates, Box::new(root));
         }
 
+        let visible_output =
+            (!having_rewrite.hidden.is_empty()).then(|| super::having::visible_output(&root, &having_rewrite.hidden));
         if let Some(having_expr) = query.having_expr_opt {
             let filter_formula = parse_logic(&parsing_context, &having_expr.expr)?;
             root = types::Node::Filter(filter_formula, Box::new(root));
+        }
+        if let Some(visible_output) = visible_output {
+            root = types::Node::Map(visible_output, Box::new(root));
         }
     } else {
         //sanity check if there is a group by statement

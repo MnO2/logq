@@ -10,6 +10,7 @@ use crate::execution::batch_filter::BatchFilterOperator;
 use crate::execution::batch_limit::BatchLimitOperator;
 use crate::execution::batch_project::{BatchExpressionOperator, BatchProjectOperator};
 use crate::execution::batch_scan::BatchScanOperator;
+use crate::execution::field_analysis::JsonProjection;
 use crate::execution::log_schema::LogSchema;
 use crate::execution::parallel;
 use crate::execution::stream::ProjectionStream;
@@ -753,6 +754,21 @@ pub enum ExecutionPipeline {
     Row(BatchFallback),
 }
 
+/// Preserve the selected execution representation until the output boundary.
+pub(crate) enum ExecutionStream {
+    Rows(Box<dyn RecordStream>),
+    Batches(Box<dyn BatchStream>),
+}
+
+impl ExecutionStream {
+    fn into_rows(self) -> Box<dyn RecordStream> {
+        match self {
+            Self::Rows(rows) => rows,
+            Self::Batches(batches) => Box::new(BatchToRowAdapter::new(batches)),
+        }
+    }
+}
+
 /// Normalize auto once at the query boundary; worker queues remain bounded.
 pub(crate) fn resolve_threads(requested: usize) -> usize {
     if requested == 0 {
@@ -762,11 +778,11 @@ pub(crate) fn resolve_threads(requested: usize) -> usize {
     }
 }
 
-fn projected_reader(format: &str, fields: Option<&[String]>) -> ReaderBuilder {
+fn projected_reader(format: &str, fields: Option<&JsonProjection>) -> ReaderBuilder {
     let builder = ReaderBuilder::new(format.to_string());
     if format == "jsonl" {
         if let Some(fields) = fields {
-            return builder.with_required_fields(fields.to_vec());
+            return builder.with_json_projection(fields.clone());
         }
     }
     builder
@@ -775,7 +791,7 @@ fn projected_reader(format: &str, fields: Option<&[String]>) -> ReaderBuilder {
 #[derive(Clone, Copy)]
 struct BatchOptions<'a> {
     threads: usize,
-    json_fields: Option<&'a [String]>,
+    json_fields: Option<&'a JsonProjection>,
     memory: &'a crate::execution::memory::MemoryTracker,
 }
 
@@ -967,7 +983,7 @@ impl Node {
         registry: Arc<FunctionRegistry>,
         threads: usize,
         memory: crate::execution::memory::MemoryTracker,
-        required_roots: Option<&[String]>,
+        required_roots: Option<&JsonProjection>,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
         match self {
             Node::Map(named, source) => {
@@ -1033,8 +1049,8 @@ impl Node {
 
     /// Aggregates read their already-computed projection, rather than evaluating
     /// the input expression a second time against a row that no longer contains
-    /// its source fields. Physical literals have distinct hoisted names in the
-    /// aggregate and Map trees, so compare them after resolving those literals.
+    /// its source fields. SQL literals are direct constants; resolving external
+    /// scope bindings also supports plans constructed through the library API.
     fn materialized_aggregate_inputs(
         aggregates: &[NamedAggregate],
         source: &Node,
@@ -1265,7 +1281,7 @@ impl Node {
             {
                 return None;
             }
-            parallel::ParallelBatchStream::new_json_files(paths.clone(), threads, json_fields?.to_vec())
+            parallel::ParallelBatchStream::new_json_files_projected(paths.clone(), threads, json_fields?.clone())
                 .map(|scan| ParallelInput::Scan(Box::new(scan)))
         } else {
             let DataSource::File(path, _, _) = datasource else {
@@ -1286,7 +1302,7 @@ impl Node {
                     return None;
                 };
                 if is_json {
-                    parallel::ParallelBatchStream::new_json(mmap, threads, json_fields?.to_vec(), None)
+                    parallel::ParallelBatchStream::new_json_projected(mmap, threads, json_fields?.clone(), None)
                         .map(|scan| ParallelInput::Scan(Box::new(scan)))
                 } else {
                     if crate::execution::datasource::is_dynamic_format(format) {
@@ -1372,7 +1388,7 @@ impl Node {
                 parallel::gzip_probe::GzipAggregateStream::new(
                     path,
                     threads - 1,
-                    json_fields?.to_vec(),
+                    json_fields?.clone(),
                     keys.to_vec(),
                     aggregates.to_vec(),
                     variables.clone(),
@@ -1484,7 +1500,7 @@ impl Node {
         registry: &Arc<FunctionRegistry>,
         required_fields: &[usize],
         threads: usize,
-        json_fields: Option<&[String]>,
+        json_fields: Option<&JsonProjection>,
         memory: &crate::execution::memory::MemoryTracker,
     ) -> Option<CreateStreamResult<Box<dyn BatchStream>>> {
         self.try_get_batch_limited(
@@ -1524,26 +1540,29 @@ impl Node {
                 match data_source {
                     DataSource::File(path, file_format, _) => {
                         if file_format == "jsonl" {
-                            let fields = json_fields?.to_vec();
+                            let fields = json_fields?.clone();
                             if threads > 1 {
                                 if let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) {
                                     return Some(
-                                        parallel::ParallelBatchStream::new_json(mmap, threads, fields, row_limit)
-                                            .map(|stream| {
-                                                Box::new(stream.with_memory_tracker(memory.clone()))
-                                                    as Box<dyn BatchStream>
-                                            })
-                                            .map_err(|_| CreateStreamError::Io),
+                                        parallel::ParallelBatchStream::new_json_projected(
+                                            mmap, threads, fields, row_limit,
+                                        )
+                                        .map(|stream| {
+                                            Box::new(stream.with_memory_tracker(memory.clone())) as Box<dyn BatchStream>
+                                        })
+                                        .map_err(|_| CreateStreamError::Io),
                                     );
                                 }
                             }
                             return Some(
                                 crate::execution::datasource::open_path(path)
                                     .map(|reader| {
-                                        Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
-                                            Box::new(std::io::BufReader::with_capacity(64 * 1024, reader)),
-                                            fields,
-                                        )) as Box<dyn BatchStream>
+                                        Box::new(
+                                            crate::execution::json_batch_scan::JsonBatchScanOperator::new_projected(
+                                                Box::new(std::io::BufReader::with_capacity(64 * 1024, reader)),
+                                                fields,
+                                            ),
+                                        ) as Box<dyn BatchStream>
                                     })
                                     .map_err(|_| CreateStreamError::Io),
                             );
@@ -1597,7 +1616,7 @@ impl Node {
                         // Derive the schema without opening any file. The
                         // factory retains one owned query context, not one per path.
                         let batch_schema = if file_format == "jsonl" {
-                            let names = json_fields?.to_vec();
+                            let names = json_fields?.names().to_vec();
                             BatchSchema {
                                 types: vec![ColumnType::Mixed; names.len()],
                                 names,
@@ -1625,7 +1644,7 @@ impl Node {
                         let variables = variables.clone();
                         let registry = registry.clone();
                         let required_fields = required_fields.to_vec();
-                        let json_fields = json_fields.map(<[String]>::to_vec);
+                        let json_fields = json_fields.cloned();
                         let memory = memory.clone();
                         let stream = crate::execution::batch::LazyConcatBatchStream::new(batch_schema, move || {
                             let Some(path) = paths.next() else {
@@ -1642,7 +1661,7 @@ impl Node {
                                 row_limit,
                                 BatchOptions {
                                     threads,
-                                    json_fields: json_fields.as_deref(),
+                                    json_fields: json_fields.as_ref(),
                                     memory: &memory,
                                 },
                             )
@@ -2021,6 +2040,30 @@ impl Node {
         )
     }
 
+    pub(crate) fn required_json_projection(&self, variables: &Variables) -> Option<JsonProjection> {
+        crate::execution::field_analysis::extract_required_json_fields(self).map(|mut fields| {
+            fields.retain_roots(|name| !variables.contains_key(name));
+            fields
+        })
+    }
+
+    pub(crate) fn get_output_with_memory_limit(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+        max_memory: Option<usize>,
+    ) -> CreateStreamResult<ExecutionStream> {
+        let required_roots = self.required_json_projection(&variables);
+        self.get_execution_stream_with_context(
+            variables,
+            registry,
+            resolve_threads(threads),
+            crate::execution::memory::MemoryTracker::new(max_memory),
+            required_roots.as_ref(),
+        )
+    }
+
     pub(crate) fn get_with_memory_tracker(
         &self,
         variables: Variables,
@@ -2028,18 +2071,13 @@ impl Node {
         threads: usize,
         memory: crate::execution::memory::MemoryTracker,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
-        let required_roots = crate::execution::field_analysis::extract_required_root_names(self).map(|names| {
-            names
-                .into_iter()
-                .filter(|name| !variables.contains_key(name))
-                .collect::<Vec<_>>()
-        });
+        let required_roots = self.required_json_projection(&variables);
         self.get_with_context(
             variables,
             registry,
             resolve_threads(threads),
             memory,
-            required_roots.as_deref(),
+            required_roots.as_ref(),
         )
     }
 
@@ -2049,12 +2087,24 @@ impl Node {
         registry: Arc<FunctionRegistry>,
         threads: usize,
         memory: crate::execution::memory::MemoryTracker,
-        required_roots: Option<&[String]>,
+        required_roots: Option<&JsonProjection>,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
+        self.get_execution_stream_with_context(variables, registry, threads, memory, required_roots)
+            .map(ExecutionStream::into_rows)
+    }
+
+    fn get_execution_stream_with_context(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+        memory: crate::execution::memory::MemoryTracker,
+        required_roots: Option<&JsonProjection>,
+    ) -> CreateStreamResult<ExecutionStream> {
         if let Node::Limit(count, source) = self {
             if source.prefix_requires_row_scan() {
                 let child = source.get_expression_prefix_rows(variables, registry, threads, memory, required_roots)?;
-                return Ok(Box::new(LimitStream::new(*count, child)));
+                return Ok(ExecutionStream::Rows(Box::new(LimitStream::new(*count, child))));
             }
         }
         // Try batch pipeline first for supported node patterns.
@@ -2067,10 +2117,22 @@ impl Node {
                 self.try_get_batch(&variables, &registry, &required, threads, required_roots, &memory)
             {
                 let batch_stream = batch_result?;
-                return Ok(Box::new(BatchToRowAdapter::new(batch_stream)));
+                return Ok(ExecutionStream::Batches(batch_stream));
             }
         }
 
+        self.get_rows_with_context(variables, registry, threads, memory, required_roots)
+            .map(ExecutionStream::Rows)
+    }
+
+    fn get_rows_with_context(
+        &self,
+        variables: Variables,
+        registry: Arc<FunctionRegistry>,
+        threads: usize,
+        memory: crate::execution::memory::MemoryTracker,
+        required_roots: Option<&JsonProjection>,
+    ) -> CreateStreamResult<Box<dyn RecordStream>> {
         match self {
             Node::Filter(source, formula) => {
                 let record_stream =
@@ -2113,8 +2175,11 @@ impl Node {
                 DataSource::Stdin(file_format, _table_name) => {
                     let reader = projected_reader(file_format, required_roots).with_reader(io::stdin())?;
                     let stream = LogFileStream::new(Box::new(reader));
-
-                    Ok(Box::new(stream))
+                    if bindings.is_empty() {
+                        Ok(Box::new(stream))
+                    } else {
+                        Ok(Box::new(ProjectionStream::new(Box::new(stream), bindings.clone())))
+                    }
                 }
             },
             Node::GroupBy(fields, named_aggregates, source) => {
@@ -3502,7 +3567,7 @@ mod tests {
             ),
         ];
         let registry = test_registry();
-        let fields = vec!["g".into(), "x".into(), "keep".into()];
+        let fields = JsonProjection::from_roots(vec!["g".into(), "x".into(), "keep".into()]);
         let memory = crate::execution::memory::MemoryTracker::default();
         assert!(
             Node::try_build_parallel_aggregation(
@@ -3594,7 +3659,7 @@ mod tests {
                 &[],
                 BatchOptions {
                     threads: 4,
-                    json_fields: Some(&[]),
+                    json_fields: Some(&JsonProjection::default()),
                     memory: &crate::execution::memory::MemoryTracker::default()
                 },
             )

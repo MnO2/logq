@@ -23,6 +23,7 @@ pub struct ExpressionProbeConfig {
     pub nullable: bool,
     pub active_percent: u8,
     pub reverse: bool,
+    pub operation: String,
 }
 
 pub type ExpressionProbeReport = serde_json::Value;
@@ -34,6 +35,9 @@ pub fn profile_expressions(config: ExpressionProbeConfig) -> ProbeResult<Express
         || config.active_percent > 100
     {
         return Err("require 1..=2000000 rows, chain length 1 or 16, and active percent 0..=100".into());
+    }
+    if config.operation != "plus-chain" {
+        return profile_float_arithmetic(config);
     }
     let batch = input(&config);
     let schema = BatchSchema {
@@ -90,6 +94,167 @@ pub fn profile_expressions(config: ExpressionProbeConfig) -> ProbeResult<Express
         "outputs": "bound and registered kernels construct Vec<Value> then production typed_column; typed kernel directly builds Float32 storage/bitmaps; all inactive rows materialize MISSING; all-nullish legacy output may use Mixed storage",
         "semantic_scope": "fixed register_all built-in Plus only, not a planner substitution for custom functions; no casts, integer arithmetic, overflow policy, CASE or reassociation; each addition rounds to f32",
         "validation_scope": "every output row checked before and after its timed run; finite and infinite float bits checked exactly, NaNs compared as NaN, NULL/MISSING/selection checked individually; count and f64 SUM additionally checked",
+    }))
+}
+
+/// New operations compare production substitution with the retained scalar
+/// controls. The historical plus-chain probe above keeps its original kernels.
+fn profile_float_arithmetic(config: ExpressionProbeConfig) -> ProbeResult<ExpressionProbeReport> {
+    let operations: &[(&str, bool)] = match config.operation.as_str() {
+        "add-columns" => &[("plus", true)],
+        "multiply-constant" => &[("times", false)],
+        "add-multiply" => &[("plus", true), ("times", false)],
+        _ => return Err("operation must be plus-chain, add-columns, multiply-constant, or add-multiply".into()),
+    };
+    let mut batch = input(&config);
+    let mut null = Bitmap::all_set(config.rows);
+    let mut missing = Bitmap::all_set(config.rows);
+    let right = (0..config.rows)
+        .map(|row| {
+            if config.nullable {
+                if row % 19 == 0 {
+                    missing.unset(row);
+                } else if row % 17 == 0 {
+                    null.unset(row);
+                }
+            }
+            (row % 7) as f32 * 0.125 - 0.5
+        })
+        .collect();
+    batch.columns.push(TypedColumn::Float32 {
+        data: PaddedVec::from_vec(right),
+        null,
+        missing,
+    });
+    batch.names.push("w".into());
+    let registry = crate::functions::register_all()?;
+    let schema = BatchSchema {
+        names: batch.names.clone(),
+        types: vec![ColumnType::Float32; 2],
+    };
+    let mut expression = Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("v".into())]));
+    let mut scalar_steps = Vec::new();
+    for _ in 0..config.chain_length {
+        for &(name, column) in operations {
+            let right = if column {
+                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("w".into())]))
+            } else {
+                Expression::Constant(Value::Float(OrderedFloat(0.5)))
+            };
+            expression = Expression::Function(
+                name.into(),
+                vec![Named::Expression(expression, None), Named::Expression(right, None)],
+            );
+            scalar_steps.push((registry.resolve(name).expect("registered arithmetic fixture"), column));
+        }
+    }
+    let mut bound = BoundExpression::bind(&expression, &schema, &Variables::new(), &registry);
+    let oracle_value = |row| {
+        if !batch.selection.is_active(row, batch.len) {
+            return Value::Missing;
+        }
+        let mut value = BatchToRowAdapter::extract_value(&batch.columns[0], row);
+        for _ in 0..config.chain_length {
+            for &(name, column) in operations {
+                let right = if column {
+                    BatchToRowAdapter::extract_value(&batch.columns[1], row)
+                } else {
+                    Value::Float(OrderedFloat(0.5))
+                };
+                value = match (value, right) {
+                    (Value::Missing, _) | (_, Value::Missing) => Value::Missing,
+                    (Value::Null, _) | (_, Value::Null) => Value::Null,
+                    (Value::Float(left), Value::Float(right)) => {
+                        // Each product of two f32 significands fits in f64;
+                        // round back after each operation, never use mul_add.
+                        let value = if name == "times" {
+                            f64::from(left.0) * f64::from(right.0)
+                        } else {
+                            f64::from(left.0) + f64::from(right.0)
+                        };
+                        Value::Float(OrderedFloat(value as f32))
+                    }
+                    _ => unreachable!("fixed Float32 inputs"),
+                };
+            }
+        }
+        value
+    };
+    let validate = |output: &TypedColumn| -> ProbeResult<()> {
+        for row in 0..batch.len {
+            let actual = BatchToRowAdapter::extract_value(output, row);
+            let expected = oracle_value(row);
+            let equal = match (&expected, &actual) {
+                (Value::Float(left), Value::Float(right)) => {
+                    (left.is_nan() && right.is_nan()) || left.to_bits() == right.to_bits()
+                }
+                _ => actual == expected,
+            };
+            if !equal {
+                return Err(format!("row {row}: expected {expected:?}, got {actual:?}").into());
+            }
+        }
+        Ok(())
+    };
+    let oracle = summarize(&config, (0..batch.len).map(oracle_value));
+    let mut order = vec!["bound_expression", "registered_scalar", "production_typed_f32"];
+    if config.reverse {
+        order.reverse();
+    }
+    let mut kernels = Vec::new();
+    for name in order {
+        let mut run = || -> ProbeResult<TypedColumn> {
+            if name == "production_typed_f32" {
+                return bound
+                    .float_arithmetic_column(black_box(&batch))
+                    .ok_or_else(|| "production typed arithmetic unavailable".into());
+            }
+            let mut values = vec![Value::Missing; batch.len];
+            for (row, output) in values.iter_mut().enumerate() {
+                if !batch.selection.is_active(row, batch.len) {
+                    continue;
+                }
+                *output = if name == "bound_expression" {
+                    bound.evaluate(black_box(&batch), row)?
+                } else {
+                    let mut value = BatchToRowAdapter::extract_value(&batch.columns[0], row);
+                    for (function, column) in &scalar_steps {
+                        let right = if *column {
+                            BatchToRowAdapter::extract_value(&batch.columns[1], row)
+                        } else {
+                            Value::Float(OrderedFloat(0.5))
+                        };
+                        value = function.call(&[value, right])?;
+                    }
+                    value
+                };
+            }
+            Ok(typed_column(values))
+        };
+        let checked = run()?;
+        validate(&checked)?;
+        drop(checked);
+        let start = Instant::now();
+        let output = run()?;
+        black_box(&output);
+        let elapsed_ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        validate(&output)?;
+        let counts_and_sum = summarize(
+            &config,
+            (0..batch.len).map(|row| BatchToRowAdapter::extract_value(&output, row)),
+        );
+        if counts_and_sum != oracle {
+            return Err("count/sum validation mismatch".into());
+        }
+        kernels.push(serde_json::json!({"kernel": name, "elapsed_ns": elapsed_ns, "checked_rows": batch.len, "counts_and_sum": counts_and_sum}));
+    }
+    Ok(serde_json::json!({
+        "version": 2, "config": config, "validation": "passed", "oracle": oracle, "kernels": kernels,
+        "expression": "repeat chain_length times: add-columns v=v+w; multiply-constant v=v*0.5; add-multiply v=(v+w)*0.5",
+        "input": "preparsed Float32 v uses historical special values; w=(row%7)*0.125-0.5; nullable w: row%19 MISSING else row%17 NULL; primary v/selection use historical fixture",
+        "timing_scope": "input, binding, validation, summaries and output disposal excluded; full kernel evaluation and output construction included, with one untimed preflight per kernel",
+        "semantic_scope": "trusted Float32 Plus/Times only; no integer operations, custom function substitution, branches, casts, fused multiply-add or reassociation",
+        "validation_scope": "every row before and after timing against independent f64 operations rounded to f32 after each step; exact finite/infinite bits, NaN class, NULL/MISSING and selection; count and f64 sum summaries",
     }))
 }
 
@@ -286,7 +451,36 @@ mod tests {
             nullable: true,
             active_percent: 100,
             reverse: false,
+            operation: "plus-chain".into(),
         }
+    }
+
+    #[test]
+    fn float_arithmetic_probe_validates_production_kernels_and_controls() {
+        for operation in ["add-columns", "multiply-constant", "add-multiply"] {
+            for chain_length in [1, 16] {
+                for active_percent in [0, 50, 100] {
+                    let report = profile_expressions(ExpressionProbeConfig {
+                        operation: operation.into(),
+                        chain_length,
+                        active_percent,
+                        ..config()
+                    })
+                    .unwrap();
+                    assert_eq!(report["validation"], "passed");
+                    for kernel in report["kernels"].as_array().unwrap() {
+                        assert_eq!(kernel["counts_and_sum"], report["oracle"]);
+                    }
+                }
+            }
+        }
+        assert!(
+            profile_expressions(ExpressionProbeConfig {
+                operation: "unknown".into(),
+                ..config()
+            })
+            .is_err()
+        );
     }
 
     #[test]
