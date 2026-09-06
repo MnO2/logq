@@ -68,7 +68,7 @@ impl GzipAggregateStream {
         Self::from_reader(
             Box::new(move || {
                 let file = File::open(path).map_err(|_| StreamError::Get(CreateStreamError::Io))?;
-                Ok(Box::new(flate2::read::GzDecoder::new(file)))
+                Ok(Box::new(flate2::read::MultiGzDecoder::new(file)))
             }),
             parser_workers,
             fields,
@@ -534,7 +534,7 @@ pub fn profile_json_gzip(
     let memory = MemoryTracker::new(Some(config.max_memory));
     // Header reads/decoder construction happen inside the timed producer.
     Ok(run_profile(
-        Box::new(move || Ok(Box::new(flate2::read::GzDecoder::new(file)))),
+        Box::new(move || Ok(Box::new(flate2::read::MultiGzDecoder::new(file)))),
         config,
         memory,
     )?)
@@ -752,7 +752,10 @@ mod tests {
         bytes[footer] ^= 1;
         assert!(
             matches!(
-                completes_with_released_memory(flate2::read::GzDecoder::new(io::Cursor::new(bytes)), config(4, 1024)),
+                completes_with_released_memory(
+                    flate2::read::MultiGzDecoder::new(io::Cursor::new(bytes)),
+                    config(4, 1024)
+                ),
                 Err(StreamError::Aggregate)
             ),
             "the earlier parser/aggregate failure precedes the late decoder CRC error"
@@ -796,7 +799,7 @@ mod tests {
             let mut bytes = compressed(data.as_bytes());
             let footer = bytes.len() - 8;
             bytes[footer] ^= 1;
-            let expected = sequential_error(flate2::read::GzDecoder::new(io::Cursor::new(bytes.clone())));
+            let expected = sequential_error(flate2::read::MultiGzDecoder::new(io::Cursor::new(bytes.clone())));
             assert_eq!(
                 expected,
                 if rows < crate::execution::batch::BATCH_SIZE {
@@ -806,7 +809,7 @@ mod tests {
                 }
             );
             let actual = completes_with_released_memory(
-                flate2::read::GzDecoder::new(io::Cursor::new(bytes)),
+                flate2::read::MultiGzDecoder::new(io::Cursor::new(bytes)),
                 config(4, 64 * 1024),
             );
             assert_eq!(

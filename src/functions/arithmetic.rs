@@ -11,7 +11,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Int(a), Value::Int(b)) => a
+                .checked_add(*b)
+                .map(Value::Int)
+                .ok_or(ExpressionError::NumericOverflow),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() + b.into_inner()))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(*a as f32 + b.into_inner()))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() + *b as f32))),
@@ -24,7 +27,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+            (Value::Int(a), Value::Int(b)) => a
+                .checked_sub(*b)
+                .map(Value::Int)
+                .ok_or(ExpressionError::NumericOverflow),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() - b.into_inner()))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(*a as f32 - b.into_inner()))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() - *b as f32))),
@@ -37,7 +43,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+            (Value::Int(a), Value::Int(b)) => a
+                .checked_mul(*b)
+                .map(Value::Int)
+                .ok_or(ExpressionError::NumericOverflow),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() * b.into_inner()))),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(*a as f32 * b.into_inner()))),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() * *b as f32))),
@@ -54,7 +63,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 if *b == 0 {
                     Ok(Value::Null)
                 } else {
-                    Ok(Value::Int(a / b))
+                    a.checked_div(*b)
+                        .map(Value::Int)
+                        .ok_or(ExpressionError::NumericOverflow)
                 }
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() / b.into_inner()))),
@@ -72,7 +83,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::Int(v) => Ok(Value::Int(v.abs())),
+            Value::Int(v) => v.checked_abs().map(Value::Int).ok_or(ExpressionError::NumericOverflow),
             Value::Float(v) => Ok(Value::Float(OrderedFloat(v.into_inner().abs()))),
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -306,7 +317,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 if *b == 0 {
                     Ok(Value::Null)
                 } else {
-                    Ok(Value::Int(a % b))
+                    // MIN % -1 is mathematically zero, but the native i32
+                    // remainder instruction overflows along with division.
+                    Ok(Value::Int(a.checked_rem(*b).unwrap_or(0)))
                 }
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() % b.into_inner()))),
@@ -326,7 +339,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 if *b == 0 {
                     Ok(Value::Null)
                 } else {
-                    Ok(Value::Int(a % b))
+                    Ok(Value::Int(a.checked_rem(*b).unwrap_or(0)))
                 }
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(OrderedFloat(a.into_inner() % b.into_inner()))),

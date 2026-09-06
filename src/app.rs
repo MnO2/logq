@@ -287,6 +287,11 @@ fn render_runtime_error(query: &str, error: execution::types::StreamError) -> Ap
             "expression type mismatch",
             Some("check the value and target types"),
         ),
+        Some(ExpressionError::NumericOverflow) => (
+            expression_offset(query),
+            "integer overflow",
+            Some("integer results must fit in the signed 32-bit range"),
+        ),
         Some(ExpressionError::UnknownFunction) => (
             expression_offset(query),
             "unknown function",
@@ -485,7 +490,10 @@ pub fn run_with_memory_limit(
             while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
                 table.add_row(Row::new(record.to_row()));
             }
-            table.printstd();
+            let stdout = std::io::stdout();
+            let mut writer = stdout.lock();
+            table.print(&mut writer)?;
+            writer.flush()?;
         }
         OutputMode::Csv => {
             let mut wtr = Writer::from_writer(std::io::stdout());
@@ -493,6 +501,7 @@ pub fn run_with_memory_limit(
                 let csv_record = record.to_csv_record();
                 wtr.write_record(csv_record)?;
             }
+            wtr.flush()?;
         }
         OutputMode::Json => {
             let stdout = std::io::stdout();
@@ -507,6 +516,7 @@ pub fn run_with_memory_limit(
                 first = false;
             }
             writer.write_all(b"]\n")?;
+            writer.flush()?;
         }
         OutputMode::Ndjson => {
             let stdout = std::io::stdout();
@@ -515,6 +525,7 @@ pub fn run_with_memory_limit(
                 write_json_record(&mut writer, &record)?;
                 writeln!(writer)?;
             }
+            writer.flush()?;
         }
     }
 

@@ -46,7 +46,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::Int(s.len() as i32)),
+            Value::String(s) => i32::try_from(s.chars().count())
+                .map(Value::Int)
+                .map_err(|_| ExpressionError::NumericOverflow),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -57,7 +59,9 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(1),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match &args[0] {
-            Value::String(s) => Ok(Value::Int(s.len() as i32)),
+            Value::String(s) => i32::try_from(s.chars().count())
+                .map(Value::Int)
+                .map_err(|_| ExpressionError::NumericOverflow),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -71,7 +75,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::String(s) => {
                 let start = match &args[1] {
-                    Value::Int(i) => (*i - 1).max(0) as usize, // 1-based to 0-based
+                    Value::Int(i) => i.saturating_sub(1).max(0) as usize, // 1-based to 0-based
                     _ => return Err(ExpressionError::InvalidArguments),
                 };
                 if args.len() == 3 {
@@ -326,13 +330,11 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1], &args[2]) {
             (Value::String(s), Value::String(delim), Value::Int(idx)) => {
-                let parts: Vec<&str> = s.split(delim.as_str()).collect();
-                let index = (*idx - 1) as usize; // 1-based to 0-based
-                if index < parts.len() {
-                    Ok(Value::String(parts[index].into()))
-                } else {
-                    Ok(Value::String("".into()))
+                if *idx <= 0 {
+                    return Ok(Value::String("".into()));
                 }
+                let part = s.split(delim.as_str()).nth((*idx - 1) as usize).unwrap_or("");
+                Ok(Value::String(part.into()))
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -405,24 +407,25 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s1), Value::String(s2)) => {
-                let a: Vec<char> = s1.chars().collect();
-                let b: Vec<char> = s2.chars().collect();
-                let m = a.len();
-                let n = b.len();
-                let mut dp = vec![vec![0usize; n + 1]; m + 1];
-                for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
-                    row[0] = i;
-                }
-                for (j, cell) in dp[0].iter_mut().enumerate().take(n + 1) {
-                    *cell = j;
-                }
-                for i in 1..=m {
-                    for j in 1..=n {
-                        let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-                        dp[i][j] = (dp[i - 1][j] + 1).min(dp[i][j - 1] + 1).min(dp[i - 1][j - 1] + cost);
+                let len1 = s1.chars().count();
+                let len2 = s2.chars().count();
+                let (shorter, longer, width) = if len1 <= len2 { (s1, s2, len1) } else { (s2, s1, len2) };
+                let chars: Vec<char> = shorter.chars().collect();
+                // Each cell only depends on the previous row and its left
+                // neighbor. Retain one row of the shorter input, not a matrix.
+                let mut row: Vec<usize> = (0..=width).collect();
+                for (i, left) in longer.chars().enumerate() {
+                    let mut diagonal = row[0];
+                    row[0] = i + 1;
+                    for (j, right) in chars.iter().enumerate() {
+                        let above = row[j + 1];
+                        row[j + 1] = (above + 1).min(row[j] + 1).min(diagonal + usize::from(left != *right));
+                        diagonal = above;
                     }
                 }
-                Ok(Value::Int(dp[m][n] as i32))
+                i32::try_from(row[width])
+                    .map(Value::Int)
+                    .map_err(|_| ExpressionError::NumericOverflow)
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),

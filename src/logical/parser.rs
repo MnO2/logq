@@ -399,7 +399,7 @@ fn parse_relation(op: &ast::BinaryOperator) -> ParseResult<types::Relation> {
         ast::BinaryOperator::LessEqual => Ok(types::Relation::LessEqual),
         ast::BinaryOperator::LessThan => Ok(types::Relation::LessThan),
         ast::BinaryOperator::MoreThan => Ok(types::Relation::MoreThan),
-        _ => unreachable!(),
+        _ => Err(ParseError::TypeMismatch),
     }
 }
 
@@ -445,7 +445,7 @@ fn parse_expression(ctx: &ParsingContext, select_expr: &ast::SelectExpression) -
 }
 
 fn from_str(value: &str, named: types::Named) -> ParseResult<types::Aggregate> {
-    match value {
+    match value.to_ascii_lowercase().as_str() {
         "avg" => Ok(types::Aggregate::Avg(named)),
         "count" => Ok(types::Aggregate::Count(named)),
         "first" => Ok(types::Aggregate::First(named)),
@@ -483,35 +483,54 @@ fn parse_aggregate(ctx: &ParsingContext, select_expr: &ast::SelectExpression) ->
     match select_expr {
         ast::SelectExpression::Expression(expr, name_opt) => match &**expr {
             ast::Expression::FuncCall(func_name, args, within_group_opt) => {
+                if !is_aggregate_name(func_name) {
+                    return Err(ParseError::NotAggregateFunction);
+                }
+                if args.len() != 1 {
+                    return Err(ParseError::InvalidArguments(format!(
+                        "{func_name} expects 1 argument(s), got {}",
+                        args.len()
+                    )));
+                }
                 let named = *parse_expression(ctx, &args[0])?;
 
                 let aggregate = if let Some(within_group_clause) = within_group_opt {
-                    match named {
-                        types::Named::Expression(types::Expression::Constant(common::Value::Float(f)), _) => {
-                            let o = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
-
-                            if func_name == "percentile_disc" {
-                                types::Aggregate::PercentileDisc(
-                                    f,
-                                    within_group_clause.ordering_term.column_name.clone(),
-                                    o,
-                                )
-                            } else if func_name == "approx_percentile" {
-                                types::Aggregate::ApproxPercentile(
-                                    f,
-                                    within_group_clause.ordering_term.column_name.clone(),
-                                    o,
-                                )
-                            } else {
-                                return Err(ParseError::UnknownFunction(func_name.to_string()));
-                            }
+                    let percentile = match named {
+                        types::Named::Expression(types::Expression::Constant(common::Value::Float(f)), _) => f,
+                        types::Named::Expression(types::Expression::Constant(common::Value::Int(n)), _) => {
+                            ordered_float::OrderedFloat(n as f32)
                         }
                         _ => {
-                            // The percentile argument must be a constant float.
-                            return Err(ParseError::InvalidArguments("percentile_disc".to_string()));
+                            return Err(ParseError::InvalidArguments(format!(
+                                "{func_name} requires a constant percentile between 0 and 1"
+                            )));
+                        }
+                    };
+                    if !percentile.is_finite() || !(0.0..=1.0).contains(&percentile.0) {
+                        return Err(ParseError::InvalidArguments(format!(
+                            "{func_name} requires a constant percentile between 0 and 1"
+                        )));
+                    }
+                    let ordering = parse_ordering(within_group_clause.ordering_term.ordering.clone())?;
+                    let column = within_group_clause.ordering_term.column_name.clone();
+                    validate_fixed_schema_column(ctx, &column)?;
+                    match func_name.to_ascii_lowercase().as_str() {
+                        "percentile_disc" => types::Aggregate::PercentileDisc(percentile, column, ordering),
+                        "approx_percentile" => types::Aggregate::ApproxPercentile(percentile, column, ordering),
+                        _ => {
+                            return Err(ParseError::InvalidArguments(format!(
+                                "{func_name} does not accept WITHIN GROUP"
+                            )));
                         }
                     }
                 } else {
+                    if func_name.eq_ignore_ascii_case("percentile_disc")
+                        || func_name.eq_ignore_ascii_case("approx_percentile")
+                    {
+                        return Err(ParseError::InvalidArguments(format!(
+                            "{func_name} requires WITHIN GROUP (ORDER BY column ASC|DESC)"
+                        )));
+                    }
                     from_str(func_name, named)?
                 };
                 let named_aggregate = types::NamedAggregate::new(aggregate, name_opt.clone());
@@ -1043,7 +1062,12 @@ pub(crate) fn parse_query(
         ast::SelectClause::SelectExpressions(select_exprs) => {
             if !select_exprs.is_empty() {
                 for (offset, select_expr) in select_exprs.iter().enumerate() {
-                    if let Ok(mut named_aggregate) = parse_aggregate(&parsing_context, select_expr) {
+                    let aggregate = match parse_aggregate(&parsing_context, select_expr) {
+                        Ok(aggregate) => Some(aggregate),
+                        Err(ParseError::NotAggregateFunction | ParseError::TypeMismatch) => None,
+                        Err(error) => return Err(error),
+                    };
+                    if let Some(mut named_aggregate) = aggregate {
                         match &named_aggregate.aggregate {
                             types::Aggregate::GroupAs(_) => {
                                 unreachable!();

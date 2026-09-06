@@ -1,7 +1,6 @@
 use crate::common::types::Value;
 use crate::execution::types::ExpressionError;
 use crate::functions::registry::{Arity, FunctionDef, FunctionRegistry, NullHandling, RegistryError};
-use ordered_float::OrderedFloat;
 use std::collections::HashSet;
 
 /// Convert a Value to a string representation for sorting and joining purposes.
@@ -18,31 +17,6 @@ fn value_to_sort_string(v: &Value) -> String {
         Value::Host(h) => h.to_string(),
         Value::Object(_) => "object".to_string(),
         Value::Array(_) => "array".to_string(),
-    }
-}
-
-/// Compare two Values for sorting. Returns an Ordering.
-/// Int and Float are compared numerically. Strings lexicographically.
-/// Mixed types are compared by converting to string.
-fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Int(x), Value::Int(y)) => x.cmp(y),
-        (Value::Float(x), Value::Float(y)) => x.cmp(y),
-        (Value::Int(x), Value::Float(y)) => {
-            let xf = OrderedFloat(*x as f32);
-            xf.cmp(y)
-        }
-        (Value::Float(x), Value::Int(y)) => {
-            let yf = OrderedFloat(*y as f32);
-            x.cmp(&yf)
-        }
-        (Value::String(x), Value::String(y)) => x.cmp(y),
-        (Value::Boolean(x), Value::Boolean(y)) => x.cmp(y),
-        _ => {
-            let sa = value_to_sort_string(a);
-            let sb = value_to_sort_string(b);
-            sa.cmp(&sb)
-        }
     }
 }
 
@@ -64,7 +38,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         func: Box::new(|args| match &args[0] {
             Value::Array(arr) => {
                 let mut sorted = arr.clone();
-                sorted.sort_by(compare_values);
+                // Share ORDER BY's total ordering. Comparing mixed types via
+                // strings while ordering numeric pairs numerically is not
+                // transitive, and rounding integers through f32 loses order.
+                sorted.sort_by(crate::execution::prefix_sort::compare_values);
                 Ok(Value::Array(sorted))
             }
             _ => Err(ExpressionError::InvalidArguments),

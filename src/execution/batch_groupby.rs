@@ -1157,8 +1157,8 @@ mod tests {
                 Value::Int(2),
                 Value::Float(OrderedFloat(3.0)),
                 Value::Float(OrderedFloat(1.5)),
-                Value::Null,
-                Value::Null
+                Value::Int(1),
+                Value::Int(2)
             ]
         );
     }

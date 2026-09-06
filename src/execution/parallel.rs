@@ -540,13 +540,27 @@ impl ParallelBatchStream {
     /// whole-file line index or queue of all tasks is retained. A line crossing
     /// several grid cells belongs to its first cell; later cells are empty.
     fn aligned_range(data: &[u8], start: usize, end: usize) -> Range<usize> {
-        let boundary = |offset: usize| {
-            if offset == 0 || offset >= data.len() {
-                return offset.min(data.len());
-            }
-            memchr::memchr(b'\n', &data[offset - 1..]).map_or(data.len(), |pos| offset + pos)
+        let start = start.min(data.len());
+        let end = end.min(data.len());
+        if start >= end {
+            return end..end;
+        }
+        // Only a line beginning inside this cell belongs to this task. Search
+        // locally first: otherwise each empty cell inside one very long line
+        // rescans its entire remaining suffix, making framing quadratic.
+        let start = if start == 0 {
+            0
+        } else if let Some(position) = memchr::memchr(b'\n', &data[start - 1..end - 1]) {
+            start + position
+        } else {
+            return end..end;
         };
-        boundary(start)..boundary(end)
+        let end = if end == data.len() {
+            end
+        } else {
+            memchr::memchr(b'\n', &data[end - 1..]).map_or(data.len(), |position| end + position)
+        };
+        start..end
     }
 
     fn from_mmap<F>(
@@ -1616,6 +1630,27 @@ mod streaming_tests {
                 .flat_map(|range| data[range].iter().copied())
                 .collect();
             assert_eq!(actual, data);
+        }
+    }
+
+    #[test]
+    fn lazy_task_ranges_preserve_every_small_newline_layout() {
+        for len in 1usize..=10 {
+            for layout in 0..1usize << len {
+                let data: Vec<_> = (0..len)
+                    .map(|index| if layout & (1 << index) == 0 { b'x' } else { b'\n' })
+                    .collect();
+                for task_bytes in 1..=len + 1 {
+                    let actual: Vec<_> = (0..len.div_ceil(task_bytes))
+                        .flat_map(|task| {
+                            let range =
+                                ParallelBatchStream::aligned_range(&data, task * task_bytes, (task + 1) * task_bytes);
+                            data[range].iter().copied()
+                        })
+                        .collect();
+                    assert_eq!(actual, data, "layout={layout}, task_bytes={task_bytes}");
+                }
+            }
         }
     }
 

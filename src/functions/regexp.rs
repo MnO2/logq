@@ -13,15 +13,20 @@ thread_local! {
     );
 }
 
-fn get_or_compile_regex(pattern: &str) -> Result<Regex, ExpressionError> {
+fn with_regex<T>(
+    pattern: &str,
+    evaluate: impl FnOnce(&Regex) -> Result<T, ExpressionError>,
+) -> Result<T, ExpressionError> {
     REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(re) = cache.get(pattern) {
-            return Ok(re.clone());
+            return evaluate(re);
         }
         let re = Regex::new(pattern).map_err(|_| ExpressionError::InvalidArguments)?;
-        cache.put(pattern.to_string(), re.clone());
-        Ok(re)
+        cache.put(pattern.to_string(), re);
+        // Matching on the cached instance also retains its internal search
+        // workspace. Regex::clone() starts with fresh workspace each call.
+        evaluate(cache.get(pattern).expect("just inserted compiled regex"))
     })
 }
 
@@ -32,10 +37,7 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(pattern)) => {
-                let re = get_or_compile_regex(pattern)?;
-                Ok(Value::Boolean(re.is_match(s)))
-            }
+            (Value::String(s), Value::String(pattern)) => with_regex(pattern, |re| Ok(Value::Boolean(re.is_match(s)))),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -47,7 +49,6 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
             (Value::String(s), Value::String(pattern)) => {
-                let re = get_or_compile_regex(pattern)?;
                 let group_index = if args.len() == 3 {
                     match &args[2] {
                         Value::Int(i) => *i as usize,
@@ -56,13 +57,13 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
                 } else {
                     0
                 };
-                match re.captures(s) {
+                with_regex(pattern, |re| match re.captures(s) {
                     Some(caps) => match caps.get(group_index) {
                         Some(m) => Ok(Value::String(m.as_str().into())),
                         None => Ok(Value::Null),
                     },
                     None => Ok(Value::Null),
-                }
+                })
             }
             _ => Err(ExpressionError::InvalidArguments),
         }),
@@ -74,11 +75,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(pattern)) => {
-                let re = get_or_compile_regex(pattern)?;
+            (Value::String(s), Value::String(pattern)) => with_regex(pattern, |re| {
                 let matches: Vec<Value> = re.find_iter(s).map(|m| Value::String(m.as_str().into())).collect();
                 Ok(Value::Array(matches))
-            }
+            }),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -89,12 +89,11 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(3),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1], &args[2]) {
-            (Value::String(s), Value::String(pattern), Value::String(replacement)) => {
-                let re = get_or_compile_regex(pattern)?;
+            (Value::String(s), Value::String(pattern), Value::String(replacement)) => with_regex(pattern, |re| {
                 Ok(Value::String(
                     re.replace_all(s, replacement.as_str()).into_owned().into(),
                 ))
-            }
+            }),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -105,11 +104,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(pattern)) => {
-                let re = get_or_compile_regex(pattern)?;
+            (Value::String(s), Value::String(pattern)) => with_regex(pattern, |re| {
                 let parts: Vec<Value> = re.split(s).map(|p| Value::String(p.into())).collect();
                 Ok(Value::Array(parts))
-            }
+            }),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -120,10 +118,11 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::String(s), Value::String(pattern)) => {
-                let re = get_or_compile_regex(pattern)?;
-                Ok(Value::Int(re.find_iter(s).count() as i32))
-            }
+            (Value::String(s), Value::String(pattern)) => with_regex(pattern, |re| {
+                i32::try_from(re.find_iter(s).count())
+                    .map(Value::Int)
+                    .map_err(|_| ExpressionError::NumericOverflow)
+            }),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;

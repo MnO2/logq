@@ -5,6 +5,7 @@ use logq::execution;
 use clap::{CommandFactory, Parser, Subcommand};
 use prettytable::{Cell, Row, Table};
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -71,6 +72,14 @@ fn print_help(command: Option<&str>) {
     println!();
 }
 
+fn print_schema_table(table: &Table) {
+    let mut stdout = std::io::stdout().lock();
+    if let Err(error) = table.print(&mut stdout).and_then(|_| stdout.flush()) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
 fn parse_table_specs<'a, I>(
     values: I,
     format_file: Option<&Path>,
@@ -88,7 +97,7 @@ where
         let (table_name, file_format) = table_and_format
             .split_once(':')
             .ok_or(AppError::InvalidTableSpecString)?;
-        if table_name.is_empty() || !table_name.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if table_name.is_empty() || !table_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(AppError::InvalidTableSpecString);
         }
         if !["elb", "alb", "squid", "s3", "jsonl", "regex", "clf", "combined"].contains(&file_format) {
@@ -244,7 +253,7 @@ fn main() {
                             Cell::new(&datatype.to_string()),
                         ]));
                     }
-                    table.printstd();
+                    print_schema_table(&table);
                 } else if type_str == "alb" {
                     let schema = execution::datasource::ApplicationLoadBalancerLogField::schema();
                     let mut table = Table::new();
@@ -254,7 +263,7 @@ fn main() {
                             Cell::new(&datatype.to_string()),
                         ]));
                     }
-                    table.printstd();
+                    print_schema_table(&table);
                 } else if type_str == "s3" {
                     let schema = execution::datasource::S3Field::schema();
                     let mut table = Table::new();
@@ -264,7 +273,7 @@ fn main() {
                             Cell::new(&datatype.to_string()),
                         ]));
                     }
-                    table.printstd();
+                    print_schema_table(&table);
                 } else if type_str == "squid" {
                     let schema = execution::datasource::SquidLogField::schema();
                     let mut table = Table::new();
@@ -274,9 +283,10 @@ fn main() {
                             Cell::new(&datatype.to_string()),
                         ]));
                     }
-                    table.printstd();
+                    print_schema_table(&table);
                 } else {
                     eprintln!("Unknown log format");
+                    std::process::exit(1);
                 }
             } else {
                 println!("The supported log format");

@@ -6,7 +6,7 @@ use nom::{
     AsChar, IResult, InputTakeAtPosition,
     branch::alt,
     bytes::complete::{escaped, tag, tag_no_case},
-    character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, space0, space1},
+    character::complete::{char, digit1, multispace0, multispace1, none_of, one_of, satisfy, space0, space1},
     combinator::{cut, map, map_res, not, opt, recognize},
     error::{Error, ErrorKind, context},
     multi::{many0, many1, separated_list0},
@@ -161,19 +161,31 @@ where
 }
 
 fn boolean(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
-    alt((
-        map(tag_no_case("true"), |_| ast::Value::Boolean(true)),
-        map(tag_no_case("false"), |_| ast::Value::Boolean(false)),
-    ))(i)
+    terminated(
+        alt((
+            map(tag_no_case("true"), |_| ast::Value::Boolean(true)),
+            map(tag_no_case("false"), |_| ast::Value::Boolean(false)),
+        )),
+        literal_boundary,
+    )(i)
+}
+
+fn literal_boundary(i: &str) -> IResult<&str, (), nom::error::Error<&str>> {
+    not(satisfy(|c| c.is_alphanumeric() || c == '_'))(i)
 }
 
 fn float(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
-    map(complete::float, |f| ast::Value::Float(OrderedFloat::from(f)))(i)
+    map(terminated(complete::float, literal_boundary), |f| {
+        ast::Value::Float(OrderedFloat::from(f))
+    })(i)
 }
 
 fn integral(i: &str) -> IResult<&str, ast::Value, nom::error::Error<&str>> {
     map_res(
-        terminated(recognize(pair(opt(tag("-")), digit1)), not(char('.'))),
+        terminated(
+            recognize(pair(opt(tag("-")), digit1)),
+            pair(not(char('.')), literal_boundary),
+        ),
         |integer: &str| integer.parse::<i32>().map(ast::Value::Integral),
     )(i)
 }
@@ -691,7 +703,10 @@ fn cast_expression(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<
 
 fn parse_expression_atom(i: &str) -> IResult<&str, ast::Expression, nom::error::Error<&str>> {
     alt((
-        map(case_when_expression, ast::Expression::CaseWhenExpression),
+        preceded(
+            multispace0,
+            map(case_when_expression, ast::Expression::CaseWhenExpression),
+        ),
         cast_expression,
         expression_term_opt_not,
     ))(i)
@@ -869,7 +884,7 @@ fn parse_expression_at_precedence<'a>(
     let (i1, expr) = parse_postfix_like(i1, expr)?;
     let (i1, expr) = parse_postfix_in(i1, expr)?;
     let (mut i1, mut expr) = parse_postfix_between(i1, expr)?;
-    while let Ok((i2, op)) = parse_expression_op(i1) {
+    while let Ok((i2, op)) = preceded(multispace0, parse_expression_op)(i1) {
         let (op_precedence, op_left_associative) = match precedence_table.get(op) {
             Some(&v) => v,
             None => {

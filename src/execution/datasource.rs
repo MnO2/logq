@@ -5,7 +5,7 @@ use crate::common::types::Value;
 use ordered_float::OrderedFloat;
 use url;
 
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 #[cfg(test)]
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
@@ -794,7 +794,7 @@ pub(crate) fn open_path(path: &Path) -> ReaderResult<Box<dyn Read>> {
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"));
     if extension_hint || (bytes_read == magic.len() && magic == [0x1f, 0x8b]) {
-        Ok(Box::new(GzDecoder::new(file)))
+        Ok(Box::new(MultiGzDecoder::new(file)))
     } else {
         Ok(Box::new(file))
     }

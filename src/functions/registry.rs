@@ -18,6 +18,16 @@ pub enum Arity {
     Variadic(usize),
 }
 
+impl Arity {
+    fn accepts(&self, count: usize) -> bool {
+        match self {
+            Self::Exact(n) => count == *n,
+            Self::Range(min, max) => count >= *min && count <= *max,
+            Self::Variadic(min) => count >= *min,
+        }
+    }
+}
+
 pub struct FunctionDef {
     pub name: String,
     pub arity: Arity,
@@ -155,13 +165,7 @@ impl FunctionRegistry {
             .ok_or_else(|| RegistryError::UnknownFunction(name.to_string()))?;
         let def = &def.definition;
 
-        let valid = match &def.arity {
-            Arity::Exact(n) => arg_count == *n,
-            Arity::Range(min, max) => arg_count >= *min && arg_count <= *max,
-            Arity::Variadic(min) => arg_count >= *min,
-        };
-
-        if !valid {
+        if !def.arity.accepts(arg_count) {
             let expected = match &def.arity {
                 Arity::Exact(n) => n.to_string(),
                 Arity::Range(min, max) => format!("{}-{}", min, max),
@@ -178,10 +182,11 @@ impl FunctionRegistry {
     }
 
     pub fn call(&self, name: &str, args: &[Value]) -> ExpressionResult<Value> {
-        self.lookup(name)
-            .ok_or(ExpressionError::UnknownFunction)?
-            .definition
-            .call(args)
+        let definition = &self.lookup(name).ok_or(ExpressionError::UnknownFunction)?.definition;
+        if !definition.arity.accepts(args.len()) {
+            return Err(ExpressionError::InvalidArguments);
+        }
+        definition.call(args)
     }
 
     pub(crate) fn resolve(&self, name: &str) -> Option<ResolvedFunction> {

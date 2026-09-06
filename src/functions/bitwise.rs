@@ -64,7 +64,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a << b)),
+            (Value::Int(a), Value::Int(b)) => a
+                .checked_shl(*b as u32)
+                .map(Value::Int)
+                .ok_or(ExpressionError::InvalidArguments),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;
@@ -75,7 +78,10 @@ pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,
         func: Box::new(|args| match (&args[0], &args[1]) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a >> b)),
+            (Value::Int(a), Value::Int(b)) => a
+                .checked_shr(*b as u32)
+                .map(Value::Int)
+                .ok_or(ExpressionError::InvalidArguments),
             _ => Err(ExpressionError::InvalidArguments),
         }),
     })?;

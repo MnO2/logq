@@ -1,5 +1,13 @@
 # CHANGELOG — PartiQL Implementation Progress
 
+## Unreleased — correctness, performance, and documentation audit (2026-09-06)
+
+- Read every member of concatenated gzip files, including rows split across members, and report corruption or truncation in later members. Keep JSON prefix LIMIT demand-driven for simple projections, filters, and DISTINCT.
+- Preserve literal-prefixed field names and scientific notation; allow spaced operators after CAST, CASE, and postfix predicates. Validate aggregate arity and percentile bounds during planning, accept case-insensitive aggregate names, and prevent zero-argument scalar calls or non-boolean arithmetic predicates from panicking.
+- Correct Unicode character lengths, extreme substring/split indexes, integer overflow and invalid bit shifts. Validate arity on public function-registry calls and give array_sort the same total ordering as ORDER BY. MIN/MAX and percentiles ignore NULL/MISSING; mixed numeric extrema, discrete percentile ranks/endpoints, and descending approximate percentiles now return correct results.
+- Propagate final output-write failures for every query output format and schema tables, reject unknown schema formats with a failing exit status, and accept underscores in table names.
+- Bound parallel newline searches for oversized log rows, reduce Levenshtein workspace to the shorter string, stop split_part after the requested segment, and reuse cached regex matching workspace. Add correctness and allocation regressions for these paths.
+
 ## Unreleased — next performance milestones (2026-09-05)
 
 - Borrow nested batch values when resolving paths, retain movable columns in mixed projections, and evaluate supported complex predicates without copying unrelated columns. Preserve aliases, active masks, lazy errors and demand-driven LIMIT; budgeted mixed projections retain their existing materialization policy.

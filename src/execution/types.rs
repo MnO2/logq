@@ -97,7 +97,9 @@ impl From<ReaderError> for StreamError {
 impl From<AggregateError> for StreamError {
     fn from(error: AggregateError) -> StreamError {
         match error {
-            AggregateError::CardinalityOverflow => StreamError::General(error.to_string()),
+            AggregateError::CardinalityOverflow | AggregateError::InvalidPercentile => {
+                StreamError::General(error.to_string())
+            }
             _ => StreamError::Aggregate,
         }
     }
@@ -111,6 +113,8 @@ pub enum ExpressionError {
     KeyNotFound,
     #[error("Invalid Arguments")]
     InvalidArguments,
+    #[error("Numeric result exceeds the 32-bit integer range")]
+    NumericOverflow,
     #[error("Unknown Function")]
     UnknownFunction,
     #[error("Invalid Star")]
@@ -831,7 +835,7 @@ impl Node {
             }
             Node::Filter(source, _) | Node::Distinct(source) => source.batch_support(projected_json, variables),
             Node::Limit(_, source) => {
-                if source.prefix_requires_row_expressions() {
+                if source.prefix_requires_row_scan() {
                     return Err(BatchFallback {
                         node: "Limit",
                         reason: "prefix LIMIT keeps expression evaluation and JSON parsing demand-driven".into(),
@@ -941,20 +945,11 @@ impl Node {
             .is_some_and(|(format, _)| format == "jsonl")
     }
 
-    fn prefix_requires_row_expressions(&self) -> bool {
+    fn prefix_requires_row_scan(&self) -> bool {
         match self {
-            Node::Map(named, source) => {
-                let complex = named.iter().any(|named| {
-                    !matches!(named,
-                        Named::Expression(Expression::Variable(path), _)
-                            if matches!(path.path_segments.as_slice(), [PathSegment::AttrName(_)])
-                    )
-                });
-                (complex && BatchExpressionOperator::supports(named) && source.has_batch_expression_source())
-                    || source.prefix_requires_row_expressions()
-            }
-            Node::Filter(source, _) | Node::Distinct(source) | Node::Limit(_, source) => {
-                source.prefix_requires_row_expressions()
+            Node::DataSource(DataSource::File(_, format, _) | DataSource::Files(_, format, _), _) => format == "jsonl",
+            Node::Map(_, source) | Node::Filter(source, _) | Node::Distinct(source) | Node::Limit(_, source) => {
+                source.prefix_requires_row_scan()
             }
             // These operators must consume all input before LIMIT can emit.
             Node::OrderBy(..) | Node::GroupBy(..) => false,
@@ -962,8 +957,8 @@ impl Node {
         }
     }
 
-    /// A newly supported expression under a prefix LIMIT must not read or
-    /// evaluate rows after the requested result. Row Map/Filter/Distinct stages
+    /// A JSON prefix LIMIT must not parse or evaluate rows after the requested
+    /// result, including plain column projections. Row Map/Filter/Distinct stages
     /// preserve that demand all the way to the reader, not merely an outer mask
     /// applied after a JSON batch has already been parsed.
     fn get_expression_prefix_rows(
@@ -2057,7 +2052,7 @@ impl Node {
         required_roots: Option<&[String]>,
     ) -> CreateStreamResult<Box<dyn RecordStream>> {
         if let Node::Limit(count, source) = self {
-            if source.prefix_requires_row_expressions() {
+            if source.prefix_requires_row_scan() {
                 let child = source.get_expression_prefix_rows(variables, registry, threads, memory, required_roots)?;
                 return Ok(Box::new(LimitStream::new(*count, child)));
             }
@@ -2324,6 +2319,21 @@ pub enum AggregateError {
     InvalidType,
     #[error("aggregate cardinality exceeds the supported Int32 range (0..=2147483647)")]
     CardinalityOverflow,
+    #[error("percentile must be between 0 and 1")]
+    InvalidPercentile,
+}
+
+fn validate_percentile(percentile: f32) -> AggregateResult<()> {
+    if !(0.0..=1.0).contains(&percentile) {
+        return Err(AggregateError::InvalidPercentile);
+    }
+    Ok(())
+}
+
+fn discrete_percentile_index(len: usize, percentile: f32) -> usize {
+    // Nearest rank is one-based; p=0 selects the first input as well.
+    let rank = ((len as f32) * percentile).ceil() as usize;
+    rank.saturating_sub(1).min(len - 1)
 }
 
 pub(crate) fn cardinality_value(count: impl TryInto<i32>) -> AggregateResult<Value> {
@@ -3014,11 +3024,18 @@ impl AccumulatorState {
     ///
     /// Null/Missing policy:
     /// - Value::Missing: always skipped (no-op) for all variants
-    /// - Value::Null: skipped for Count, Sum, Avg, and ApproxCountDistinct;
-    ///   accumulated normally for Min/Max/First/Last/GroupAs
+    /// - Value::Null: skipped except for First/Last/GroupAs, which retain it
     pub(crate) fn accumulate(&mut self, val: &Value) -> AggregateResult<()> {
         // Universal Missing skip
         if matches!(val, Value::Missing) {
+            return Ok(());
+        }
+        if matches!(val, Value::Null)
+            && matches!(
+                self,
+                Self::Min(_) | Self::Max(_) | Self::PercentileDisc { .. } | Self::ApproxPercentile { .. }
+            )
+        {
             return Ok(());
         }
         match self {
@@ -3093,6 +3110,9 @@ impl AccumulatorState {
                 values.push(val.clone());
             }
             AccumulatorState::ApproxPercentile { digest, buffer, .. } => {
+                if !matches!(val, Value::Int(_) | Value::Float(_)) {
+                    return Err(AggregateError::InvalidType);
+                }
                 buffer.push(val.clone());
                 if buffer.len() >= 10000 {
                     let mut fvec = Vec::new();
@@ -3152,20 +3172,21 @@ impl AccumulatorState {
                 percentile,
                 ordering,
             } => {
+                validate_percentile(percentile.into_inner())?;
                 if values.is_empty() {
                     return Ok(Value::Null);
                 }
                 values.sort_by(|a, b| value_cmp(a, b, ordering));
-                let f32_pct: f32 = percentile.into_inner();
-                let idx = ((values.len() as f32) * f32_pct) as usize;
+                let idx = discrete_percentile_index(values.len(), percentile.into_inner());
                 Ok(values[idx].clone())
             }
             AccumulatorState::ApproxPercentile {
                 digest,
                 buffer,
                 percentile,
-                ..
+                ordering,
             } => {
+                validate_percentile(percentile.into_inner())?;
                 if buffer.is_empty() && digest.count() <= f64::EPSILON {
                     return Ok(Value::Null);
                 }
@@ -3182,7 +3203,10 @@ impl AccumulatorState {
                     *digest = digest.merge_unsorted(fvec);
                     buffer.clear();
                 }
-                let f64_pct = f64::from(percentile.into_inner());
+                let mut f64_pct = f64::from(percentile.into_inner());
+                if *ordering == Ordering::Desc {
+                    f64_pct = 1.0 - f64_pct;
+                }
                 let result = digest.estimate_quantile(f64_pct);
                 Ok(Value::Float(OrderedFloat(result as f32)))
             }
@@ -3406,6 +3430,8 @@ pub(crate) fn value_less_than(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Int(i1), Value::Int(i2)) => i1 < i2,
         (Value::Float(f1), Value::Float(f2)) => f1 < f2,
+        (Value::Int(i), Value::Float(f)) => OrderedFloat(*i as f64) < OrderedFloat(f.into_inner() as f64),
+        (Value::Float(f), Value::Int(i)) => OrderedFloat(f.into_inner() as f64) < OrderedFloat(*i as f64),
         (Value::String(s1), Value::String(s2)) => s1 < s2,
         (Value::DateTime(d1), Value::DateTime(d2)) => d1 < d2,
         (Value::Boolean(b1), Value::Boolean(b2)) => !b1 & b2,

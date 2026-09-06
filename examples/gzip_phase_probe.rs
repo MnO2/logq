@@ -1,12 +1,12 @@
 //! Decode-only and strict JSON scan controls. Compile with exactly one flate2 backend.
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use logq::bench_internals::json_batch_scanner;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::time::Instant;
 
 fn decode(reader: impl Read) -> std::io::Result<u64> {
-    std::io::copy(&mut GzDecoder::new(reader), &mut std::io::sink())
+    std::io::copy(&mut MultiGzDecoder::new(reader), &mut std::io::sink())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let reader: Box<dyn Read> = match args[1].as_str() {
             "plain" => Box::new(file),
-            "gzip" => Box::new(GzDecoder::new(file)),
+            "gzip" => Box::new(MultiGzDecoder::new(file)),
             _ => return Err("unknown mode".into()),
         };
         let fields = if args[2] == "-" {
