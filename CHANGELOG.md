@@ -7,6 +7,7 @@
 - Correct Unicode character lengths, extreme substring/split indexes, integer overflow and invalid bit shifts. Validate arity on public function-registry calls and give array_sort the same total ordering as ORDER BY. MIN/MAX and percentiles ignore NULL/MISSING; mixed numeric extrema, discrete percentile ranks/endpoints, and descending approximate percentiles now return correct results.
 - Propagate final output-write failures for every query output format and schema tables, reject unknown schema formats with a failing exit status, and accept underscores in table names.
 - Bound parallel newline searches for oversized log rows, reduce Levenshtein workspace to the shorter string, stop split_part after the requested segment, and reuse cached regex matching workspace. Add correctness and allocation regressions for these paths.
+- Protect benchmark result directories from accidental reuse so failed reruns cannot mix new samples with an earlier report.
 
 ## Unreleased — next performance milestones (2026-09-05)
 

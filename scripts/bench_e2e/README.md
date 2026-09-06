@@ -64,6 +64,9 @@ scripts/bench_e2e/run.sh --scale 100mb
 Add `--gzip` to compare compressed JSONL. Each query gets a hyperfine JSON file,
 and a separate `/usr/bin/time` run records peak RSS. The final Markdown fragment
 is written to `results/table.md`, or to the directory selected with
+`--results-dir`. A measured run requires a new or empty results directory; a
+nonempty directory is rejected before building or running tools so a failed
+rerun cannot mix new samples with an earlier report. Give repeat runs a new
 `--results-dir`. `--dry-run` prints commands only and never formats old results.
 
 Before timing, the runner reads the corpus once with Python and checks every

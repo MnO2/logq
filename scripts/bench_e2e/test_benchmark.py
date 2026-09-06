@@ -111,6 +111,24 @@ class BenchmarkTest(unittest.TestCase):
             self.assertIsInstance(json.loads(result.stdout), dict)
             self.assertFalse(results.exists())
 
+    def test_existing_results_are_preserved_before_a_new_run_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "jsonl-test.jsonl").write_text(
+                '{"status_code":200,"request_id":"r","latency":1,"user_agent":"curl"}\n')
+            results = root / "results"
+            results.mkdir()
+            previous = results / "metadata.json"
+            previous.write_text('{"dataset": "previous-run"}\n')
+            with patch.object(sys, "argv", ["benchmark.py", "--scale", "test", "--data-dir", directory,
+                                            "--results-dir", str(results)]), \
+                 patch.dict(benchmark.os.environ, {"LOGQ_BIN": ""}), \
+                 patch.object(benchmark.subprocess, "run") as run:
+                with self.assertRaisesRegex(SystemExit, "results directory must be empty"):
+                    benchmark.main()
+            run.assert_not_called()
+            self.assertEqual(previous.read_text(), '{"dataset": "previous-run"}\n')
+
     def test_selected_tools_omit_queries_with_no_supported_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "jsonl-test.jsonl").write_text('{}\n')

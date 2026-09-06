@@ -253,6 +253,12 @@ def main() -> None:
         raise SystemExit("--runs must be positive and --warmup cannot be negative")
     if args.threads is not None and args.threads <= 0:
         raise SystemExit("--threads must be positive; omit it to measure tool defaults")
+    if not args.dry_run and args.results_dir.exists():
+        if not args.results_dir.is_dir() or any(args.results_dir.iterdir()):
+            raise SystemExit(
+                f"results directory must be empty: {args.results_dir}; "
+                "choose a new --results-dir to preserve previous measurements"
+            )
 
     build_command = None
     if (not args.tools or "logq" in args.tools) and not os.environ.get("LOGQ_BIN") and not args.dry_run:
