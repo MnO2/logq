@@ -9,7 +9,9 @@
 - Pipeline eligible single-gzip full aggregations through bounded decoded chunks and worker-local filters, expressions and aggregate states. Count the decoder within `--threads`; preserve one-thread and memory-budget fallbacks, decoded-prefix errors, cancellation and worker teardown.
 - Bind batch calls to their actual function definitions and specialize trusted Float32 Plus chains into typed output, preserving per-step rounding, custom functions, masks, duplicate aliases and lazy errors. Serialize borrowed JSON/NDJSON records without rebuilding object trees, retaining exact public float formatting.
 - Add diagnostic aggregation, expression, reader/task and gzip phase probes. Keep plain aggregate task scheduling unchanged after skew controls; do not enable broader kernels from isolated timings alone.
+- Add opt-in Parquet/persisted ClickHouse reuse experiments with full representation checks, immutable prepared identities, preparation/storage costs and actual 1/10/100-query fresh-process and session controls. General transparent caching remains deferred outside the validated input contract.
 - Resolve the existing lru dependency to 0.18.2 for RUSTSEC-2026-0253 and pass the advisory gates.
+- Record final paired CLI controls, phase measurements, adoption decisions and limitations in [the next-milestones report](docs/performance-next-milestones-2026-09-05.md).
 
 ## Unreleased — performance expansion (2026-09-05)
 

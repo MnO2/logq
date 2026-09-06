@@ -295,3 +295,149 @@ validation. Reproduce with a new results directory before drawing final claims.
 ```sh
 python3 -m unittest discover -s scripts/bench_e2e -p 'test_probe_json.py'
 ```
+
+## Operator and file-pipeline controls
+
+`next_milestones.py` generates deterministic UTF-8 payloads at two widths,
+direct/nested and integer/float expression cases, selective projections, and
+identical rows in plain/gzip shards. It compares saved logq CLI binaries:
+
+```sh
+python3 scripts/bench_e2e/next_milestones.py \
+  --data-dir scripts/bench_e2e/data/next-v1 --generate-only
+python3 scripts/bench_e2e/next_milestones.py \
+  --data-dir scripts/bench_e2e/data/next-v1 \
+  --binary baseline=/path/to/saved-logq --binary candidate=target/release/logq \
+  --threads 1 0 --runs 5 \
+  --cases nested_w2048 hybrid_w2048 predicate_1_w2048 arithmetic16_w32 float16_w32 shards_8 gzip_8 \
+  --results-dir scripts/bench_e2e/results/next-paired
+```
+
+Defaults are `--rows 50000 --widths 32 2048 --shards 1 8 32 125`. For a smoke
+corpus, use a new data directory with `--rows 1000 --shards 1 8`; repeat the same
+generation parameters when reusing it. Results directories must be new. The
+independent oracle reads actual input and checks every subprocess answer;
+Float32 additions round after each step. Timings include startup, execution,
+formatting and temporary-file output, with validation outside the clock.
+Binary order alternates; CPU and separate RSS samples accompany wall time.
+An error stops the matrix, and `metadata.json` must say `complete` before using
+partial results. Binary hashes and the complete corpus are checked after timing;
+keep binaries, input and harness sources unchanged throughout the run.
+`--threads 0` selects auto; positive limits are engine settings, not CPU affinity.
+These controls are warm-cache only.
+
+## Phase probes
+
+Build the examples together after completing source changes. For paired builds,
+save each executable, exact source/instrumentation patch, Cargo.lock, build flags,
+binary and input hashes, commands and raw JSON. The standalone examples do not
+provide the paired harness's provenance checks or repeated-run statistics.
+
+```sh
+cargo build --release --locked --features bench-internals \
+  --example group_phase_probe --example expression_probe \
+  --example json_parallel_probe --example gzip_phase_probe \
+  --example json_gzip_pipeline_probe
+target/release/examples/group_phase_probe --rows 500000 --groups 100000 --partitions 12 --nullable
+target/release/examples/expression_probe --rows 500000 --chain-length 16 --active-percent 50 --nullable
+target/release/examples/json_parallel_probe scripts/bench_e2e/data/next-v1/width-2048.jsonl 1 buffered range v
+target/release/examples/json_parallel_probe scripts/bench_e2e/data/next-v1/width-2048.jsonl 4 mmap 262144 v
+target/release/examples/gzip_phase_probe scripts/bench_e2e/data/next-v1/gzip-1/part-000000.jsonl.gz decode -
+target/release/examples/gzip_phase_probe scripts/bench_e2e/data/next-v1/gzip-1/part-000000.jsonl.gz gzip v
+target/release/examples/json_gzip_pipeline_probe scripts/bench_e2e/data/next-v1/gzip-1/part-000000.jsonl.gz 3 262144 v 67108864
+```
+
+- `group_phase_probe` separates local accumulation, ordered partial-state merge,
+  finish and real CLI NDJSON formatting to a bounded memory sink. Input/binding
+  setup is excluded. `--partitions` are **sequential logical partitions**, not
+  threads. Use `--groups 9`, `100000`, or the row count for cardinality controls;
+  `--skew` changes group distribution. A full integer oracle runs before timing;
+  timed output checks row/byte counts. `--memory-limit` takes bytes and limits
+  estimated operator state, not preparsed input or heap/RSS.
+- `expression_probe` compares bound calls, registered scalar calls and a
+  diagnostic typed Float32 kernel for built-in Plus chains of length `1` or
+  `16`. Input, binding, full per-row oracle and output disposal are outside the
+  timer; evaluation and output construction are inside. `--active-percent`
+  accepts 0–100, and `--reverse` reverses kernel order. This is a fixed-fixture
+  comparison, not proof that custom functions or arbitrary expressions permit
+  the same typed substitution.
+- `json_parallel_probe` accepts `THREADS|auto`, `mmap|buffered`,
+  `range|TASK_BYTES`, and `SUM_FIELD|-`. `range` uses the production task policy;
+  explicit byte sizes use newline-aligned tasks. Buffered mode requires
+  `1 buffered range`. Opening/mapping is excluded; scanner/worker setup,
+  COUNT/SUM, merging and teardown are included. Formatting is excluded.
+- `gzip_phase_probe` accepts `decode|gzip|plain` and comma-separated fields or
+  `-`. Decode mode returns byte count; scan modes return row count. File opening
+  is excluded; decoder/scanner construction and destruction are included.
+  Record the selected flate2 backend when comparing builds, with exactly one
+  backend enabled. These counters are not a selected-value oracle.
+- `json_gzip_pipeline_probe` uses the production full-aggregation core, with
+  explicit chunk bytes and a shared chunk/aggregate-state budget in bytes.
+  Its worker argument counts **parser workers**; the probe starts one additional
+  decoder thread. Production `--threads` counts both. File opening and output formatting are
+  excluded; decoding/header parsing, framing/copies, worker setup, COUNT/SUM,
+  merging and teardown are included. Inputs must be immutable regular files.
+
+Use warm immutable inputs and validate the COUNT/SUM or byte/row counters against
+the corpus oracle before interpreting scan probes. These scan probes do not
+perform an independent full-value check. `--instrument-workers` on parallel/gzip pipeline
+probes is a separate diagnostic run: busy/wait spans include scheduling and
+channel overhead, are not CPU time, and must not be summed as elapsed time.
+None of these examples establishes cold-cache or whole-CLI latency.
+
+## Columnar preparation and query reuse
+
+`columnar_reuse.py` compares logq raw JSONL with ClickHouse explicit-schema
+JSONEachRow, standard Parquet and a persistent Atomic/MergeTree table. It needs a
+ClickHouse executable supporting `local --path` across fresh invocations; no
+Python dependencies or running server are required. This is a format/reuse
+experiment, not a logq native cache. Use the manifest-owned corpus above:
+
+```sh
+python3 scripts/bench_e2e/columnar_reuse.py \
+  --data-dir scripts/bench_e2e/data/next-v1 --file width-2048.jsonl \
+  --clickhouse /path/to/clickhouse --logq target/release/logq \
+  --prepared-dir /tmp/logq-columnar-prepared \
+  --results-dir scripts/bench_e2e/results/columnar-fresh \
+  --threads 1 0 --cases count narrow wide --repetitions 1 10 100 --runs 3
+python3 scripts/bench_e2e/columnar_reuse.py \
+  --data-dir scripts/bench_e2e/data/next-v1 --file width-2048.jsonl \
+  --clickhouse /path/to/clickhouse --logq target/release/logq \
+  --prepared-dir /tmp/logq-columnar-prepared \
+  --results-dir scripts/bench_e2e/results/columnar-session \
+  --threads 1 0 --cases narrow --repetitions 1 10 100 --runs 3 \
+  --engines clickhouse_raw parquet persisted --session-reuse
+```
+
+Start with `--validate-only` on a small corpus and a separate results directory;
+it still prepares and validates both representations. The strict contract
+requires present Int32 `v` and `nested.metrics.v`, and string `payload`. It retains
+`source_json`, plus `mixed` raw JSON and a presence bit, distinguishing MISSING
+from NULL. Duplicate keys, nonfinite numbers and integers outside
+`[-2^63, 2^64-1]` anywhere in an object are rejected. Raw-token checks expect
+compact Python JSON spelling; other whitespace/number spellings may fail closed.
+Tiny boundary fixtures and full representation/query digests precede query
+timings; each timed answer is checked afterwards. SUM checks retain logq's public
+Float32 precision. Unsupported input does not become an accepted fast result.
+
+Prepared directories are never silently rebuilt. Their identity binds source
+path/hash, schema/projection, ClickHouse binary, converter/helper hashes and
+preparation thread setting; artifact hashes are checked on reuse and completion.
+A mismatch requires a new directory. Keep the first `--threads` value unchanged
+when reusing preparation. Source, binary, manifest and harness hashes are checked
+before/after the matrix; there is no per-query full-source hash or transparent
+cache-invalidation implementation.
+
+Default totals charge preparation once plus N actual fresh-process queries,
+including CLI startup, execution, formatting and writes. A separate conservative
+total also charges the full Python contract/oracle pass once; it is not a measured
+native-cache validation cost. `--session-reuse` accepts only count/narrow and adds
+CH-only `session-results.json`, `session-verification.json` and
+`session-summary.json`: N queries share one fresh `--multiquery` process and all N
+answers are validated. Fresh samples remain separate. This has no matching logq
+session; mode differences do not isolate an exact startup cost. ClickHouse query
+cache is disabled; filesystem caches are warm. `0` uses engine defaults/auto,
+not CPU affinity. RSS is a separate sample including mapped pages; storage sizes
+are logical file sizes. Cold I/O, a running server and native-cache adoption are
+outside this experiment. The optional `clickhouse_envelope` engine measures the
+JSONAsString/JSONExtract conversion path separately from native JSONEachRow.

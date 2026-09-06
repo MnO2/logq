@@ -17,48 +17,48 @@ an unmeasured optimization by default.
   mixed-projection workloads with complete independent answer checking.
 - [x] Measure gzip decode-only, strict parse-only and full query costs; compare
   the pinned flate2 miniz backend with zlib-rs in isolated experiment builds.
-- [ ] Run paired release measurements with builds stopped; retain candidates
+- [x] Run paired release measurements with builds stopped; retain candidates
   with repeatable target CPU/allocation or end-to-end improvements and no
   comparable unexplained control regressions. Update CHANGELOG and commit.
 
 ## M2 — parallelize complete input pipelines
 
-- [ ] Extend eligible Files aggregation to a shared, bounded worker pool;
+- [x] Extend eligible Files aggregation to a shared, bounded worker pool;
   preserve file order, cancellation, errors, memory reservations and the
   existing partial aggregate semantics. Include independent gzip shards.
-- [ ] Compare equivalent 1/8/32/125-file corpora across the per-file mmap
+- [x] Compare equivalent 1/8/32/125-file corpora across the per-file mmap
   threshold, including plain/gzip and one-worker controls.
-- [ ] Use decode/parse measurements to evaluate a bounded single-gzip
+- [x] Use decode/parse measurements to evaluate a bounded single-gzip
   producer/parser pipeline; keep the simpler path if queue/copy costs erase
   the gain. Cover long lines, UTF-8, malformed/truncated gzip and cancellation.
-- [ ] Validate and commit the independently useful changes.
+- [x] Validate and commit the independently useful changes.
 
 ## M3 — specialize only measured operator and scheduling costs
 
-- [ ] Add a benchmark-only same-input aggregation probe separating local
+- [x] Add a benchmark-only same-input aggregation probe separating local
   accumulate, merge, finish and serialization; validate complete output.
-- [ ] Compare 9/100K/near-unique keys and use the dominant phase to choose
+- [x] Compare 9/100K/near-unique keys and use the dominant phase to choose
   typed/batched finalization, key specialization or partitioned merge.
-- [ ] Evaluate function binding and typed expression kernels independently,
+- [x] Evaluate function binding and typed expression kernels independently,
   retaining scalar semantics for errors, volatile/custom functions and CASE.
-- [ ] Compare clustered/dispersed expensive rows and fixed-reader worker
+- [x] Compare clustered/dispersed expensive rows and fixed-reader worker
   controls before changing task policy; do not infer aggregate behavior from
   the generic scan task size or infer heap usage from mmap RSS.
-- [ ] Keep only evidence-supported changes; validate and commit.
+- [x] Keep only evidence-supported changes; validate and commit.
 
 ## M4 — measure columnar reuse and storage-aware comparisons
 
-- [ ] Execute an opt-in standard Parquet preparation/read experiment and a
+- [x] Execute an opt-in standard Parquet preparation/read experiment and a
   persisted ClickHouse control on immutable, manifest-owned synthetic input.
   Record preparation time, storage, query latency and 1/10/100-query totals.
-- [ ] Test the representation contract for absent/null/dynamic values, numeric
+- [x] Test the representation contract for absent/null/dynamic values, numeric
   widths and input replacement/append invalidation before considering a native
   persistent cache. A lossy fixed-schema experiment is not a logq cache.
-- [ ] Evaluate column pruning/selective reads/deferred payload with narrow and
+- [x] Evaluate column pruning/selective reads/deferred payload with narrow and
   wide queries; record actual measured boundaries and cache policy. A cold-read
   claim requires verified eviction and physical I/O evidence; otherwise label
   it unmeasured rather than simulate it by renaming files.
-- [ ] Make a documented adoption/rejection decision from amortized cost and
+- [x] Make a documented adoption/rejection decision from amortized cost and
   semantic coverage. No automatic input conversion or mutation of source data.
 
 ## Shared acceptance and verification
@@ -83,3 +83,16 @@ The current request authorizes implementation and experiments. No release,
 package publication or version change is needed. Reverting a code commit
 restores behavior without changing input files; experimental prepared data is
 isolated under newly created benchmark directories.
+
+## Completion
+
+Completed M1–M4 with explicit adoption/rejection decisions. Runtime commits are
+`1706b8a`, `6cf329d` and `cc09911`. See
+[the measured results and limitations](../performance-next-milestones-2026-09-05.md)
+and [benchmark commands](../../scripts/bench_e2e/README.md).
+
+All final CLI matrices passed their complete answer and provenance checks.
+Default/all-feature tests, formatting, Clippy, Rust 1.85, examples, Python tests,
+five Criterion smoke targets and advisory checks passed. Global task-policy
+changes and a transparent native cache were deliberately not adopted from
+these measurements; cold-cache and physical-I/O claims remain unmeasured.
