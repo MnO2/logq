@@ -1241,42 +1241,63 @@ impl Node {
             Node::Filter(source, predicate) => (source.as_ref(), Some(*predicate.clone())),
             source => (source, None),
         };
-        let Node::DataSource(DataSource::File(path, format, _), bindings) = source else {
+        let Node::DataSource(datasource, bindings) = source else {
             return None;
         };
         if !bindings.is_empty() {
             return None;
         }
+        let (format, files) = match datasource {
+            DataSource::File(_, format, _) => (format, None),
+            DataSource::Files(paths, format, _) if format == "jsonl" => (format, Some(paths)),
+            _ => return None,
+        };
         if complex && format != "jsonl" {
             return None;
         }
-        let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) else {
-            return None;
-        };
         let is_json = format == "jsonl";
-        let scan = if is_json {
-            parallel::ParallelBatchStream::new_json(mmap, threads, json_fields?.to_vec(), None)
-        } else {
-            if crate::execution::datasource::is_dynamic_format(format) {
+        let scan = if let Some(paths) = files {
+            // Opening a pipe/device can block before the cancellable reader
+            // exists. Keep such inputs (and metadata failures) on the existing
+            // lazy serial route so an earlier file error never waits on them.
+            if !paths
+                .iter()
+                .all(|path| path.metadata().is_ok_and(|metadata| metadata.is_file()))
+            {
                 return None;
             }
-            let schema = LogSchema::from_format(format);
-            let filter_fields = predicate
-                .as_ref()
-                .map(|formula| crate::execution::field_analysis::extract_fields_from_formula(formula, &schema))
-                .unwrap_or_default();
-            let pushed = predicate
-                .clone()
-                .map(|formula| (formula, variables.clone(), registry.clone()));
-            parallel::ParallelBatchStream::new(
-                mmap,
-                threads,
-                schema,
-                required_fields.to_vec(),
-                filter_fields,
-                pushed,
-                None,
-            )
+            parallel::ParallelBatchStream::new_json_files(paths.clone(), threads, json_fields?.to_vec())
+        } else {
+            let DataSource::File(path, _, _) = datasource else {
+                unreachable!("single file source")
+            };
+            let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) else {
+                return None;
+            };
+            if is_json {
+                parallel::ParallelBatchStream::new_json(mmap, threads, json_fields?.to_vec(), None)
+            } else {
+                if crate::execution::datasource::is_dynamic_format(format) {
+                    return None;
+                }
+                let schema = LogSchema::from_format(format);
+                let filter_fields = predicate
+                    .as_ref()
+                    .map(|formula| crate::execution::field_analysis::extract_fields_from_formula(formula, &schema))
+                    .unwrap_or_default();
+                let pushed = predicate
+                    .clone()
+                    .map(|formula| (formula, variables.clone(), registry.clone()));
+                parallel::ParallelBatchStream::new(
+                    mmap,
+                    threads,
+                    schema,
+                    required_fields.to_vec(),
+                    filter_fields,
+                    pushed,
+                    None,
+                )
+            }
         };
         let scan = match scan {
             Ok(scan) => scan,
@@ -3373,6 +3394,146 @@ pub(crate) fn value_cmp(a: &Value, b: &Value, ordering: &Ordering) -> std::cmp::
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn multifile_parallel_aggregation_leaves_named_pipes_lazy() {
+        let directory = tempfile::tempdir().unwrap();
+        let invalid = directory.path().join("0.jsonl");
+        let pipe = directory.path().join("1.jsonl");
+        std::fs::write(&invalid, "{\"x\":[1,]}\n").unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&pipe)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let input = Node::Map(
+            vec![],
+            Box::new(Node::DataSource(
+                DataSource::Files(vec![invalid, pipe], "jsonl".into(), "it".into()),
+                vec![],
+            )),
+        );
+        let aggregates = vec![NamedAggregate::new(
+            Aggregate::Count(CountAggregate::new(), Named::Star),
+            Some("n".into()),
+        )];
+        let registry = test_registry();
+        assert!(
+            Node::try_build_parallel_aggregation(
+                &[],
+                &aggregates,
+                &input,
+                &Variables::new(),
+                &registry,
+                &[],
+                BatchOptions {
+                    threads: 4,
+                    json_fields: Some(&[]),
+                    memory: &crate::execution::memory::MemoryTracker::default()
+                },
+            )
+            .is_none(),
+            "non-regular inputs must keep the existing lazy serial path"
+        );
+        let query = Node::GroupBy(vec![], aggregates, Box::new(input));
+        let mut stream = query.get(Variables::new(), registry, 4).unwrap();
+        assert!(matches!(stream.next(), Err(StreamError::Reader)));
+    }
+
+    #[test]
+    fn multifile_json_aggregation_runs_filter_and_projection_in_shared_workers() {
+        use crate::functions::{Arity, FunctionDef, NullHandling};
+        use std::collections::BTreeSet;
+        use std::io::Write;
+        use std::sync::Mutex;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut paths = Vec::new();
+        for file in 0..8 {
+            let data = format!(
+                "{{\"g\":0,\"x\":{},\"keep\":true}}\n{{\"g\":1,\"x\":{},\"keep\":false}}\n{{\"g\":1,\"x\":{},\"keep\":true}}\n",
+                file * 10 + 1,
+                file * 10 + 2,
+                file * 10 + 3,
+            );
+            let path = directory
+                .path()
+                .join(format!("{file}.jsonl{}", if file % 2 == 0 { ".gz" } else { "" }));
+            if file % 2 == 0 {
+                let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+                encoder.write_all(data.as_bytes()).unwrap();
+                std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+            } else {
+                std::fs::write(&path, data).unwrap();
+            }
+            paths.push(path);
+        }
+        let calls = Arc::new(Mutex::new((BTreeSet::new(), Vec::new())));
+        let recorded = calls.clone();
+        let mut registry = FunctionRegistry::new();
+        registry
+            .register(FunctionDef {
+                name: "record_worker".into(),
+                arity: Arity::Exact(1),
+                null_handling: NullHandling::Custom,
+                func: Box::new(move |args| {
+                    let mut calls = recorded.lock().unwrap();
+                    calls
+                        .0
+                        .insert(std::thread::current().name().unwrap_or("unnamed").to_string());
+                    calls.1.push(args[0].clone());
+                    Ok(args[0].clone())
+                }),
+            })
+            .unwrap();
+        let path = |name: &str| PathExpr::new(vec![PathSegment::AttrName(name.into())]);
+        let input = Node::Map(
+            vec![
+                Named::Expression(Expression::Variable(path("g")), Some("g".into())),
+                Named::Expression(
+                    Expression::Function(
+                        "record_worker".into(),
+                        vec![Named::Expression(Expression::Variable(path("x")), None)],
+                    ),
+                    Some("v".into()),
+                ),
+            ],
+            Box::new(Node::Filter(
+                Box::new(Node::DataSource(
+                    DataSource::Files(paths, "jsonl".into(), "it".into()),
+                    vec![],
+                )),
+                Box::new(Formula::ExpressionPredicate(Box::new(Expression::Variable(path(
+                    "keep",
+                ))))),
+            )),
+        );
+        let value = || Named::Expression(Expression::Variable(path("v")), None);
+        let query = Node::GroupBy(
+            vec![path("g")],
+            vec![
+                NamedAggregate::new(Aggregate::Sum(SumAggregate::new(), value()), Some("sum".into())),
+                NamedAggregate::new(Aggregate::Avg(AvgAggregate::new(), value()), Some("avg".into())),
+                NamedAggregate::new(Aggregate::Count(CountAggregate::new(), Named::Star), Some("n".into())),
+            ],
+            Box::new(input),
+        );
+        let mut stream = query.get(Variables::new(), Arc::new(registry), 4).unwrap();
+        for (group, sum, avg) in [(0, 288.0, 36.0), (1, 304.0, 38.0)] {
+            let row = stream.next().unwrap().unwrap().into_variables();
+            assert_eq!(row.get("g"), Some(&Value::Int(group)));
+            assert_eq!(row.get("sum"), Some(&Value::Float(OrderedFloat(sum))));
+            assert_eq!(row.get("avg"), Some(&Value::Float(OrderedFloat(avg))));
+            assert_eq!(row.get("n"), Some(&Value::Int(8)));
+        }
+        assert!(stream.next().unwrap().is_none());
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.1.len(), 16, "filtered rows must never reach the projection");
+        assert_eq!(calls.0, (0..4).map(|worker| format!("logq-scan-{worker}")).collect());
+    }
 
     fn test_registry() -> Arc<FunctionRegistry> {
         Arc::new(crate::functions::register_all().unwrap())

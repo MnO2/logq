@@ -8,7 +8,7 @@ use crate::execution::log_schema::LogSchema;
 use crate::execution::memory::{MemoryReservation, MemoryTracker, estimate_batch};
 #[cfg(test)]
 use crate::execution::types::{AvgAggregate, CountAggregate, MaxAggregate, MinAggregate, SumAggregate};
-use crate::execution::types::{Formula, NamedAggregate, StreamError, StreamResult};
+use crate::execution::types::{CreateStreamError, Formula, NamedAggregate, StreamError, StreamResult};
 use crate::functions::FunctionRegistry;
 use crate::syntax::ast::PathExpr;
 use memmap2::MmapOptions;
@@ -21,9 +21,9 @@ use std::cell::RefCell;
 use std::cmp;
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -63,6 +63,62 @@ impl BufRead for MmapRangeReader {
 
     fn consume(&mut self, amount: usize) {
         self.range.start += amount.min(self.range.len());
+    }
+}
+
+/// File tasks open their input only when an active worker first pulls it. This
+/// bounds open files and independent gzip decoders by the worker count.
+struct JsonFileScan {
+    path: PathBuf,
+    schema: BatchSchema,
+    cancelled: Arc<AtomicBool>,
+    stream: Option<crate::execution::json_batch_scan::JsonBatchScanOperator>,
+}
+
+struct CancellableReader {
+    reader: Box<dyn Read>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Read for CancellableReader {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if self.cancelled.load(AtomicOrdering::Relaxed) {
+            return Ok(0);
+        }
+        self.reader.read(output)
+    }
+}
+
+impl BatchStream for JsonFileScan {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>> {
+        if self.cancelled.load(AtomicOrdering::Relaxed) {
+            return Ok(None);
+        }
+        if self.stream.is_none() {
+            let reader = crate::execution::datasource::open_path(&self.path)
+                .map_err(|_| StreamError::Get(CreateStreamError::Io))?;
+            self.stream = Some(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
+                Box::new(BufReader::with_capacity(
+                    64 * 1024,
+                    CancellableReader {
+                        reader,
+                        cancelled: self.cancelled.clone(),
+                    },
+                )),
+                self.schema.names.clone(),
+            ));
+        }
+        self.stream.as_mut().unwrap().next_batch()
+    }
+
+    fn schema(&self) -> &BatchSchema {
+        &self.schema
+    }
+
+    fn close(&self) {
+        if let Some(stream) = &self.stream {
+            stream.close();
+        }
     }
 }
 
@@ -155,6 +211,37 @@ impl ParallelBatchStream {
                 fields.clone(),
             ))
         })
+    }
+
+    /// Run complete JSON pipelines across files, including shards below the
+    /// mmap threshold and independent gzip inputs. File order is task order;
+    /// the existing bounded queues merge each file's partial state in that order.
+    pub(crate) fn new_json_files(paths: Vec<PathBuf>, num_threads: usize, fields: Vec<String>) -> io::Result<Self> {
+        let mut seen = std::collections::HashSet::new();
+        let fields: Vec<String> = fields.into_iter().filter(|field| seen.insert(field.clone())).collect();
+        let schema = BatchSchema {
+            types: vec![ColumnType::Mixed; fields.len()],
+            names: fields,
+        };
+        let threads = if num_threads == 0 {
+            std::thread::available_parallelism().map_or(1, usize::from)
+        } else {
+            num_threads
+        };
+        Self::spawn_tasks(
+            threads.min(paths.len()),
+            paths.len(),
+            schema.clone(),
+            None,
+            move |task, cancelled| {
+                Box::new(JsonFileScan {
+                    path: paths[task].clone(),
+                    schema: schema.clone(),
+                    cancelled,
+                    stream: None,
+                })
+            },
+        )
     }
 
     /// Framing-only ungrouped COUNT(*) keeps i64 partial counts in workers.
@@ -1010,6 +1097,122 @@ mod streaming_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    fn file_count(scan: ParallelBatchStream, memory: MemoryTracker) -> ParallelAggregateStream {
+        use crate::execution::types::{Aggregate, Named};
+        scan.into_aggregate(
+            vec![],
+            vec![NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("n".into()),
+            )],
+            Variables::new(),
+            Arc::new(FunctionRegistry::new()),
+            memory,
+        )
+    }
+
+    #[test]
+    fn multifile_tasks_are_lazy_bounded_and_keep_file_row_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..9).map(|i| directory.path().join(format!("{i}.jsonl"))).collect();
+        let mut scan = ParallelBatchStream::new_json_files(paths.clone(), 4, vec!["i".into()]).unwrap();
+        let pending = scan.pending.borrow();
+        assert_eq!(pending.as_ref().unwrap().count, 4);
+        assert_eq!(pending.as_ref().unwrap().tasks, 9);
+        assert!(pending.as_ref().unwrap().make_aggregate_stream.is_none());
+        drop(pending);
+        assert!(scan.workers.borrow().is_empty());
+        // The paths did not exist when the stream was constructed.
+        for (index, path) in paths.iter().enumerate() {
+            let data = if index == 3 {
+                String::new()
+            } else {
+                format!("{{\"i\":{}}}\r\n{{\"i\":{}}}", index * 2, index * 2 + 1)
+            };
+            std::fs::write(path, data).unwrap();
+        }
+        let mut rows = Vec::new();
+        while let Some(batch) = scan.next_batch().unwrap() {
+            for row in 0..batch.len {
+                rows.push(BatchToRowAdapter::extract_value(&batch.columns[0], row));
+            }
+        }
+        assert_eq!(
+            rows,
+            (0..18)
+                .filter(|i| *i != 6 && *i != 7)
+                .map(Value::Int)
+                .collect::<Vec<_>>()
+        );
+        assert!(scan.workers.borrow().is_empty());
+        let capped = ParallelBatchStream::new_json_files(paths[..2].to_vec(), 12, vec![]).unwrap();
+        assert_eq!(capped.pending.borrow().as_ref().unwrap().count, 2);
+    }
+
+    #[test]
+    fn multifile_empty_count_and_budget_error_release_workers_and_memory() {
+        let mut empty = file_count(
+            ParallelBatchStream::new_json_files(vec![], 4, vec![]).unwrap(),
+            MemoryTracker::default(),
+        );
+        let batch = empty.next_batch().unwrap().unwrap();
+        assert_eq!(BatchToRowAdapter::extract_value(&batch.columns[0], 0), Value::Int(0));
+        assert!(empty.next_batch().unwrap().is_none());
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..12).map(|i| directory.path().join(format!("{i}.jsonl"))).collect();
+        for path in &paths {
+            std::fs::write(path, "{}\n".repeat(BATCH_SIZE * 2)).unwrap();
+        }
+        let memory = MemoryTracker::new(Some(1));
+        let mut grouped = file_count(
+            ParallelBatchStream::new_json_files(paths, 4, vec![]).unwrap(),
+            memory.clone(),
+        );
+        assert!(matches!(grouped.next_batch(), Err(StreamError::MemoryBudgetExceeded)));
+        assert!(grouped.scan.workers.borrow().is_empty());
+        assert_eq!(memory.used(), 0);
+        assert!(grouped.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn multifile_reports_earlier_file_error_and_validates_ignored_json() {
+        let directory = tempfile::tempdir().unwrap();
+        let invalid = directory.path().join("invalid.jsonl");
+        let missing = directory.path().join("missing.jsonl");
+        std::fs::write(&invalid, "{\"ignored\": [0,]}\n").unwrap();
+        for (paths, expected) in [
+            (vec![invalid.clone(), missing.clone()], StreamError::Reader),
+            (
+                vec![missing.clone(), invalid.clone()],
+                StreamError::Get(CreateStreamError::Io),
+            ),
+        ] {
+            let memory = MemoryTracker::new(Some(1024 * 1024));
+            let mut grouped = file_count(
+                ParallelBatchStream::new_json_files(paths, 4, vec![]).unwrap(),
+                memory.clone(),
+            );
+            assert_eq!(grouped.next_batch().err().unwrap(), expected);
+            assert!(grouped.scan.workers.borrow().is_empty());
+            assert_eq!(memory.used(), 0);
+        }
+    }
+
+    #[test]
+    fn multifile_reader_cancellation_stops_before_another_decode_read() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut reader = CancellableReader {
+            reader: Box::new(io::Cursor::new(b"abcdef")),
+            cancelled: cancelled.clone(),
+        };
+        let mut bytes = [0; 2];
+        assert_eq!(reader.read(&mut bytes).unwrap(), 2);
+        assert_eq!(&bytes, b"ab");
+        cancelled.store(true, AtomicOrdering::Relaxed);
+        assert_eq!(reader.read(&mut bytes).unwrap(), 0);
+    }
 
     fn mmap_input(data: &[u8]) -> memmap2::Mmap {
         let mut mmap = memmap2::MmapMut::map_anon(data.len()).unwrap();

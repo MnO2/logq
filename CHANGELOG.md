@@ -4,6 +4,8 @@
 
 - Borrow nested batch values when resolving paths, retain movable columns in mixed projections, and evaluate supported complex predicates without copying unrelated columns. Preserve aliases, active masks, lazy errors and demand-driven LIMIT; budgeted mixed projections retain their existing materialization policy.
 - Add answer-checked narrow/wide, predicate-selectivity, plain/gzip and 1/8/32/125-file controls, with paired CPU/wall measurements and reproducible input manifests. Track independent follow-on work in [the milestone plan](docs/plans/2026-09-05-performance-next-milestones.md).
+- Execute eligible JSONL shards through one bounded worker pool with per-file filtering, projection and partial aggregation, including independent gzip decoders. Preserve ordered merging and cancellation; non-regular inputs retain lazy sequential processing so later FIFOs cannot block earlier errors.
+- Use flate2's Rust zlib-rs backend after isolated decode/parse/CLI comparisons; keep the pinned flate2 version and Rust 1.85 compatibility requirement.
 
 ## Unreleased — performance expansion (2026-09-05)
 
