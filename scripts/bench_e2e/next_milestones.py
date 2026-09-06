@@ -10,6 +10,7 @@ import math
 import os
 import platform
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -26,6 +27,9 @@ def generate(root, rows, widths, shards):
         saved = json.loads(manifest.read_text())
         if saved["config"] != config:
             raise ValueError("changed corpus configuration")
+        actual = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and p != manifest}
+        if actual != {item["path"] for item in saved["files"]}:
+            raise ValueError("changed corpus file inventory")
         for item in saved["files"]:
             if explore.sha256(root / item["path"]) != item["sha256"]:
                 raise ValueError("changed corpus data")
@@ -74,6 +78,8 @@ def definitions(root, manifest):
         for kind, query, columns in [
             ("nested", "select count(*) as n, sum(nested.metrics.v) as total from it", [("n", "int"), ("total", "float")]),
             ("direct", "select count(*) as n, sum(v) as total from it", [("n", "int"), ("total", "float")]),
+            ("arithmetic16", "select count(*) as n, sum(v" + " + 1" * 16 + ") as total from it", [("n", "int"), ("total", "float")]),
+            ("float16", "select count(*) as n, sum(v" + " + 0.5" * 16 + ") as total from it", [("n", "int"), ("total", "float")]),
             ("hybrid", "select payload, v + 1 as x from it order by x desc limit 10", [("payload", "str"), ("x", "int")]),
         ]:
             cases.append({"id": f"{kind}_w{width}", "kind": kind, "path": path, "oracle_path": path,
@@ -99,14 +105,22 @@ def expected(root, case):
     with (Path(root) / case["oracle_path"]).open(encoding="utf-8") as source:
         for line in source:
             row = json.loads(line)
-            if case["kind"] in ("nested", "direct"):
+            if case["kind"] in ("nested", "direct", "arithmetic16", "float16"):
                 count += 1
                 total += row["nested"]["metrics"]["v"] if case["kind"] == "nested" else row["v"]
+                if case["kind"] == "arithmetic16":
+                    total += 16
+                elif case["kind"] == "float16":
+                    # Int + Float first converts the integer to f32, then adds.
+                    value = struct.unpack("!f", struct.pack("!f", float(row["v"])))[0]
+                    for _ in range(16):
+                        value = struct.unpack("!f", struct.pack("!f", value + 0.5))[0]
+                    total += value - row["v"]
             elif case["kind"] == "hybrid" or row["v"] >= case["threshold"]:
                 top.append((row["payload"], row["v"] + int(case["kind"] == "hybrid")))
                 top.sort(key=lambda pair: pair[1], reverse=True)
                 del top[10:]
-    return explore.digest_rows(case, [(count, total)] if case["kind"] in ("nested", "direct") else top)
+    return explore.digest_rows(case, [(count, total)] if case["kind"] in ("nested", "direct", "arithmetic16", "float16") else top)
 
 
 def command(binary, root, case, threads):

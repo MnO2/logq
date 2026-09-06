@@ -78,6 +78,26 @@ required-features = ["bench-internals"]
 name = "json_scan_probe"
 required-features = ["bench-internals"]
 
+[[example]]
+name = "group_phase_probe"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "gzip_phase_probe"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "json_parallel_probe"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "json_gzip_pipeline_probe"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "expression_probe"
+required-features = ["bench-internals"]
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

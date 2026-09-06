@@ -54,6 +54,12 @@ pub mod bench_internals {
 
     // Batch execution types
     pub use crate::execution::batch::{BATCH_SIZE, BatchSchema, BatchStream, ColumnBatch, ColumnType, TypedColumn};
+    pub use crate::execution::batch_groupby::probe::{GroupProbeConfig, GroupProbeReport, profile_group_phases};
+    pub use crate::execution::expression_probe::{ExpressionProbeConfig, ExpressionProbeReport, profile_expressions};
+    pub use crate::execution::parallel::gzip_probe::{JsonGzipProbeConfig, JsonGzipProbeReport, profile_json_gzip};
+    pub use crate::execution::parallel::probe::{
+        JsonParallelProbeConfig, JsonParallelProbeReport, WorkerProbeReport, profile_json_parallel,
+    };
 
     /// Exercise the same JSON scanner with controlled reader and dictionary choices.
     /// This diagnostic surface is available only in benchmark builds.

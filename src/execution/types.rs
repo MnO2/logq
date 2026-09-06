@@ -1255,6 +1255,10 @@ impl Node {
         if complex && format != "jsonl" {
             return None;
         }
+        enum ParallelInput {
+            Scan(Box<parallel::ParallelBatchStream>),
+            Gzip(std::path::PathBuf),
+        }
         let is_json = format == "jsonl";
         let scan = if let Some(paths) = files {
             // Opening a pipe/device can block before the cancellable reader
@@ -1267,36 +1271,51 @@ impl Node {
                 return None;
             }
             parallel::ParallelBatchStream::new_json_files(paths.clone(), threads, json_fields?.to_vec())
+                .map(|scan| ParallelInput::Scan(Box::new(scan)))
         } else {
             let DataSource::File(path, _, _) = datasource else {
                 unreachable!("single file source")
             };
-            let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) else {
-                return None;
-            };
-            if is_json {
-                parallel::ParallelBatchStream::new_json(mmap, threads, json_fields?.to_vec(), None)
-            } else {
-                if crate::execution::datasource::is_dynamic_format(format) {
+            if is_json
+                && path.metadata().is_ok_and(|metadata| metadata.is_file())
+                && crate::execution::datasource::path_is_gzip(path).unwrap_or(false)
+            {
+                // Owned decoded chunks add charges absent from sequential
+                // input. Retain budgeted queries' existing acceptance behavior.
+                if memory.limit().is_some() {
                     return None;
                 }
-                let schema = LogSchema::from_format(format);
-                let filter_fields = predicate
-                    .as_ref()
-                    .map(|formula| crate::execution::field_analysis::extract_fields_from_formula(formula, &schema))
-                    .unwrap_or_default();
-                let pushed = predicate
-                    .clone()
-                    .map(|formula| (formula, variables.clone(), registry.clone()));
-                parallel::ParallelBatchStream::new(
-                    mmap,
-                    threads,
-                    schema,
-                    required_fields.to_vec(),
-                    filter_fields,
-                    pushed,
-                    None,
-                )
+                Ok(ParallelInput::Gzip(path.clone()))
+            } else {
+                let parallel::ScanStrategy::Mmap(mmap) = parallel::choose_strategy(path) else {
+                    return None;
+                };
+                if is_json {
+                    parallel::ParallelBatchStream::new_json(mmap, threads, json_fields?.to_vec(), None)
+                        .map(|scan| ParallelInput::Scan(Box::new(scan)))
+                } else {
+                    if crate::execution::datasource::is_dynamic_format(format) {
+                        return None;
+                    }
+                    let schema = LogSchema::from_format(format);
+                    let filter_fields = predicate
+                        .as_ref()
+                        .map(|formula| crate::execution::field_analysis::extract_fields_from_formula(formula, &schema))
+                        .unwrap_or_default();
+                    let pushed = predicate
+                        .clone()
+                        .map(|formula| (formula, variables.clone(), registry.clone()));
+                    parallel::ParallelBatchStream::new(
+                        mmap,
+                        threads,
+                        schema,
+                        required_fields.to_vec(),
+                        filter_fields,
+                        pushed,
+                        None,
+                    )
+                    .map(|scan| ParallelInput::Scan(Box::new(scan)))
+                }
             }
         };
         let scan = match scan {
@@ -1326,35 +1345,49 @@ impl Node {
         let scope = variables.clone();
         let functions = registry.clone();
         let worker_memory = memory.clone();
-        let stream = scan
-            .map_workers(mapped_schema, move |mut child| {
-                if is_json {
-                    if let Some(predicate) = &predicate {
-                        child = Box::new(BatchFilterOperator::new(
-                            child,
-                            predicate.clone(),
-                            scope.clone(),
-                            functions.clone(),
-                        ));
-                    }
+        let wrapper = move |mut child: Box<dyn BatchStream>| -> Box<dyn BatchStream> {
+            if is_json {
+                if let Some(predicate) = &predicate {
+                    child = Box::new(BatchFilterOperator::new(
+                        child,
+                        predicate.clone(),
+                        scope.clone(),
+                        functions.clone(),
+                    ));
                 }
-                if complex {
-                    Box::new(
-                        BatchExpressionOperator::new(child, &named_list, scope.clone(), functions.clone())
-                            .with_memory_tracker(worker_memory.clone()),
-                    )
-                } else {
-                    Box::new(BatchProjectOperator::with_projection(child, projection.clone()).with_scope(scope.clone()))
-                }
-            })
-            .into_aggregate(
+            }
+            if complex {
+                Box::new(
+                    BatchExpressionOperator::new(child, &named_list, scope.clone(), functions.clone())
+                        .with_memory_tracker(worker_memory.clone()),
+                )
+            } else {
+                Box::new(BatchProjectOperator::with_projection(child, projection.clone()).with_scope(scope.clone()))
+            }
+        };
+        let stream: Box<dyn BatchStream> = match scan {
+            ParallelInput::Scan(scan) => Box::new(scan.map_workers(mapped_schema, wrapper).into_aggregate(
                 keys.to_vec(),
                 aggregates.to_vec(),
                 variables.clone(),
                 registry.clone(),
                 memory.clone(),
-            );
-        Some(Ok(Box::new(stream)))
+            )),
+            ParallelInput::Gzip(path) => Box::new(
+                parallel::gzip_probe::GzipAggregateStream::new(
+                    path,
+                    threads - 1,
+                    json_fields?.to_vec(),
+                    keys.to_vec(),
+                    aggregates.to_vec(),
+                    variables.clone(),
+                    registry.clone(),
+                    memory.clone(),
+                )
+                .map_workers(wrapper),
+            ),
+        };
+        Some(Ok(stream))
     }
 
     /// Detect a constant time-bucket projection that can use typed batches.
@@ -3394,6 +3427,110 @@ pub(crate) fn value_cmp(a: &Value, b: &Value, ordering: &Ordering) -> std::cmp::
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn single_gzip_full_aggregation_uses_worker_filter_projection_and_generic_states() {
+        use std::io::Write;
+        const REPEATS: i32 = 4096;
+        let file = tempfile::NamedTempFile::with_suffix(".jsonl.gz").unwrap();
+        let data = b"{\"g\":\"a\",\"x\":1,\"keep\":true}\n{\"g\":\"b\",\"x\":10,\"keep\":true}\n{\"g\":\"a\",\"x\":2,\"keep\":false}\n{\"g\":\"a\",\"x\":null,\"keep\":true}\n{\"g\":\"a\",\"keep\":true}\n{\"g\":\"b\",\"x\":3,\"keep\":true}\n{\"g\":\"a\",\"x\":\"invalid arithmetic\",\"keep\":false}\n";
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let data = data.repeat(REPEATS as usize);
+        assert!(data.len() > 512 * 1024, "exercise several producer chunks");
+        encoder.write_all(&data).unwrap();
+        std::fs::write(file.path(), encoder.finish().unwrap()).unwrap();
+        let path = |name: &str| PathExpr::new(vec![PathSegment::AttrName(name.into())]);
+        let named = |name: &str| Named::Expression(Expression::Variable(path(name)), None);
+        let input = Node::Map(
+            vec![
+                Named::Expression(Expression::Variable(path("g")), Some("g".into())),
+                Named::Expression(
+                    Expression::Function(
+                        "plus".into(),
+                        vec![named("x"), Named::Expression(Expression::Constant(Value::Int(1)), None)],
+                    ),
+                    Some("v".into()),
+                ),
+            ],
+            Box::new(Node::Filter(
+                Box::new(Node::DataSource(
+                    DataSource::File(file.path().to_owned(), "jsonl".into(), "it".into()),
+                    vec![],
+                )),
+                Box::new(Formula::ExpressionPredicate(Box::new(Expression::Variable(path(
+                    "keep",
+                ))))),
+            )),
+        );
+        let keys = vec![path("g")];
+        let aggregates = vec![
+            NamedAggregate::new(Aggregate::Sum(SumAggregate::new(), named("v")), Some("sum".into())),
+            NamedAggregate::new(Aggregate::Avg(AvgAggregate::new(), named("v")), Some("avg".into())),
+            NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), named("v")),
+                Some("count_value".into()),
+            ),
+            NamedAggregate::new(
+                Aggregate::Count(CountAggregate::new(), Named::Star),
+                Some("count_all".into()),
+            ),
+        ];
+        let registry = test_registry();
+        let fields = vec!["g".into(), "x".into(), "keep".into()];
+        let memory = crate::execution::memory::MemoryTracker::default();
+        assert!(
+            Node::try_build_parallel_aggregation(
+                &keys,
+                &aggregates,
+                &input,
+                &Variables::new(),
+                &registry,
+                &[],
+                BatchOptions {
+                    threads: 4,
+                    json_fields: Some(&fields),
+                    memory: &memory,
+                }
+            )
+            .is_some(),
+            "single gzip full aggregation should use the complete worker pipeline"
+        );
+        let budget = crate::execution::memory::MemoryTracker::new(Some(1024 * 1024));
+        for (threads, memory) in [(1, &memory), (4, &budget)] {
+            assert!(
+                Node::try_build_parallel_aggregation(
+                    &keys,
+                    &aggregates,
+                    &input,
+                    &Variables::new(),
+                    &registry,
+                    &[],
+                    BatchOptions {
+                        threads,
+                        json_fields: Some(&fields),
+                        memory,
+                    }
+                )
+                .is_none(),
+                "one-thread and budgeted gzip queries keep their existing path"
+            );
+        }
+        let query = Node::GroupBy(keys, aggregates, Box::new(input));
+        for (threads, limit) in [(1, None), (4, None), (4, Some(1024 * 1024))] {
+            let mut stream = query
+                .get_with_memory_limit(Variables::new(), registry.clone(), threads, limit)
+                .unwrap();
+            for (group, sum, avg, count_value, count_all) in [("a", 2.0, 2.0, 1, 3), ("b", 15.0, 7.5, 2, 2)] {
+                let row = stream.next().unwrap().unwrap().into_variables();
+                assert_eq!(row.get("g"), Some(&Value::String(group.into())));
+                assert_eq!(row.get("sum"), Some(&Value::Float(OrderedFloat(sum * REPEATS as f32))));
+                assert_eq!(row.get("avg"), Some(&Value::Float(OrderedFloat(avg))));
+                assert_eq!(row.get("count_value"), Some(&Value::Int(count_value * REPEATS)));
+                assert_eq!(row.get("count_all"), Some(&Value::Int(count_all * REPEATS)));
+            }
+            assert!(stream.next().unwrap().is_none());
+        }
+    }
 
     #[cfg(unix)]
     #[test]

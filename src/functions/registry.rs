@@ -1,6 +1,7 @@
 use crate::common::types::Value;
 use crate::execution::types::{ExpressionError, ExpressionResult};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type ScalarFunction = dyn Fn(&[Value]) -> ExpressionResult<Value> + Send + Sync;
 
@@ -22,6 +23,47 @@ pub struct FunctionDef {
     pub arity: Arity,
     pub null_handling: NullHandling,
     pub func: Box<ScalarFunction>,
+}
+
+impl FunctionDef {
+    fn call(&self, args: &[Value]) -> ExpressionResult<Value> {
+        match self.null_handling {
+            NullHandling::Propagate => {
+                let mut has_null = false;
+                for arg in args {
+                    match arg {
+                        Value::Missing => return Ok(Value::Missing),
+                        Value::Null => has_null = true,
+                        _ => {}
+                    }
+                }
+                if has_null {
+                    return Ok(Value::Null);
+                }
+                (self.func)(args)
+            }
+            NullHandling::Custom => (self.func)(args),
+        }
+    }
+}
+
+/// Own the definition selected from one registry, including its null policy.
+/// No name lookup or registry identity check is needed at execution time.
+struct RegisteredFunction {
+    definition: FunctionDef,
+    builtin_plus: bool,
+}
+
+pub(crate) struct ResolvedFunction(Arc<RegisteredFunction>);
+
+impl ResolvedFunction {
+    pub(crate) fn call(&self, args: &[Value]) -> ExpressionResult<Value> {
+        self.0.definition.call(args)
+    }
+
+    pub(crate) fn is_builtin_plus(&self) -> bool {
+        self.0.builtin_plus
+    }
 }
 
 // Manual Debug impl because closures don't implement Debug
@@ -51,7 +93,7 @@ pub enum RegistryError {
 }
 
 pub struct FunctionRegistry {
-    functions: HashMap<String, FunctionDef>,
+    functions: HashMap<String, Arc<RegisteredFunction>>,
 }
 
 // Manual Debug impl because FunctionDef contains closures
@@ -77,11 +119,27 @@ impl FunctionRegistry {
     }
 
     pub fn register(&mut self, def: FunctionDef) -> Result<(), RegistryError> {
+        self.register_entry(def, false)
+    }
+
+    // Only arithmetic registration supplies this trusted implementation tag.
+    // Public registration is always opaque, including a function named Plus.
+    pub(super) fn register_builtin_plus(&mut self, def: FunctionDef) -> Result<(), RegistryError> {
+        self.register_entry(def, true)
+    }
+
+    fn register_entry(&mut self, def: FunctionDef, builtin_plus: bool) -> Result<(), RegistryError> {
         let key = def.name.to_ascii_lowercase();
         if self.functions.contains_key(&key) {
             return Err(RegistryError::DuplicateFunction(def.name.clone()));
         }
-        self.functions.insert(key, def);
+        self.functions.insert(
+            key,
+            Arc::new(RegisteredFunction {
+                definition: def,
+                builtin_plus,
+            }),
+        );
         Ok(())
     }
 
@@ -95,6 +153,7 @@ impl FunctionRegistry {
             .functions
             .get(&key)
             .ok_or_else(|| RegistryError::UnknownFunction(name.to_string()))?;
+        let def = &def.definition;
 
         let valid = match &def.arity {
             Arity::Exact(n) => arg_count == *n,
@@ -119,31 +178,24 @@ impl FunctionRegistry {
     }
 
     pub fn call(&self, name: &str, args: &[Value]) -> ExpressionResult<Value> {
+        self.lookup(name)
+            .ok_or(ExpressionError::UnknownFunction)?
+            .definition
+            .call(args)
+    }
+
+    pub(crate) fn resolve(&self, name: &str) -> Option<ResolvedFunction> {
+        self.lookup(name).cloned().map(ResolvedFunction)
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Arc<RegisteredFunction>> {
         // Try direct lookup first (name is usually pre-lowercased at plan creation time)
-        let def = if let Some(d) = self.functions.get(name) {
-            d
+        if let Some(d) = self.functions.get(name) {
+            Some(d)
         } else {
             // Fallback to lowercase for backwards compatibility (tests, etc.)
             let key = name.to_ascii_lowercase();
-            self.functions.get(&key).ok_or(ExpressionError::UnknownFunction)?
-        };
-
-        match def.null_handling {
-            NullHandling::Propagate => {
-                let mut has_null = false;
-                for arg in args {
-                    match arg {
-                        Value::Missing => return Ok(Value::Missing),
-                        Value::Null => has_null = true,
-                        _ => {}
-                    }
-                }
-                if has_null {
-                    return Ok(Value::Null);
-                }
-                (def.func)(args)
-            }
-            NullHandling::Custom => (def.func)(args),
+            self.functions.get(&key)
         }
     }
 }
@@ -153,6 +205,32 @@ mod tests {
     use super::*;
     use crate::common::types::Value;
 
+    #[test]
+    fn resolved_handles_keep_registry_identity_and_null_policy() {
+        let registry = |value, null_handling| {
+            let mut registry = FunctionRegistry::new();
+            registry
+                .register(FunctionDef {
+                    name: "ADD".into(),
+                    arity: Arity::Exact(2),
+                    null_handling,
+                    func: Box::new(move |_| Ok(Value::Int(value))),
+                })
+                .unwrap();
+            registry
+        };
+        let first = registry(11, NullHandling::Custom);
+        let second = registry(22, NullHandling::Propagate);
+        let first_handle = first.resolve("aDd").unwrap();
+        let second_handle = second.resolve("ADD").unwrap();
+        assert!(first.resolve("unknown").is_none());
+        drop(first);
+        drop(second);
+        assert_eq!(first_handle.call(&[Value::Null, Value::Missing]), Ok(Value::Int(11)));
+        assert_eq!(second_handle.call(&[Value::Null, Value::Missing]), Ok(Value::Missing));
+        assert_eq!(second_handle.call(&[Value::Null, Value::Int(1)]), Ok(Value::Null));
+        assert_eq!(second_handle.call(&[Value::Int(1), Value::Int(2)]), Ok(Value::Int(22)));
+    }
     #[test]
     fn test_register_and_call() {
         let mut registry = FunctionRegistry::new();

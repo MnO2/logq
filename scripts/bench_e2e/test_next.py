@@ -20,6 +20,10 @@ class NextMilestonesTest(unittest.TestCase):
                 self.assertEqual(b"".join(gzip.decompress(p.read_bytes()) for p in sorted((root / f"gzip-{count}").glob("*.gz"))), base)
             cases = next_bench.definitions(root, manifest)
             self.assertEqual(next_bench.expected(root, cases[0])["rows"], 1)
+            dense = next(c for c in cases if c["id"] == "arithmetic16_w32")
+            self.assertEqual(next_bench.expected(root, dense), next_bench.explore.digest_rows(dense, [(37, sum(range(37)) + 16 * 37)]))
+            floats = next(c for c in cases if c["id"] == "float16_w32")
+            self.assertEqual(next_bench.expected(root, floats), next_bench.explore.digest_rows(floats, [(37, sum(range(37)) + 8 * 37)]))
             for name in ["hybrid_w256", "predicate_1_w256", "predicate_50_w256"]:
                 case = next(c for c in cases if c["id"] == name)
                 self.assertLessEqual(next_bench.expected(root, case)["rows"], 10)
@@ -43,6 +47,14 @@ class NextMilestonesTest(unittest.TestCase):
         self.assertIn("it:jsonl=" + str(Path("/tmp/$x `literal`").resolve() / "data.jsonl"), argv)
         with self.assertRaises(ValueError):
             next_bench.command(Path("logq"), Path("/tmp/a,b"), case, 1)
+
+    def test_extra_glob_member_invalidates_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "data"
+            next_bench.generate(root, 4, [32], [1])
+            (root / "shards-1" / "extra.jsonl").write_text("")
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                next_bench.generate(root, 4, [32], [1])
 
 
 if __name__ == "__main__":

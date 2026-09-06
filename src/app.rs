@@ -330,7 +330,7 @@ fn plan_query(
     })
 }
 
-fn value_to_json(value: common::types::Value) -> serde_json::Value {
+pub(crate) fn value_to_json(value: common::types::Value) -> serde_json::Value {
     use common::types::Value;
     match value {
         Value::Boolean(value) => value.into(),
@@ -349,6 +349,59 @@ fn value_to_json(value: common::types::Value) -> serde_json::Value {
         ),
         Value::Array(value) => serde_json::Value::Array(value.into_iter().map(value_to_json).collect()),
     }
+}
+
+/// Serialize borrowed execution values without rebuilding a JSON object tree.
+/// Float conversion deliberately retains the existing public decimal spelling.
+struct JsonValue<'a>(&'a common::types::Value);
+
+impl serde::Serialize for JsonValue<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use common::types::Value;
+        use serde::ser::{SerializeMap, SerializeSeq};
+        match self.0 {
+            Value::Boolean(value) => serializer.serialize_bool(*value),
+            Value::Int(value) => serializer.serialize_i32(*value),
+            Value::Float(value) => value_to_json(Value::Float(*value)).serialize(serializer),
+            Value::Null | Value::Missing => serializer.serialize_none(),
+            Value::String(value) => serializer.serialize_str(value),
+            Value::DateTime(value) => serializer.collect_str(value),
+            Value::Host(value) => serializer.collect_str(value),
+            Value::HttpRequest(value) => serializer.collect_str(value),
+            Value::Object(values) => {
+                let mut map = serializer.serialize_map(Some(values.len()))?;
+                for (key, value) in values.iter() {
+                    map.serialize_entry(key, &JsonValue(value))?;
+                }
+                map.end()
+            }
+            Value::Array(values) => {
+                let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    sequence.serialize_element(&JsonValue(value))?;
+                }
+                sequence.end()
+            }
+        }
+    }
+}
+
+struct JsonRecord<'a>(&'a execution::stream::Record);
+
+impl serde::Serialize for JsonRecord<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let values = self.0.to_variables();
+        let mut map = serializer.serialize_map(Some(values.len()))?;
+        for (key, value) in values {
+            map.serialize_entry(key, &JsonValue(value))?;
+        }
+        map.end()
+    }
+}
+
+pub(crate) fn write_json_record<W: Write>(writer: W, record: &execution::stream::Record) -> serde_json::Result<()> {
+    serde_json::to_writer(writer, &JsonRecord(record))
 }
 
 impl FromStr for OutputMode {
@@ -447,15 +500,10 @@ pub fn run_with_memory_limit(
             writer.write_all(b"[")?;
             let mut first = true;
             while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
-                let obj = record
-                    .into_tuples()
-                    .into_iter()
-                    .map(|(key, value)| (key, value_to_json(value)))
-                    .collect();
                 if !first {
                     writer.write_all(b",")?;
                 }
-                serde_json::to_writer(&mut writer, &serde_json::Value::Object(obj))?;
+                write_json_record(&mut writer, &record)?;
                 first = false;
             }
             writer.write_all(b"]\n")?;
@@ -464,12 +512,7 @@ pub fn run_with_memory_limit(
             let stdout = std::io::stdout();
             let mut writer = std::io::BufWriter::new(stdout.lock());
             while let Some(record) = stream.next().map_err(|error| render_runtime_error(query_str, error))? {
-                let obj = record
-                    .into_tuples()
-                    .into_iter()
-                    .map(|(key, value)| (key, value_to_json(value)))
-                    .collect();
-                serde_json::to_writer(&mut writer, &serde_json::Value::Object(obj))?;
+                write_json_record(&mut writer, &record)?;
                 writeln!(writer)?;
             }
         }
@@ -549,6 +592,71 @@ pub fn run_to_records_with_registry(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn json_record_writer_matches_legacy_bytes_for_nested_and_float_values() {
+        use crate::common::types::{Value, Variables};
+        use crate::execution::stream::Record;
+        use ordered_float::OrderedFloat;
+        for number in [
+            0.0_f32,
+            -0.0,
+            1.2,
+            f32::MAX,
+            f32::MIN_POSITIVE,
+            1e-12,
+            f32::NAN,
+            f32::INFINITY,
+        ] {
+            let mut object = Variables::new();
+            object.insert("escaped \" ☃".into(), Value::String("line\nback\\slash".into()));
+            object.insert(
+                "array".into(),
+                Value::Array(vec![Value::Missing, Value::Null, Value::Boolean(false), Value::Int(-7)]),
+            );
+            let record = Record::new(
+                &["nested".into(), "float".into()],
+                vec![Value::Object(Box::new(object)), Value::Float(OrderedFloat(number))],
+            );
+            let legacy = serde_json::Value::Object(
+                record
+                    .to_tuples()
+                    .into_iter()
+                    .map(|(name, value)| (name, super::value_to_json(value)))
+                    .collect(),
+            );
+            let mut bytes = Vec::new();
+            super::write_json_record(&mut bytes, &record).unwrap();
+            assert_eq!(bytes, serde_json::to_vec(&legacy).unwrap());
+        }
+    }
+
+    #[test]
+    fn json_record_writer_preserves_order_overwrites_and_io_errors() {
+        use crate::common::types::Value;
+        use crate::execution::stream::Record;
+        let record = Record::new(
+            &["a".into(), "b".into(), "a".into()],
+            vec![Value::Int(1), Value::String("two".into()), Value::Int(3)],
+        );
+        let mut bytes = Vec::new();
+        super::write_json_record(&mut bytes, &record).unwrap();
+        assert_eq!(bytes, br#"{"b":"two","a":3}"#);
+        struct FailedWriter;
+        impl std::io::Write for FailedWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert_eq!(
+            super::write_json_record(FailedWriter, &record)
+                .unwrap_err()
+                .io_error_kind(),
+            Some(std::io::ErrorKind::BrokenPipe)
+        );
+    }
     use super::*;
     use crate::common::types::Value;
     use flate2::Compression;

@@ -34,6 +34,198 @@ const PARALLEL_QUEUE_CAPACITY: usize = 2;
 const PARALLEL_TASK_BYTES: usize = 256 * 1024;
 const MMAP_READ_WINDOW: usize = 1024 * 1024;
 
+#[path = "json_gzip.rs"]
+pub mod gzip_probe;
+
+#[cfg(feature = "bench-internals")]
+pub mod probe {
+    use super::*;
+
+    pub struct JsonParallelProbeConfig {
+        pub threads: usize,
+        pub sum_field: Option<String>,
+        pub task_bytes: Option<usize>,
+        pub buffered: bool,
+        pub instrument_workers: bool,
+    }
+
+    #[derive(Debug, serde::Serialize)]
+    pub struct WorkerProbeReport {
+        pub worker: usize,
+        pub tasks: u64,
+        pub busy_ns: u64,
+        pub send_wait_ns: u64,
+        pub input_wait_ns: u64,
+    }
+
+    #[derive(Debug, serde::Serialize)]
+    pub struct JsonParallelProbeReport {
+        pub count: i32,
+        pub sum: Option<f32>,
+        pub elapsed_ns: u64,
+        pub workers_used: usize,
+        pub tasks_scheduled: usize,
+        pub workers: Vec<WorkerProbeReport>,
+    }
+
+    pub fn profile_json_parallel(
+        path: &Path,
+        config: JsonParallelProbeConfig,
+    ) -> Result<JsonParallelProbeReport, Box<dyn std::error::Error>> {
+        use crate::common::types::Value;
+        use crate::execution::types::{Aggregate, CountAggregate, Expression, Named, SumAggregate};
+        use crate::syntax::ast::PathSegment;
+        if config.task_bytes == Some(0) {
+            return Err("task size must be positive".into());
+        }
+        if config.buffered && (config.threads != 1 || config.task_bytes.is_some()) {
+            return Err("buffered control requires one thread and range policy".into());
+        }
+        let file = File::open(path)?;
+        let empty = file.metadata()?.len() == 0;
+        // Diagnostic inputs must remain immutable until this function returns.
+        let mmap = if config.buffered || empty {
+            None
+        } else {
+            Some(unsafe { MmapOptions::new().map(&file)? })
+        };
+        let start = std::time::Instant::now();
+        let fields: Vec<_> = config.sum_field.iter().cloned().collect();
+        let mut aggregates = vec![NamedAggregate::new(
+            Aggregate::Count(CountAggregate::new(), Named::Star),
+            Some("count".into()),
+        )];
+        if let Some(field) = &config.sum_field {
+            aggregates.push(NamedAggregate::new(
+                Aggregate::Sum(
+                    SumAggregate::new(),
+                    Named::Expression(
+                        Expression::Variable(PathExpr::new(vec![PathSegment::AttrName(field.clone())])),
+                        None,
+                    ),
+                ),
+                Some("sum".into()),
+            ));
+        }
+        let mut timings = None;
+        let mut workers_used = 0;
+        let mut tasks_scheduled = 0;
+        let mut grouped: Box<dyn BatchStream> = if let Some(mmap) = mmap {
+            let mut scan = if let Some(task_bytes) = config.task_bytes {
+                let mmap = Arc::new(mmap);
+                let tasks = mmap.len().div_ceil(task_bytes);
+                let threads = if config.threads == 0 {
+                    std::thread::available_parallelism().map_or(1, usize::from)
+                } else {
+                    config.threads
+                };
+                let schema = BatchSchema {
+                    names: fields.clone(),
+                    types: vec![ColumnType::Mixed; fields.len()],
+                };
+                ParallelBatchStream::spawn_tasks(threads.min(tasks), tasks, schema, None, move |task, cancelled| {
+                    let range = ParallelBatchStream::aligned_range(
+                        &mmap,
+                        task.saturating_mul(task_bytes),
+                        (task + 1).saturating_mul(task_bytes),
+                    );
+                    Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
+                        Box::new(MmapRangeReader {
+                            mmap: mmap.clone(),
+                            range,
+                            cancelled,
+                        }),
+                        fields.clone(),
+                    ))
+                })?
+            } else {
+                ParallelBatchStream::new_json(mmap, config.threads, fields, None)?
+            };
+            if config.instrument_workers {
+                let count = scan.pending.borrow().as_ref().map_or(0, |pending| pending.count);
+                let metrics = Arc::new(
+                    (0..count)
+                        .map(|_| Arc::new(WorkerTiming::default()))
+                        .collect::<Vec<_>>(),
+                );
+                scan.worker_timings = Some(metrics.clone());
+                timings = Some(metrics);
+            }
+            let aggregate = scan.into_aggregate(
+                vec![],
+                aggregates,
+                Variables::new(),
+                Arc::new(FunctionRegistry::new()),
+                MemoryTracker::default(),
+            );
+            if let Some(pending) = aggregate.scan.pending.borrow().as_ref() {
+                workers_used = pending.count;
+                tasks_scheduled = pending.tasks;
+            }
+            Box::new(aggregate)
+        } else {
+            Box::new(BatchGroupByOperator::new(
+                Box::new(crate::execution::json_batch_scan::JsonBatchScanOperator::new(
+                    Box::new(BufReader::with_capacity(64 * 1024, file)),
+                    fields,
+                )),
+                vec![],
+                aggregates,
+                Variables::new(),
+                Arc::new(FunctionRegistry::new()),
+            ))
+        };
+        let batch = grouped.next_batch()?.ok_or("ungrouped aggregate returned no output")?;
+        let count = match BatchToRowAdapter::extract_value(&batch.columns[0], 0) {
+            Value::Int(value) => value,
+            _ => return Err("COUNT returned a non-integral value".into()),
+        };
+        let sum = if config.sum_field.is_some() {
+            match BatchToRowAdapter::extract_value(&batch.columns[1], 0) {
+                Value::Float(value) => Some(value.0),
+                Value::Null => None,
+                _ => return Err("SUM returned an unexpected value".into()),
+            }
+        } else {
+            None
+        };
+        drop(batch);
+        if grouped.next_batch()?.is_some() {
+            return Err("ungrouped aggregate returned multiple outputs".into());
+        }
+        drop(grouped);
+        let elapsed_ns = start.elapsed().as_nanos() as u64;
+        let workers = timings
+            .into_iter()
+            .flat_map(|timings| {
+                timings
+                    .iter()
+                    .enumerate()
+                    .map(|(worker, timing)| {
+                        let elapsed = timing.elapsed_ns.load(AtomicOrdering::Relaxed);
+                        let send_wait_ns = timing.send_wait_ns.load(AtomicOrdering::Relaxed);
+                        WorkerProbeReport {
+                            worker,
+                            tasks: timing.tasks.load(AtomicOrdering::Relaxed),
+                            busy_ns: elapsed.saturating_sub(send_wait_ns),
+                            send_wait_ns,
+                            input_wait_ns: 0,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Ok(JsonParallelProbeReport {
+            count,
+            sum,
+            elapsed_ns,
+            workers_used,
+            tasks_scheduled,
+            workers,
+        })
+    }
+}
+
 /// A reader over one newline-aligned range of a shared mapping. Cancellation is
 /// checked while reading, including when a selective filter emits no batches.
 struct MmapRangeReader {
@@ -129,6 +321,39 @@ enum ScanMessage {
     Finished(StreamResult<()>),
 }
 
+#[cfg(feature = "bench-internals")]
+#[derive(Default)]
+struct WorkerTiming {
+    tasks: std::sync::atomic::AtomicU64,
+    elapsed_ns: std::sync::atomic::AtomicU64,
+    send_wait_ns: std::sync::atomic::AtomicU64,
+    input_wait_ns: std::sync::atomic::AtomicU64,
+}
+
+// The normal build retains the original channel type and send calls exactly.
+#[cfg(not(feature = "bench-internals"))]
+type WorkerSender = SyncSender<ScanMessage>;
+
+#[cfg(feature = "bench-internals")]
+struct WorkerSender {
+    sender: SyncSender<ScanMessage>,
+    timing: Option<Arc<WorkerTiming>>,
+}
+
+#[cfg(feature = "bench-internals")]
+impl WorkerSender {
+    fn send(&self, message: ScanMessage) -> Result<(), mpsc::SendError<ScanMessage>> {
+        let start = self.timing.as_ref().map(|_| std::time::Instant::now());
+        let result = self.sender.send(message);
+        if let (Some(start), Some(timing)) = (start, &self.timing) {
+            timing
+                .send_wait_ns
+                .fetch_add(start.elapsed().as_nanos() as u64, AtomicOrdering::Relaxed);
+        }
+        result
+    }
+}
+
 struct AggregateSpec {
     keys: Vec<PathExpr>,
     aggregates: Vec<NamedAggregate>,
@@ -159,6 +384,8 @@ pub(crate) struct ParallelBatchStream {
     remaining: Option<usize>,
     memory: MemoryTracker,
     aggregate: Option<Arc<AggregateSpec>>,
+    #[cfg(feature = "bench-internals")]
+    worker_timings: Option<Arc<Vec<Arc<WorkerTiming>>>>,
 }
 
 impl ParallelBatchStream {
@@ -401,6 +628,8 @@ impl ParallelBatchStream {
             remaining: row_limit,
             memory: MemoryTracker::default(),
             aggregate: None,
+            #[cfg(feature = "bench-internals")]
+            worker_timings: None,
         };
         if row_limit == Some(0) {
             return Ok(stream);
@@ -495,6 +724,11 @@ impl ParallelBatchStream {
         };
         for worker in 0..pending.count {
             let (sender, receiver) = mpsc::sync_channel(PARALLEL_QUEUE_CAPACITY);
+            #[cfg(feature = "bench-internals")]
+            let sender = WorkerSender {
+                sender,
+                timing: self.worker_timings.as_ref().map(|timings| timings[worker].clone()),
+            };
             let make_stream = pending.make_stream.clone();
             let cancelled = self.cancelled.clone();
             let memory = self.memory.clone();
@@ -505,10 +739,16 @@ impl ParallelBatchStream {
             let handle = std::thread::Builder::new()
                 .name(format!("logq-scan-{worker}"))
                 .spawn(move || {
+                    #[cfg(feature = "bench-internals")]
+                    let start = sender.timing.as_ref().map(|_| std::time::Instant::now());
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         for task in (worker..tasks).step_by(count) {
                             if cancelled.load(AtomicOrdering::Relaxed) {
                                 break;
+                            }
+                            #[cfg(feature = "bench-internals")]
+                            if let Some(timing) = &sender.timing {
+                                timing.tasks.fetch_add(1, AtomicOrdering::Relaxed);
                             }
                             if let Some((name, factory)) = count_rows.as_ref() {
                                 let count = factory(task, cancelled.clone())?;
@@ -534,6 +774,12 @@ impl ParallelBatchStream {
                     if !cancelled.load(AtomicOrdering::Relaxed) {
                         let _ = sender.send(ScanMessage::Finished(result));
                     }
+                    #[cfg(feature = "bench-internals")]
+                    if let (Some(start), Some(timing)) = (start, &sender.timing) {
+                        timing
+                            .elapsed_ns
+                            .store(start.elapsed().as_nanos() as u64, AtomicOrdering::Relaxed);
+                    }
                 })?;
             self.receivers.borrow_mut().push_back(receiver);
             self.workers.borrow_mut().push(handle);
@@ -543,7 +789,7 @@ impl ParallelBatchStream {
 
     fn run_worker(
         mut scanner: Box<dyn BatchStream>,
-        sender: &SyncSender<ScanMessage>,
+        sender: &WorkerSender,
         cancelled: &AtomicBool,
         memory: &MemoryTracker,
         aggregate: Option<&AggregateSpec>,
@@ -1098,6 +1344,52 @@ mod streaming_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    #[cfg(feature = "bench-internals")]
+    #[test]
+    fn json_parallel_probe_keeps_backend_and_numeric_results_across_task_policies() {
+        use super::probe::*;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "{\"n\":1}\n{\"n\":2.5}\n{\"n\":-0.5}\n{\"other\":\"ignored\"}\n{\"n\":null}\n{}",
+        )
+        .unwrap();
+        for (threads, task_bytes, buffered) in [
+            (1, None, true),
+            (1, None, false),
+            (2, None, false),
+            (4, None, false),
+            (4, Some(11), false),
+        ] {
+            for instrument_workers in [false, true] {
+                let report = profile_json_parallel(
+                    file.path(),
+                    JsonParallelProbeConfig {
+                        threads,
+                        sum_field: Some("n".into()),
+                        task_bytes,
+                        buffered,
+                        instrument_workers,
+                    },
+                )
+                .unwrap();
+                assert_eq!(report.count, 6);
+                assert_eq!(report.sum, Some(3.0));
+                assert_eq!(report.workers_used, if buffered { 0 } else { threads });
+                assert_eq!(
+                    report.workers.len(),
+                    if buffered || !instrument_workers { 0 } else { threads }
+                );
+                assert!(
+                    report
+                        .workers
+                        .iter()
+                        .all(|worker| worker.tasks >= 1 && worker.busy_ns > 0)
+                );
+            }
+        }
+    }
+
     fn file_count(scan: ParallelBatchStream, memory: MemoryTracker) -> ParallelAggregateStream {
         use crate::execution::types::{Aggregate, Named};
         scan.into_aggregate(
@@ -1198,6 +1490,62 @@ mod streaming_tests {
             assert!(grouped.scan.workers.borrow().is_empty());
             assert_eq!(memory.used(), 0);
         }
+    }
+
+    #[test]
+    fn multifile_partial_sum_preserves_f64_until_final_output() {
+        use crate::execution::types::{Aggregate, Expression, Named};
+        use crate::syntax::ast::PathSegment;
+        let directory = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..2).map(|i| directory.path().join(format!("{i}.jsonl"))).collect();
+        std::fs::write(&paths[0], "{\"x\":100000000}\n{\"x\":1}\n").unwrap();
+        std::fs::write(&paths[1], "{\"x\":-100000000}\n").unwrap();
+        let variable = || {
+            Named::Expression(
+                Expression::Variable(PathExpr::new(vec![PathSegment::AttrName("x".into())])),
+                None,
+            )
+        };
+        let mut grouped = ParallelBatchStream::new_json_files(paths, 2, vec!["x".into()])
+            .unwrap()
+            .into_aggregate(
+                vec![],
+                vec![
+                    NamedAggregate::new(Aggregate::Sum(SumAggregate::new(), variable()), Some("sum".into())),
+                    NamedAggregate::new(Aggregate::Avg(AvgAggregate::new(), variable()), Some("avg".into())),
+                ],
+                Variables::new(),
+                Arc::new(FunctionRegistry::new()),
+                MemoryTracker::default(),
+            );
+        let batch = grouped.next_batch().unwrap().unwrap();
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&batch.columns[0], 0),
+            Value::Float(OrderedFloat(1.0))
+        );
+        assert_eq!(
+            BatchToRowAdapter::extract_value(&batch.columns[1], 0),
+            Value::Float(OrderedFloat(1.0 / 3.0))
+        );
+    }
+
+    #[test]
+    fn multifile_gzip_count_checks_decoder_trailer() {
+        use std::io::Write;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("corrupt.jsonl.gz");
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(b"{\"ignored\": 1}\n").unwrap();
+        let mut bytes = encoder.finish().unwrap();
+        let footer = bytes.len() - 8;
+        bytes[footer] ^= 1;
+        std::fs::write(&path, bytes).unwrap();
+        let mut grouped = file_count(
+            ParallelBatchStream::new_json_files(vec![path], 4, vec![]).unwrap(),
+            MemoryTracker::default(),
+        );
+        assert!(matches!(grouped.next_batch(), Err(StreamError::Reader)));
+        assert!(grouped.scan.workers.borrow().is_empty());
     }
 
     #[test]

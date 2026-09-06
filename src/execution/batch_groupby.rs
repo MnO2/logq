@@ -15,6 +15,10 @@ use ordered_float::OrderedFloat;
 use std::mem::size_of;
 use std::sync::Arc;
 
+#[cfg(any(feature = "bench-internals", test))]
+#[path = "group_probe.rs"]
+pub mod probe;
+
 pub(crate) struct BatchGroupByOperator {
     child: Box<dyn BatchStream>,
     group_keys: Vec<PathExpr>,

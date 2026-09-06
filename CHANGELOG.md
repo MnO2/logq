@@ -6,6 +6,10 @@
 - Add answer-checked narrow/wide, predicate-selectivity, plain/gzip and 1/8/32/125-file controls, with paired CPU/wall measurements and reproducible input manifests. Track independent follow-on work in [the milestone plan](docs/plans/2026-09-05-performance-next-milestones.md).
 - Execute eligible JSONL shards through one bounded worker pool with per-file filtering, projection and partial aggregation, including independent gzip decoders. Preserve ordered merging and cancellation; non-regular inputs retain lazy sequential processing so later FIFOs cannot block earlier errors.
 - Use flate2's Rust zlib-rs backend after isolated decode/parse/CLI comparisons; keep the pinned flate2 version and Rust 1.85 compatibility requirement.
+- Pipeline eligible single-gzip full aggregations through bounded decoded chunks and worker-local filters, expressions and aggregate states. Count the decoder within `--threads`; preserve one-thread and memory-budget fallbacks, decoded-prefix errors, cancellation and worker teardown.
+- Bind batch calls to their actual function definitions and specialize trusted Float32 Plus chains into typed output, preserving per-step rounding, custom functions, masks, duplicate aliases and lazy errors. Serialize borrowed JSON/NDJSON records without rebuilding object trees, retaining exact public float formatting.
+- Add diagnostic aggregation, expression, reader/task and gzip phase probes. Keep plain aggregate task scheduling unchanged after skew controls; do not enable broader kernels from isolated timings alone.
+- Resolve the existing lru dependency to 0.18.2 for RUSTSEC-2026-0253 and pass the advisory gates.
 
 ## Unreleased — performance expansion (2026-09-05)
 

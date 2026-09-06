@@ -11,6 +11,8 @@ pub mod batch_scan;
 pub(crate) mod batch_streaming_groupby;
 pub mod batch_tokenizer;
 pub mod datasource;
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) mod expression_probe;
 pub mod field_analysis;
 pub mod field_parser;
 pub(crate) mod json_batch_scan;

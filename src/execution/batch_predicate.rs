@@ -479,12 +479,12 @@ fn evaluate_scalar_truth(
             names: batch.names.clone(),
             types: Vec::new(),
         };
-        let mut bound = BoundFormula::bind(formula, &schema, variables);
+        let mut bound = BoundFormula::bind(formula, &schema, variables, registry);
         for row in 0..batch.len {
             if !active.is_set(row) {
                 continue;
             }
-            match bound.evaluate(batch, row, registry)? {
+            match bound.evaluate(batch, row)? {
                 Some(true) => result.yes.set(row),
                 None => result.unknown.set(row),
                 Some(false) => {}

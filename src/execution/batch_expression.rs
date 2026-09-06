@@ -10,6 +10,9 @@ use crate::execution::types::{
     with_like_regex,
 };
 use crate::functions::FunctionRegistry;
+use crate::functions::registry::ResolvedFunction;
+use crate::simd::bitmap::Bitmap;
+use crate::simd::padded_vec::PaddedVecBuilder;
 use crate::syntax::ast::{CastType, PathExpr, PathSegment};
 
 pub(crate) enum BoundExpression {
@@ -19,7 +22,7 @@ pub(crate) enum BoundExpression {
         path: PathExpr,
     },
     Function {
-        name: String,
+        function: Option<ResolvedFunction>,
         arguments: Vec<Self>,
         values: Vec<Value>,
     },
@@ -53,7 +56,12 @@ impl BoundExpression {
         }
     }
 
-    pub(crate) fn bind(expression: &Expression, schema: &BatchSchema, scope: &Variables) -> Self {
+    pub(crate) fn bind(
+        expression: &Expression,
+        schema: &BatchSchema,
+        scope: &Variables,
+        registry: &FunctionRegistry,
+    ) -> Self {
         match expression {
             Expression::Constant(value) => Self::Constant(value.clone()),
             Expression::Variable(path) => {
@@ -70,42 +78,41 @@ impl BoundExpression {
                 }
             }
             Expression::Function(name, arguments) => Self::Function {
-                name: name.clone(),
+                // Missing functions remain lazy: unknown-function errors occur
+                // only when this occurrence executes, after its arguments.
+                function: registry.resolve(name),
                 arguments: arguments
                     .iter()
                     .map(|argument| match argument {
-                        Named::Expression(expression, _) => Self::bind(expression, schema, scope),
+                        Named::Expression(expression, _) => Self::bind(expression, schema, scope, registry),
                         Named::Star => unreachable!("planner checks function arguments"),
                     })
                     .collect(),
                 values: Vec::with_capacity(arguments.len()),
             },
-            Expression::Cast(inner, kind) => Self::Cast(Box::new(Self::bind(inner, schema, scope)), kind.clone()),
-            Expression::Logic(formula) => Self::Logic(Box::new(BoundFormula::bind(formula, schema, scope))),
+            Expression::Cast(inner, kind) => {
+                Self::Cast(Box::new(Self::bind(inner, schema, scope, registry)), kind.clone())
+            }
+            Expression::Logic(formula) => Self::Logic(Box::new(BoundFormula::bind(formula, schema, scope, registry))),
             Expression::Branch(branches, otherwise) => Self::Branch(
                 branches
                     .iter()
                     .map(|(condition, value)| {
                         (
-                            BoundFormula::bind(condition, schema, scope),
-                            Self::bind(value, schema, scope),
+                            BoundFormula::bind(condition, schema, scope, registry),
+                            Self::bind(value, schema, scope, registry),
                         )
                     })
                     .collect(),
                 otherwise
                     .as_ref()
-                    .map(|value| Box::new(Self::bind(value, schema, scope))),
+                    .map(|value| Box::new(Self::bind(value, schema, scope, registry))),
             ),
             Expression::Subquery(_) => unreachable!("subqueries stay in row execution"),
         }
     }
 
-    pub(crate) fn evaluate(
-        &mut self,
-        batch: &ColumnBatch,
-        row: usize,
-        registry: &FunctionRegistry,
-    ) -> ExpressionResult<Value> {
+    pub(crate) fn evaluate(&mut self, batch: &ColumnBatch, row: usize) -> ExpressionResult<Value> {
         match self {
             Self::Constant(value) => Ok(value.clone()),
             Self::Column { index, path } => {
@@ -142,23 +149,26 @@ impl BoundExpression {
                 Ok(apply_path_to_value(path, 1, value))
             }
             Self::Function {
-                name,
+                function,
                 arguments,
                 values,
             } => {
                 values.clear();
                 for argument in arguments {
-                    values.push(argument.evaluate(batch, row, registry)?);
+                    values.push(argument.evaluate(batch, row)?);
                 }
-                let result = registry.call(name, values);
+                let result = function
+                    .as_ref()
+                    .ok_or(ExpressionError::UnknownFunction)
+                    .and_then(|function| function.call(values));
                 // Keep allocation capacity, but not the last row's owned
                 // string/object arguments when a later branch skips this call.
                 values.clear();
                 result
             }
-            Self::Cast(inner, kind) => cast_value(inner.evaluate(batch, row, registry)?, kind),
+            Self::Cast(inner, kind) => cast_value(inner.evaluate(batch, row)?, kind),
             Self::Logic(formula) => Ok(formula
-                .evaluate(batch, row, registry)
+                .evaluate(batch, row)
                 .map_err(|_| ExpressionError::KeyNotFound)?
                 .map_or(Value::Null, Value::Boolean)),
             Self::Branch(branches, otherwise) => {
@@ -166,16 +176,16 @@ impl BoundExpression {
                     // Match Expression's existing EvaluateError ->
                     // ExpressionError conversion at a formula boundary.
                     if condition
-                        .evaluate(batch, row, registry)
+                        .evaluate(batch, row)
                         .map_err(|_| ExpressionError::KeyNotFound)?
                         == Some(true)
                     {
-                        return value.evaluate(batch, row, registry);
+                        return value.evaluate(batch, row);
                     }
                 }
                 otherwise
                     .as_mut()
-                    .map_or(Ok(Value::Null), |value| value.evaluate(batch, row, registry))
+                    .map_or(Ok(Value::Null), |value| value.evaluate(batch, row))
             }
         }
     }
@@ -189,6 +199,66 @@ impl BoundExpression {
             }
             _ => None,
         }
+    }
+
+    /// A deliberately narrow, total kernel: a Float32 root followed by trusted
+    /// built-in Plus calls with Float constants. No user function, branch, cast,
+    /// Mixed value or integer operation can enter this path.
+    pub(crate) fn float_plus_column(&self, batch: &ColumnBatch) -> Option<TypedColumn> {
+        let mut constants = Vec::new();
+        let mut expression = self;
+        let index = loop {
+            match expression {
+                Self::Function {
+                    function: Some(function),
+                    arguments,
+                    ..
+                } if function.is_builtin_plus() => {
+                    let [left, Self::Constant(Value::Float(right))] = arguments.as_slice() else {
+                        return None;
+                    };
+                    constants.push(right.into_inner());
+                    expression = left;
+                }
+                other => break other.direct_column()?,
+            }
+        };
+        if constants.is_empty() {
+            return None;
+        }
+        let TypedColumn::Float32 {
+            data,
+            null: input_null,
+            missing: input_missing,
+        } = &batch.columns[index]
+        else {
+            return None;
+        };
+        let mut output = PaddedVecBuilder::with_capacity(batch.len + 8);
+        let mut null = Bitmap::all_set(batch.len);
+        let mut missing = Bitmap::all_set(batch.len);
+        for row in 0..batch.len {
+            if !batch.selection.is_active(row, batch.len) || !input_missing.is_set(row) {
+                missing.unset(row);
+                output.push(0.0);
+            } else if !input_null.is_set(row) {
+                null.unset(row);
+                output.push(0.0);
+            } else {
+                let mut value = data[row];
+                // Walk from the root outwards and round at every f32 step.
+                // Collapsing/reassociating constants changes values near 2^24.
+                for constant in constants.iter().rev() {
+                    value += constant;
+                }
+                output.push(value);
+            }
+        }
+        Some(TypedColumn::Float32 {
+            data: output.seal(),
+            null,
+            missing,
+        })
     }
 }
 
@@ -225,19 +295,24 @@ impl BoundFormula {
         }
     }
 
-    pub(crate) fn bind(formula: &Formula, schema: &BatchSchema, scope: &Variables) -> Self {
-        let bind = |expression: &Expression| BoundExpression::bind(expression, schema, scope);
+    pub(crate) fn bind(
+        formula: &Formula,
+        schema: &BatchSchema,
+        scope: &Variables,
+        registry: &FunctionRegistry,
+    ) -> Self {
+        let bind = |expression: &Expression| BoundExpression::bind(expression, schema, scope, registry);
         match formula {
             Formula::Constant(value) => Self::Constant(*value),
             Formula::And(left, right) => Self::And(
-                Box::new(Self::bind(left, schema, scope)),
-                Box::new(Self::bind(right, schema, scope)),
+                Box::new(Self::bind(left, schema, scope, registry)),
+                Box::new(Self::bind(right, schema, scope, registry)),
             ),
             Formula::Or(left, right) => Self::Or(
-                Box::new(Self::bind(left, schema, scope)),
-                Box::new(Self::bind(right, schema, scope)),
+                Box::new(Self::bind(left, schema, scope, registry)),
+                Box::new(Self::bind(right, schema, scope, registry)),
             ),
-            Formula::Not(inner) => Self::Not(Box::new(Self::bind(inner, schema, scope))),
+            Formula::Not(inner) => Self::Not(Box::new(Self::bind(inner, schema, scope, registry))),
             Formula::Predicate(relation, left, right) => Self::Predicate(relation.clone(), bind(left), bind(right)),
             Formula::IsNull(value) => Self::IsNull(bind(value), false),
             Formula::IsNotNull(value) => Self::IsNull(bind(value), true),
@@ -251,20 +326,15 @@ impl BoundFormula {
         }
     }
 
-    pub(crate) fn evaluate(
-        &mut self,
-        batch: &ColumnBatch,
-        row: usize,
-        registry: &FunctionRegistry,
-    ) -> EvaluateResult<Option<bool>> {
+    pub(crate) fn evaluate(&mut self, batch: &ColumnBatch, row: usize) -> EvaluateResult<Option<bool>> {
         match self {
             Self::Constant(value) => Ok(Some(*value)),
             Self::And(left, right) => {
-                let left = left.evaluate(batch, row, registry)?;
+                let left = left.evaluate(batch, row)?;
                 if left == Some(false) {
                     return Ok(Some(false));
                 }
-                let right = right.evaluate(batch, row, registry)?;
+                let right = right.evaluate(batch, row)?;
                 Ok(match (left, right) {
                     (_, Some(false)) => Some(false),
                     (Some(true), Some(true)) => Some(true),
@@ -272,36 +342,31 @@ impl BoundFormula {
                 })
             }
             Self::Or(left, right) => {
-                let left = left.evaluate(batch, row, registry)?;
+                let left = left.evaluate(batch, row)?;
                 if left == Some(true) {
                     return Ok(Some(true));
                 }
-                let right = right.evaluate(batch, row, registry)?;
+                let right = right.evaluate(batch, row)?;
                 Ok(match (left, right) {
                     (_, Some(true)) => Some(true),
                     (Some(false), Some(false)) => Some(false),
                     _ => None,
                 })
             }
-            Self::Not(inner) => Ok(inner.evaluate(batch, row, registry)?.map(|value| !value)),
-            Self::Predicate(relation, left, right) => Ok(relation.compare_ref(
-                &left.evaluate(batch, row, registry)?,
-                &right.evaluate(batch, row, registry)?,
-            )?),
-            Self::IsNull(value, negated) => {
-                Ok(Some((value.evaluate(batch, row, registry)? == Value::Null) != *negated))
+            Self::Not(inner) => Ok(inner.evaluate(batch, row)?.map(|value| !value)),
+            Self::Predicate(relation, left, right) => {
+                Ok(relation.compare_ref(&left.evaluate(batch, row)?, &right.evaluate(batch, row)?)?)
             }
-            Self::IsMissing(value, negated) => Ok(Some(
-                (value.evaluate(batch, row, registry)? == Value::Missing) != *negated,
-            )),
-            Self::Expression(value) => Ok(match value.evaluate(batch, row, registry)? {
+            Self::IsNull(value, negated) => Ok(Some((value.evaluate(batch, row)? == Value::Null) != *negated)),
+            Self::IsMissing(value, negated) => Ok(Some((value.evaluate(batch, row)? == Value::Missing) != *negated)),
+            Self::Expression(value) => Ok(match value.evaluate(batch, row)? {
                 Value::Boolean(value) => Some(value),
                 Value::Null | Value::Missing => None,
                 _ => Some(true),
             }),
             Self::Like(value, pattern, negated) => {
-                let value = value.evaluate(batch, row, registry)?;
-                let pattern = pattern.evaluate(batch, row, registry)?;
+                let value = value.evaluate(batch, row)?;
+                let pattern = pattern.evaluate(batch, row)?;
                 match (&value, &pattern) {
                     (Value::Null | Value::Missing, _) | (_, Value::Null | Value::Missing) => Ok(None),
                     (Value::String(value), Value::String(pattern)) => Ok(Some(
@@ -311,13 +376,13 @@ impl BoundFormula {
                 }
             }
             Self::In(value, items, negated) => {
-                let value = value.evaluate(batch, row, registry)?;
+                let value = value.evaluate(batch, row)?;
                 if matches!(value, Value::Null | Value::Missing) {
                     return Ok(None);
                 }
                 let mut unknown = false;
                 for item in items {
-                    let item = item.evaluate(batch, row, registry)?;
+                    let item = item.evaluate(batch, row)?;
                     if matches!(item, Value::Null | Value::Missing) {
                         unknown = true;
                     } else if value == item {
@@ -416,6 +481,78 @@ mod tests {
     }
 
     #[test]
+    fn bound_calls_keep_custom_names_and_evaluate_arguments_before_null_propagation() {
+        use crate::functions::{Arity, FunctionDef, NullHandling};
+        let schema = BatchSchema {
+            names: vec![],
+            types: vec![],
+        };
+        let batch = ColumnBatch {
+            columns: vec![],
+            names: vec![],
+            selection: SelectionVector::All,
+            len: 1,
+        };
+        let mut registry = FunctionRegistry::new();
+        registry
+            .register(FunctionDef {
+                name: "add".into(),
+                arity: Arity::Exact(2),
+                null_handling: NullHandling::Custom,
+                func: Box::new(|_| Ok(Value::Int(77))),
+            })
+            .unwrap();
+        registry
+            .register(FunctionDef {
+                name: "propagate".into(),
+                arity: Arity::Exact(2),
+                null_handling: NullHandling::Propagate,
+                func: Box::new(|_| Ok(Value::Int(88))),
+            })
+            .unwrap();
+        let expressions = [
+            (
+                Expression::Function(
+                    "AdD".into(),
+                    vec![
+                        Named::Expression(Expression::Constant(Value::Null), None),
+                        Named::Expression(Expression::Constant(Value::Missing), None),
+                    ],
+                ),
+                Ok(Value::Int(77)),
+            ),
+            (
+                Expression::Function(
+                    "propagate".into(),
+                    vec![
+                        Named::Expression(Expression::Constant(Value::Missing), None),
+                        Named::Expression(invalid_cast(), None),
+                    ],
+                ),
+                Err(ExpressionError::TypeMismatch),
+            ),
+            (
+                Expression::Function("unknown".into(), vec![Named::Expression(invalid_cast(), None)]),
+                Err(ExpressionError::TypeMismatch),
+            ),
+            (
+                Expression::Branch(
+                    vec![(
+                        Box::new(Formula::Constant(false)),
+                        Box::new(Expression::Function("unknown".into(), vec![])),
+                    )],
+                    Some(Box::new(Expression::Constant(Value::Int(3)))),
+                ),
+                Ok(Value::Int(3)),
+            ),
+        ];
+        for (expression, expected) in expressions {
+            let mut bound = BoundExpression::bind(&expression, &schema, &Variables::new(), &registry);
+            assert_eq!(bound.evaluate(&batch, 0), expected, "{expression:?}");
+        }
+    }
+
+    #[test]
     fn nested_bound_paths_match_scalar_with_masks_wildcards_and_scope() {
         let root = Value::Object(Box::new(
             [
@@ -485,13 +622,13 @@ mod tests {
             vec![PathSegment::ArrayIndex("root".into(), 8)],
         ] {
             let expression = Expression::Variable(PathExpr::new(path));
-            let mut bound = BoundExpression::bind(&expression, &schema, &scope);
+            let mut bound = BoundExpression::bind(&expression, &schema, &scope, &registry);
             for row in 0..len {
                 let variables = [("root".into(), BatchToRowAdapter::extract_value(&batch.columns[0], row))]
                     .into_iter()
                     .collect();
                 assert_eq!(
-                    bound.evaluate(&batch, row, &registry),
+                    bound.evaluate(&batch, row),
                     expression.expression_value_impl(&variables, Some(&scope), &registry),
                     "{expression:?}, row={row}"
                 );
@@ -520,12 +657,12 @@ mod tests {
         scope.insert("fallback".into(), Value::Int(9));
         // Existing input columns win over scope, including an explicit MISSING.
         scope.insert("x".into(), Value::Int(100));
-        let mut bound = BoundExpression::bind(&expression, &schema, &scope);
+        let mut bound = BoundExpression::bind(&expression, &schema, &scope, &registry);
         for (row, input) in inputs.into_iter().enumerate() {
             let mut variables = Variables::new();
             variables.insert("x".into(), input);
             let scalar = expression.expression_value_impl(&variables, Some(&scope), &registry);
-            let actual = bound.evaluate(&batch, row, &registry);
+            let actual = bound.evaluate(&batch, row);
             assert_eq!(actual, scalar, "row={row}, expression={expression:?}");
         }
     }

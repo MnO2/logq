@@ -6,7 +6,7 @@ use ordered_float::OrderedFloat;
 pub fn register(registry: &mut FunctionRegistry) -> Result<(), RegistryError> {
     // ── Existing operator-style functions ──
 
-    registry.register(FunctionDef {
+    registry.register_builtin_plus(FunctionDef {
         name: "Plus".to_string(),
         arity: Arity::Exact(2),
         null_handling: NullHandling::Propagate,

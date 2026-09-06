@@ -73,6 +73,75 @@ fn arithmetic_cast_coalesce_and_string_projections_stay_batch() {
 }
 
 #[test]
+fn float_plus_chains_match_rows_across_masks_aliases_and_batch_type_changes() {
+    // Decimal spelling makes the first complete batch Float32, including 2^24
+    // where sixteen rounded +0.5 steps differ from one folded +8 operation.
+    let mut input = String::new();
+    for row in 0..2200 {
+        input.push_str(match row % 6 {
+            0 => "{\"v\":16777216.0,\"keep\":true}\n",
+            1 => "{\"v\":1.25,\"keep\":true}\n",
+            2 => "{\"v\":null,\"keep\":true}\n",
+            3 => "{\"keep\":true}\n",
+            4 => "{\"v\":-2.5,\"keep\":false}\n",
+            _ => "{\"v\":-0.0,\"keep\":true}\n",
+        });
+    }
+    // Later batches can change to Mixed/Int32 and must conservatively use the
+    // scalar evaluator without stale runtime type assumptions.
+    input.push_str("{\"v\":3,\"keep\":true}\n{\"v\":\"bad\",\"keep\":false}\n");
+    let chain = format!("v{}", " + 0.5".repeat(16));
+    for sql in [
+        format!("select {chain} as n, v + 1.25 as other from it where keep = true"),
+        format!("select v as n, v + 1.25 as other, {chain} as n from it where keep = true"),
+        format!("select sum({chain}) as n, count({chain}) as c from it where keep = true"),
+        format!("select {chain} as n from it where keep = true order by n asc limit 8"),
+    ] {
+        assert_batch(&sql);
+        let expected = run(&input, &sql, 1, true);
+        assert!(
+            expected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&expected.stderr)
+        );
+        for threads in [1, 4] {
+            let actual = run(&input, &sql, threads, false);
+            assert!(actual.status.success(), "{}", String::from_utf8_lossy(&actual.stderr));
+            assert_eq!(actual.stdout, expected.stdout, "{sql}, threads={threads}");
+        }
+    }
+    let first = values(run(
+        "{\"v\":16777216.0}\n",
+        &format!("select {chain} as n from it"),
+        1,
+        false,
+    ));
+    assert_eq!(first, vec![json!({"n":16777216})]);
+}
+
+#[test]
+fn float_plus_chains_preserve_prefix_limit_and_overwritten_errors() {
+    let input = "{\"v\":1.25,\"x\":\"12\",\"keep\":true}\n{\"v\":2.5,\"x\":\"bad\",\"keep\":true}\n";
+    for sql in [
+        "select v + 0.5 as n, cast(x as int) as x from it limit 1",
+        "select v + 0.5 as n, cast(x as int) as x from it where keep = true limit 1",
+        "select cast(x as int) as n, v + 0.5 as n from it",
+        "select v + 0.5 as n, cast(x as int) as n from it",
+    ] {
+        let expected = run(input, sql, 1, true);
+        for threads in [1, 4] {
+            let actual = run(input, sql, threads, false);
+            assert_eq!(actual.status.success(), expected.status.success(), "{sql}");
+            if expected.status.success() {
+                assert_eq!(actual.stdout, expected.stdout, "{sql}");
+            } else {
+                assert_eq!(actual.stderr, expected.stderr, "{sql}");
+            }
+        }
+    }
+}
+
+#[test]
 fn case_and_coalesce_only_evaluate_selected_branches() {
     let input = "{\"x\":4,\"keep\":true}\n{\"x\":9,\"keep\":false}\n{\"x\":null}\n";
     for sql in [
