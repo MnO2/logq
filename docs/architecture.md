@@ -1,281 +1,261 @@
 # logq Architecture
 
-This document describes how logq processes a query from input to output. logq follows a classic database query engine pipeline: parse, plan, execute.
+logq parses PartiQL into a logical plan, converts that plan to executable nodes,
+and pulls results through row or columnar batch operators. Both paths share the
+runtime value model, function registry, and query memory tracker.
 
-```
-  SQL string
-      |
-      v
-  +-----------+     +----------+     +-----------------+     +---------------+     +-----------+
-  |  Parser   | --> | Desugarer| --> | Logical Planner | --> | Physical Plan | --> | Execution |
-  | (nom)     |     |          |     |                 |     |               |     | (streams) |
-  +-----------+     +----------+     +-----------------+     +---------------+     +-----------+
-   syntax/           syntax/          logical/                logical/              execution/
-   parser.rs         desugar.rs       parser.rs               types.rs              stream.rs
-                                                                                    types.rs
+```text
+SQL → syntax/parser.rs → syntax/desugar.rs → logical/parser.rs
+                                                    ↓
+                                             logical/types.rs
+                                                    ↓
+                                             execution/types.rs
+                                               ↙          ↘
+                                       RecordStream    BatchStream
+                                               ↖          ↙
+                                           output in app.rs
 ```
 
 ## Source Layout
 
-```
-src/
-  main.rs                   CLI entry point and clap derive definition
-  app.rs                    Orchestrates the pipeline: parse → plan → execute → output
-  common/
-    types.rs                Value enum, DataSource, path resolution, type helpers
-  syntax/
-    ast.rs                  AST node definitions
-    parser.rs               nom-based SQL/PartiQL parser
-    desugar.rs              AST rewriting pass (BETWEEN, COALESCE, NULLIF)
-  logical/
-    parser.rs               AST → logical plan translation
-    types.rs                Logical plan nodes, physical plan conversion
-  execution/
-    types.rs                Physical plan nodes, expression evaluation
-    stream.rs               RecordStream trait and all stream implementations
-    datasource.rs           Log format readers (ELB, ALB, S3, Squid, JSONL, custom regex)
-```
+| Location | Responsibility |
+| --- | --- |
+| `src/main.rs` | clap commands, table specifications, thread and memory options |
+| `src/app.rs` | Parse/plan orchestration, diagnostics, output, library entry points |
+| `src/common/types.rs` | Runtime `Value`, paths, variables, data sources |
+| `src/syntax/` | AST, nom parser, desugaring |
+| `src/logical/` | Logical plan construction and physical conversion |
+| `src/execution/types.rs` | Physical nodes, pipeline selection, expression and aggregate behavior |
+| `src/execution/stream.rs` | Row records and pull operators |
+| `src/execution/batch*.rs` | Typed batches, scans, predicates, projection, grouping, sorting, limits |
+| `src/execution/json_reader.rs`, `json_column_builder.rs`, `json_batch_scan.rs` | JSON validation, selective retention, direct column construction |
+| `src/execution/datasource.rs`, `regex_format.rs` | Readers, compression detection, built-in and custom formats |
+| `src/execution/field_analysis.rs` | Required-field analysis and scan projection |
+| `src/execution/parallel.rs`, `json_gzip.rs` | Bounded worker queues, file tasks, parallel aggregation, gzip pipeline |
+| `src/execution/memory.rs` | Shared retained-state estimates and reservations |
+| `src/execution/prefix_sort.rs` | Sort-key encoding and bounded top-N heap |
+| `src/functions/` | Registered scalar functions and shared function handles |
+| `src/simd/` | Typed kernels, bitmaps, selection vectors, padded storage |
 
 ## Pipeline Stages
 
 ### 1. Parsing (`syntax/parser.rs`)
 
-The parser uses [nom](https://github.com/Geal/nom) parser combinators to transform a SQL string into an AST. It handles:
+The nom parser turns the query into `ast::Query`: either a boxed
+`SelectStatement` or a `SetOp` with left/right queries. SELECT statements contain
+projection, FROM, and optional filtering, grouping, HAVING, ordering, and LIMIT
+clauses. Keywords are case-insensitive. Expressions include nested paths, array
+indices, literals, arithmetic, boolean operators, casts, function calls, CASE,
+and subqueries. The application rejects unconsumed query text.
 
-- Keywords (case-insensitive via `tag_no_case`)
-- Identifiers (quoted and unquoted)
-- Literals (integers, floats, strings, booleans, NULL, MISSING)
-- Expressions with operator precedence (arithmetic, comparison, boolean)
-- Postfix operators (IS NULL, IS MISSING, LIKE, BETWEEN, IN, CAST)
-- Full SELECT statements, set operations (UNION/INTERSECT/EXCEPT), and subqueries
-
-The parser produces `ast::Query`, which is either a `Select(SelectStatement)` or a `SetOp { op, all, left, right }` for compound queries.
-
-**Key AST types** (`syntax/ast.rs`):
-
-```
-Query
-├── Select(SelectStatement)
-│   ├── distinct: bool
-│   ├── select_clause: Vec<Expression>
-│   ├── from_clause: FromClause
-│   │   ├── Tables(Vec<TableReference>)
-│   │   └── Join { left, right, join_type, condition }
-│   ├── where_expr: Option<Expression>
-│   ├── group_by: Vec<Expression>
-│   ├── having: Option<Expression>
-│   ├── order_by: Vec<OrderByExpr>
-│   └── limit: Option<i32>
-└── SetOp { op, all, left, right }
-
-Expression
-├── Column(PathExpr)         -- field reference, possibly nested (a.b.c, d[0])
-├── Value(Value)             -- literal
-├── BinaryOperator(op, l, r) -- +, -, *, /, =, !=, <, >, AND, OR, ||
-├── UnaryOperator(op, expr)  -- NOT, negation
-├── FuncCall(name, args)     -- scalar or aggregate function
-├── CaseWhen(branches, else) -- multi-branch CASE
-├── IsNull / IsNotNull       -- NULL checks
-├── IsMissing / IsNotMissing -- MISSING checks
-├── Like / NotLike           -- pattern matching
-├── In / NotIn               -- membership test
-├── Between / NotBetween     -- range check
-├── Cast(expr, type)         -- type conversion
-├── SelectValue(Box<Expr>)   -- SELECT VALUE wrapper
-└── Subquery(Box<Query>)     -- non-correlated subquery
-```
+The AST types in `syntax/ast.rs` are the source of truth for supported syntax;
+`tests/conformance/` records selected PartiQL examples and explicit exclusions.
 
 ### 2. Desugaring (`syntax/desugar.rs`)
 
-A tree-walking pass that rewrites syntactic sugar into core forms before logical planning:
+This recursive pass rewrites syntactic sugar before planning:
 
-| Input | Rewritten to |
+| Input | Core behavior |
 | --- | --- |
 | `x BETWEEN a AND b` | `x >= a AND x <= b` |
 | `x NOT BETWEEN a AND b` | `x < a OR x > b` |
-| `COALESCE(a, b, c)` | `CASE WHEN a IS NOT NULL THEN a WHEN b IS NOT NULL THEN b ELSE c END` |
+| `COALESCE(a, b, ...)` | CASE branches skip both NULL and MISSING |
 | `NULLIF(a, b)` | `CASE WHEN a = b THEN NULL ELSE a END` |
 
-This keeps the logical planner simpler by reducing the number of expression variants it must handle.
+Rewrites also traverse nested expressions and subqueries. Changes here must
+preserve three-valued logic and branch evaluation behavior.
 
 ### 3. Logical Planning (`logical/parser.rs`)
 
-Translates the desugared AST into a tree of logical plan nodes. This stage:
+Planning resolves table references against `DataSourceRegistry`, separates
+aggregate inputs from scalar projection, and builds an operator tree. Filters
+implement WHERE and HAVING at their respective stages. Projection, grouping,
+deduplication, ordering, and limits are placed according to query semantics;
+they are not interchangeable passes.
 
-- Resolves table references against the provided `DataSource`
-- Separates aggregate expressions from scalar expressions in SELECT
-- Builds the plan bottom-up: DataSource → Filter → Map → GroupBy → Having → OrderBy → Limit → Distinct
-- Handles JOIN planning (cross, left, inner, and right joins, with hash joins for equality keys)
-- Recursively plans subqueries with shared DataSource context
-- Plans set operations (Union, Intersect, Except) over two sub-plans
+Plans include `DataSource`, `Filter`, `Map`, `GroupBy`, `Distinct`, `OrderBy`,
+`Limit`, cross/outer/hash joins, and set operations. Equality join keys can use a
+hash join with an optional residual predicate; other joins use nested loops.
+Non-correlated subqueries are planned recursively with the same source registry.
 
-**Logical plan nodes** (`logical/types.rs`):
+The logical layer distinguishes value-producing `Expression` from boolean
+`Formula`. Physical conversion in `logical/types.rs` builds execution nodes and
+places generated constant bindings in a `Variables` map.
 
-```
-Node
-├── DataSource(source, bindings)
-├── Filter(Formula, child)
-├── Map(Vec<Named>, child)
-├── GroupBy(keys, aggregates, group_as, child)
-├── Limit(n, child)
-├── OrderBy(specs, child)
-├── Distinct(child)
-├── CrossJoin(left, right)
-├── LeftJoin(left, right, condition)
-├── Union(left, right, all)
-├── Intersect(left, right, all)
-└── Except(left, right, all)
-```
+### 4. Pipeline Selection (`execution/types.rs`)
 
-**Expression vs Formula**: The logical layer distinguishes between:
-- `Expression` — produces a value (column reference, function call, constant)
-- `Formula` — produces a boolean (comparison predicates, AND/OR/NOT, IS NULL)
+`Node::get_with_memory_limit` creates one query-wide memory tracker, resolves
+`--threads 0`, determines required source fields, and constructs the execution
+tree. Eligible subtrees use columnar operators. Unsupported parents can still
+consume a batch child through `BatchToRowAdapter`.
 
-### 4. Physical Plan (`logical/types.rs` → `execution/types.rs`)
+Fixed-format files support typed batch scans. JSONL batching requires a known set
+of required root fields, which can be empty for `count(*)`; nested selected
+values use dynamic `Value` storage. Bare scans, stdin, table bindings, regex
+formats, joins, set operations, and some expression/path shapes use row
+operators. Prefix LIMIT paths preserve demand-driven parsing and expression
+evaluation so they need not read later invalid rows.
 
-The `Node::physical()` method on logical nodes converts them to physical plan nodes. This stage:
+`logq explain` reports the top-level batch/row capability and the first fallback
+reason, along with requested/resolved thread settings and an optional budget.
+It does not execute rows or promise that the input will qualify for parallel
+scanning. Pass the same table mappings as the query; otherwise the CLI assumes
+`it:jsonl=stdin`.
 
-- Assigns generated names to constants (e.g., `const_000000000`) and stores their values in a `Variables` map
-- Converts logical `Expression`/`Formula` to physical `Expression`/`Formula` that can be evaluated against records
-- Preserves the tree structure for the executor
+### 5. Execution
 
-Physical nodes mirror logical nodes. Each implements `get(variables) -> Box<dyn RecordStream>` to construct the stream execution tree.
-
-### 5. Execution (`execution/stream.rs`)
-
-Execution uses a **pull-based iterator model**. The `RecordStream` trait defines the interface:
+Both interfaces use a pull model:
 
 ```rust
 trait RecordStream {
     fn next(&mut self) -> StreamResult<Option<Record>>;
     fn close(&self);
 }
+
+trait BatchStream {
+    fn next_batch(&mut self) -> StreamResult<Option<ColumnBatch>>;
+    fn schema(&self) -> &BatchSchema;
+    fn close(&self);
+}
 ```
 
-Each operator wraps one or more child streams and transforms records on demand. The top-level `app::run()` pulls records in a loop and formats output.
+Row operators process insertion-ordered records. Columnar operators normally
+process batches of up to 1,024 rows, using typed columns and selection vectors
+to avoid converting rejected rows back into records. Supported expressions bind
+function handles for repeated evaluation. Typed kernels operate on contiguous
+numeric data and validity bitmaps; mixed values retain scalar semantics.
 
-**Stream implementations**:
+| Operation | Retained state |
+| --- | --- |
+| Scan/filter/project/limit | Current input buffers and batches; queued batches for parallel scans |
+| COUNT/SUM/AVG/MIN/MAX/FIRST/LAST grouping | Group keys and accumulators, rather than every input row |
+| Exact percentile / GROUP AS | Values or records captured for each group |
+| Approximate aggregates | Sketch state per group |
+| DISTINCT | Seen row keys |
+| ORDER BY without LIMIT | Complete sortable result |
+| ORDER BY with LIMIT k | At most k candidate rows in a bounded heap |
+| Cross/outer/hash joins | Materialized join inputs and optional hash state |
+| UNION ALL | Left stream followed by right stream |
+| UNION DISTINCT | Concatenated stream plus deduplication state |
+| INTERSECT/EXCEPT | Right-side membership or multiplicity state, plus distinctness state when needed |
 
-| Stream | Operator | Behavior |
-| --- | --- | --- |
-| `LogFileStream` | Scan | Reads log lines, parses into records |
-| `MapStream` | Project | Evaluates expressions, produces output columns |
-| `FilterStream` | Select | Evaluates predicate, passes matching records |
-| `LimitStream` | Limit | Passes first N records, then stops |
-| `GroupByStream` | GroupBy | Materializes all input, groups, computes aggregates |
-| `DistinctStream` | Distinct | Tracks seen rows with HashSet, deduplicates |
-| `CrossJoinStream` | Cross Join | Nested-loop: for each left row, scans all right rows |
-| `LeftJoinStream` | Left Join | Nested-loop with NULL padding for non-matches |
-| `UnionStream` | Union | Drains left stream, then right stream |
-| `IntersectStream` | Intersect | Materializes right into multiset, filters left |
-| `ExceptStream` | Except | Materializes right into multiset, excludes from left |
-| `InMemoryStream` | OrderBy / Top-N / Subquery | Emits materialized or bounded-heap results |
+Grouping still consumes its input before returning final results. Low-cardinality
+grouping can use little retained state, while high-cardinality grouping can grow
+with the input. Time-bucket grouping does not assume source timestamps are sorted.
 
-`ORDER BY ... LIMIT k` retains at most `k` records in `BoundedTopN`; an unbounded ORDER BY still
-materializes the full input. When `--max-memory` is present, `Node::get_with_memory_limit` selects
-the budget-aware row path and passes one shared soft estimator through all materializing operators.
-The estimator counts owned keys, values, records, hash state, and join inputs, returning
-`MemoryBudgetExceeded` before the configured ceiling is crossed.
+### Parallel Scanning and Aggregation
 
-### Expression Evaluation
+`--threads 0` uses `available_parallelism`; `1` selects sequential execution.
+Eligible regular plain files of at least 16 MiB can use mmap and newline-aligned
+tasks. Worker queues are bounded, and results are consumed in task order.
+Independent JSONL shards can be scheduled at file granularity, including shards
+below the mmap threshold and gzip inputs. Query shape and source type determine
+which route is available.
 
-The physical `Expression::evaluate()` and `Formula::evaluate()` methods in `execution/types.rs` handle runtime computation:
+Eligible COUNT/SUM/AVG plans accumulate groups locally in workers and merge
+partial states. Other aggregate shapes keep their supported sequential operator
+path. A single gzip JSONL file can use one decoder thread and the remaining
+thread budget for parsers on eligible full-aggregation plans; compressed input
+is never memory-mapped. With `--max-memory`, this single-file decoded-chunk route
+is disabled, preserving the sequential decoder's budget behavior.
 
-- **Arithmetic** (`+`, `-`, `*`, `/`): Int/Float coercion, NULL propagation
-- **Comparisons** (`=`, `!=`, `<`, `>`, `<=`, `>=`): Three-valued logic with NULL
-- **Boolean** (`AND`, `OR`, `NOT`): Three-valued logic (NULL propagation)
-- **Functions**: Dispatched by name string to built-in implementations
-- **Aggregates**: Stateful accumulators (Sum, Count, Avg, Min, Max, First, Last, PercentileDisc, ApproxPercentile, ApproxCountDistinct)
+Input files must remain immutable throughout execution. Modifying or truncating
+an active memory mapping is unsupported. Worker cancellation and teardown must
+also preserve LIMIT behavior, earlier input errors, and ordered aggregate semantics.
 
-### NULL and MISSING Semantics
+### Memory Budget
 
-logq implements PartiQL's two-bottom-value system:
+`--max-memory` applies a shared soft estimate to retained execution state in both
+pipelines. Operators reserve estimated bytes for owned keys, values, records,
+hash structures, candidate rows, and materialized batches. Exceeding the limit
+returns `MemoryBudgetExceeded`; there is no spill-to-disk fallback.
 
-- **NULL** — value exists but is unknown (SQL NULL)
-- **MISSING** — field does not exist in the record (PartiQL extension)
-
-Both propagate through arithmetic and comparisons. `IS NULL` and `IS MISSING` test for each specifically. In boolean logic, three-valued logic applies (NULL AND FALSE = FALSE, NULL OR TRUE = TRUE, etc.).
+The estimate is not heap usage or an RSS cap. Scanner buffers, resident mmap
+pages, output formatting, and allocation overhead may sit outside it. In
+particular, the default table renderer buffers all displayed rows separately.
+Use NDJSON or CSV for large results. Memory estimates and actual peak RSS must
+be measured and reported separately in performance work.
 
 ## Data Model
 
-### Value
-
-The core runtime type (`common/types.rs`):
+The runtime `Value` in `common/types.rs` includes:
 
 ```rust
 enum Value {
     Int(i32),
     Float(OrderedFloat<f32>),
     Boolean(bool),
-    String(String),
+    String(CompactString),
     Null,
     Missing,
-    DateTime(chrono::DateTime<FixedOffset>),
-    HttpRequest(HttpRequest),
-    Host(Host),
-    Object(LinkedHashMap<String, Value>),
+    DateTime(chrono::DateTime<chrono::FixedOffset>),
+    HttpRequest(Box<HttpRequest>),
+    Host(Box<Host>),
+    Object(Box<LinkedHashMap<String, Value>>),
     Array(Vec<Value>),
 }
 ```
 
-`Object` and `Array` support nested semi-structured data from JSONL input. Path expressions (`a.b.c`, `d[0]`, `e[*]`, `f.*`) navigate into nested values.
+`Record` wraps an insertion-ordered `Variables` map. Object and array paths resolve
+nested JSON values. Integers are signed 32-bit; floats and numeric aggregate
+SUM/AVG results use Float32 precision. JSON integers outside the Int32 range become
+floats and may lose precision. Large identifiers should be stored as strings.
+Integer arithmetic uses checked operations so overflow is an error in both
+debug and release builds.
 
-### Record
+NULL means an unknown value; MISSING means an absent field. Both participate in
+three-valued arithmetic/comparison logic, and `IS NULL`/`IS MISSING` distinguish
+them. Boolean logic includes rules such as `NULL AND FALSE = FALSE` and
+`NULL OR TRUE = TRUE`.
 
-A `Record` (`execution/stream.rs`) wraps a `LinkedHashMap<String, Value>`, preserving column insertion order. Records flow through the stream pipeline, with each operator reading, transforming, or filtering them.
+Typed columns represent Int32, Float32, Boolean, UTF-8, dictionary UTF-8,
+DateTime, or Mixed values. Their `missing` bitmap marks field presence, and their
+`null` bitmap marks non-NULL values. A value is readable only when both bits are
+set. Dictionary strings and typed kernels must preserve the same results as
+their ordinary UTF-8 and row equivalents.
 
-## Log Format Readers (`execution/datasource.rs`)
+## Log Format Readers
 
-Built-in structured log formats are defined by:
-1. A list of `(field_name, DataType)` pairs describing the schema
-2. A regex (`SPLIT_READER_LINE_REGEX`) that tokenizes each log line into fields
-3. Type-specific parsing for each field (DateTime, Host, HttpRequest, Float, Int, String)
+`ReaderBuilder` constructs readers for paths, sorted file lists, or stdin.
+File compression is detected from a `.gz` extension or gzip magic bytes; stdin
+expects decoded text. Decoding includes all
+concatenated members with errors propagated from later members. Fixed-format
+schemas describe field names and types; tokenization handles quoted log fields. Custom TOML
+regex definitions supply named captures and optional types. CLF and combined
+formats use built-in regex definitions through the same reader layer.
 
-For **JSONL**, each line is parsed with `json::parse()` and recursively converted to the `Value` data model. JSON objects become `Value::Object`, arrays become `Value::Array`, and numbers are auto-typed as Int or Float.
-
-The `RecordRead` trait abstracts over format-specific readers:
-
-```rust
-trait RecordRead {
-    fn read_record(&mut self) -> ReaderResult<Option<Record>>;
-}
-```
-
-`ReaderBuilder` constructs the appropriate reader from a format string and file path (or stdin).
-User-defined regex formats are loaded from TOML; named captures become fields and are parsed by
-the same row-reader layer.
+JSONL requires one JSON object per line. `json_reader.rs` uses serde visitors
+directly: selected scalars can enter column builders without an intermediate
+JSON DOM or record map. Required-field analysis avoids retaining unused roots,
+but discarded values still undergo JSON validation. Selected nested values
+remain dynamic objects/arrays; absent fields become MISSING. Blank lines,
+non-object roots, malformed values, and trailing JSON are errors for consumed
+lines. A prefix LIMIT can stop before later lines are consumed.
 
 ## Output
 
-`app::run()` pulls records from the top-level stream and formats them:
+`app::run_with_memory_limit` consumes records and formats output:
 
-- **Table**: prettytable-rs ASCII table
-- **CSV**: csv crate writer to stdout
-- **JSON**: json crate, builds array of objects then prints
+- **Table:** prettytable-rs, buffers rows until completion.
+- **CSV:** csv writer, streams rows without a header.
+- **JSON:** writes one array incrementally through a buffered writer.
+- **NDJSON:** writes one object per line through a buffered writer.
 
-## Dependencies
-
-| Crate | Purpose |
-| --- | --- |
-| `nom` | Parser combinators |
-| `clap` | CLI argument parsing (derive API) |
-| `chrono` | DateTime handling |
-| `ordered-float` | Hashable/comparable floats |
-| `linked-hash-map` | Order-preserving maps for records |
-| `regex` | Log line tokenization, LIKE patterns |
-| `prettytable-rs` | Table output |
-| `csv` | CSV output |
-| `serde_json` | JSONL parsing and JSON output |
-| `url` | URL parsing for HTTP request fields |
-| `tdigest` | Approximate percentile |
-| `pdatastructs` | HyperLogLog for approx_count_distinct |
-| `thiserror` | Error type derivation |
-| `anyhow` | Error handling |
+JSON output encodes both MISSING and NULL values as `null`; explicit projection
+therefore loses that distinction. Star projection only carries fields present
+in its source record. Serialization uses serde_json. Query and output failures
+propagate to a nonzero CLI exit;
+streaming formats may have already produced partial output, including an
+unclosed JSON array. Consumers must check completion status.
 
 ## Known Limitations
 
-- **No correlated subqueries** — only non-correlated scalar subqueries in WHERE and SELECT
-- **No window functions** — no OVER/PARTITION BY support
-- **Non-equality joins** — fall back to nested-loop execution; equality keys use hash joins
-- **Full materialization** — ORDER BY, GROUP BY, INTERSECT, and EXCEPT load all data into memory
-- **Single-threaded** — no parallel execution
+- Correlated subqueries, window functions, PIVOT, Ion literals, and bag literals
+  are excluded; consult the conformance fixture skips for tested boundaries.
+- Numeric precision is Int32/Float32, without an exact decimal type.
+- Grouping and set results have no promised order without `ORDER BY`.
+- Non-equality joins can require nested loops; stateful operators can exceed
+  available RAM unless a suitable soft budget stops them first.
+- Parallelism is selective, and `explain` is a plan description rather than a
+  runtime profiler. See [the benchmark harness](../scripts/bench_e2e/README.md)
+  for measured thread, memory, parsing, and aggregation controls.

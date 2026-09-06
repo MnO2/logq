@@ -6,8 +6,11 @@ performance work reproducible and to identify gaps, not to claim that the tools
 have identical goals or execution models.
 
 See [the 2026-09-05 implementation and measurements](performance-2026-09-05.md)
-for current results, thread controls and memory tradeoffs. The results below are
-the historical 0.2.0 baseline.
+for later results, thread controls and memory tradeoffs. Additional September 5
+reports cover [expanded workloads](performance-expansion-2026-09-05.md) and
+[operator/file-pipeline controls](performance-next-milestones-2026-09-05.md).
+The results below are the historical 0.2.0 development baseline, measured with
+the `logq 0.1.19` binary listed under Versions; they do not describe the current checkout.
 
 ## Historical 0.2.0 results
 
@@ -94,12 +97,13 @@ Versions:
 - angle-grinder: `ag 0.19.5`
 - hyperfine: `1.20.0`
 
-## Known gaps
+## Historical gaps
 
-These results define the performance work for WS8:
+These results defined the performance work for WS8. The following observations
+describe that baseline; JSONL batching and parallel execution have since changed.
 
 1. **JSONL scan throughput:** even `count(*)` is 13.4× slower than DuckDB. Before
-   changing operators, `--explain` needs to show whether the query used the
+   changing operators, `logq explain` needed to show whether the query used the
    batch or row pipeline and why any fallback occurred.
 2. **String predicates:** the user-agent substring query is the largest gap at
    36.3× versus DuckDB and 3.3× versus angle-grinder. Profile JSON string
@@ -110,7 +114,7 @@ These results define the performance work for WS8:
 4. **Bounded top-N:** resolved in WS8 with an O(N log K) heap. Peak RSS for the
    100 MiB top-10 query fell from 233.3 MiB to 7.8 MiB.
 
-Pipeline-aware `explain` reports the same fallback for all five shared queries:
+The baseline's pipeline-aware `explain` reported the same fallback for all five shared queries:
 the dynamic `jsonl` datasource. There is no isolated filter, grouping, or sort
 node to add to the batch pipeline—the fixed-schema versions of those operators
 already run in batch mode. Dynamic JSON batching would first require schema

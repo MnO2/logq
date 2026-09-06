@@ -6,8 +6,8 @@ logq is a command-line tool for querying and analyzing server log files using [P
 
 ## Performance
 
-End-to-end CLI time on a reproducible 100 MiB JSONL file (Apple M4 Pro, warm
-filesystem cache, five measured runs; lower is better):
+Historical end-to-end CLI baseline from July 11, 2026, on a reproducible 100 MiB
+JSONL file (Apple M4 Pro, warm filesystem cache, five measured runs; lower is better):
 
 | Query | logq | DuckDB | ClickHouse local | angle-grinder |
 | --- | ---: | ---: | ---: | ---: |
@@ -17,9 +17,11 @@ filesystem cache, five measured runs; lower is better):
 | Top-10 latency | 848 ms | 59 ms | 295 ms | unsupported |
 | User-agent substring | 1,982 ms | 55 ms | 300 ms | 593 ms |
 
-logq's streaming queries used 8–9 MiB peak RSS in the same run. See the
-[full results and reproducible methodology](docs/benchmarks.md), including
-versions, memory measurements, limitations, and known optimization gaps.
+logq's streaming queries used 8–9 MiB peak RSS in that run. Subsequent execution
+changes are measured in the September 5 [performance results](docs/performance-2026-09-05.md),
+[expanded workloads](docs/performance-expansion-2026-09-05.md), and
+[operator and file controls](docs/performance-next-milestones-2026-09-05.md).
+See the [benchmark guide](docs/benchmarks.md) for versions, methodology, and limitations.
 
 ## Supported Log Formats
 
@@ -76,16 +78,34 @@ logq query 'select count(*) from it' --table 'it:alb=logs/*'
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output json
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output ndjson
 logq query 'select * from it limit 5' --table it:jsonl=data.jsonl --output csv
+
+# Join files by repeating --table
+logq query 'select a.name, b.value from a join b on a.id = b.aid' \
+  --table a:jsonl=users.jsonl --table b:jsonl=events.jsonl
 ```
+
+Each query needs at least one `--table name:format=path` mapping. Table names must
+be unique; use SQL aliases in the query when a shorter name is useful. File paths
+may contain spaces when the complete mapping is quoted. Commas separate files,
+so literal filenames containing commas are unsupported. Shell quoting preserves
+the mapping as one argument; logq still interprets `*`, `?`, and `[` as glob syntax.
 
 ## Compressed and sharded logs
 
-Gzip input is transparent for every supported format. logq recognizes gzip magic bytes, so a
-compressed file does not need a `.gz` suffix. Compressed files use the sequential reader; plain
-files retain mmap-based parallel scanning when eligible.
+Gzip files are supported for every input format. logq recognizes gzip magic bytes, so a
+compressed file does not need a `.gz` suffix. Eligible JSONL aggregate queries can
+overlap gzip decoding with parallel parsing, and independent JSONL shards can be
+processed concurrently. Other compressed queries use a sequential decoder.
+Plain files can use mmap-based parallel scanning when eligible.
+Concatenated gzip members are read as one input, and corruption or truncation in
+any consumed member is reported as an error.
+Files ending in `.gz` are always treated as compressed. Stdin accepts decoded
+text; use `gzip -dc access.log.gz | logq query 'select count(*) from it' --table it:elb=stdin`
+when piping a compressed log.
 
-A table can combine a glob or a comma-separated list of files. Paths are sorted before scanning,
-which makes results deterministic across runs:
+A table can combine a glob or a comma-separated list of files. Paths are sorted
+and duplicates removed before scanning. Use `ORDER BY` when result order matters;
+path order does not define the output order of grouping or set operations.
 
 ```bash
 # Glob (quote it so the shell does not expand it into separate arguments)
@@ -97,6 +117,22 @@ logq query 'select * from it limit 20' \
 ```
 
 An unmatched glob is reported as an error that includes the original pattern.
+
+Use completed, immutable log files for queries. Parallel scans may memory-map
+plain files; replacing, modifying, or truncating a file during a query is unsupported.
+
+### Thread controls
+
+`query` and `explain` accept `--threads N`: `0` (the default) resolves to the
+available CPU parallelism, `1` selects sequential execution, and larger values
+limit scan workers. Stdin, regex formats, and some query shapes use sequential
+execution even with a larger limit. More threads can increase memory
+use and do not always reduce elapsed time.
+
+```bash
+logq query 'select count(*) from it' --table it:jsonl=data.jsonl --threads 4
+logq explain 'select count(*) from it' --table it:jsonl=data.jsonl --threads 4
+```
 
 ## User-defined regex formats
 
@@ -114,12 +150,14 @@ logq query 'select path, status, body_bytes_sent from it where status >= 500' \
 ```
 
 ```toml
-pattern = '^(?P<remote_addr>\S+) ... (?P<status>\d{3}) ...$'
+pattern = '^(?P<timestamp>\S+) (?P<status>\d{3}) (?P<message>.*)$'
 
 [types]
 status = "int"
-timestamp = "datetime:%d/%b/%Y:%H:%M:%S %z"
+timestamp = "datetime:%+"
 ```
+
+This minimal definition parses lines such as `2026-09-05T12:00:00Z 503 unavailable`.
 
 Every capture must have a unique name. A non-matching line or a typed value that cannot be parsed
 stops the query with a descriptive error. Regex tables support stdin, gzip, globs, and comma lists
@@ -199,7 +237,7 @@ from it group by time_bucket('5m', timestamp) as t
 
 -- HAVING
 select elb_status_code, count(*) as cnt from it
-group by elb_status_code having count(*) > 10
+group by elb_status_code having cnt > 10
 
 -- Percentiles
 select percentile_disc(0.9) within group (order by backend_processing_time asc) as p90
@@ -208,6 +246,11 @@ from it
 -- Approximate count distinct (HyperLogLog)
 select approx_count_distinct(user_agent) from it
 ```
+
+`HAVING` currently refers to aggregate output aliases: use `having cnt > 10`
+with `count(*) as cnt`. Writing the aggregate call again in HAVING is unsupported.
+`GROUP BY` also requires at least one aggregate expression; use `SELECT DISTINCT`
+when only distinct keys are needed.
 
 ### ORDER BY and LIMIT
 
@@ -327,7 +370,7 @@ select nullif(a, 0) from it
 | `host_port(host)` | Extract port from host field | `host_port(backend_and_port)` |
 | `upper(string)` | Convert to uppercase | `upper(user_agent)` |
 | `lower(string)` | Convert to lowercase | `lower(elbname)` |
-| `char_length(string)` | Length of string | `char_length(user_agent)` |
+| `char_length(string)` | Number of Unicode scalar values | `char_length(user_agent)` |
 | `substring(string from start for length)` | Extract substring | `substring(user_agent from 1 for 10)` |
 | `trim(both char from string)` | Trim characters | `trim(both ' ' from user_agent)` |
 
@@ -335,7 +378,7 @@ select nullif(a, 0) from it
 
 | Function | Description |
 | --- | --- |
-| `count(*)` / `count(expr)` | Count rows |
+| `count(*)` / `count(expr)` | Count all rows / values that are neither NULL nor MISSING |
 | `sum(expr)` | Sum of numeric values |
 | `avg(expr)` | Average of numeric values |
 | `min(expr)` | Minimum value |
@@ -350,10 +393,18 @@ select nullif(a, 0) from it
 
 logq supports four output modes via `--output`:
 
-- **`table`** (default) -- formatted ASCII table
-- **`csv`** -- comma-separated values, pipe-friendly
-- **`json`** -- JSON array of objects
+- **`table`** (default) -- formatted ASCII table, buffered until the query completes
+- **`csv`** -- comma-separated values without a header row, streamed as rows are produced
+- **`json`** -- JSON array of objects, written incrementally
 - **`ndjson`** -- one JSON object per line, streamed as rows are produced
+
+JSON and NDJSON encode both explicitly projected MISSING values and NULL as
+`null`; JSON output cannot distinguish them. `SELECT *` only includes fields
+present in each source record. A query or output error exits nonzero and writes
+a diagnostic to stderr. Streaming output may already contain rows when a later
+input error occurs; an incomplete
+`json` result may lack its closing bracket. Check the exit status before accepting
+the output as complete.
 
 ## Memory ceiling
 
@@ -368,7 +419,15 @@ logq query 'select request_id, count(*) from it group by request_id' \
 The ceiling covers sorting (including top-N candidates), grouping, deduplication, set operations,
 and materialized join inputs through one query-wide tracker. logq stops with
 `query exceeded memory budget (--max-memory)` when the combined conservative estimate crosses the
-limit. It is a soft application-level budget rather than a hard operating-system allocation cap.
+limit. The budget works with both row and batch execution; it does not force all
+queries onto a sequential row path. A budgeted single-file gzip aggregate uses
+the sequential decoder rather than the extra decoded-chunk pipeline.
+
+This is a retained-execution-state estimate, not a hard operating-system allocation
+cap. Input buffers, resident mmap pages, output formatting, and allocator overhead
+can make RSS larger than the limit. There is no disk spill. Prefer `--output ndjson`
+or `csv` for large results: the default table output buffers every displayed row
+outside this estimate. Omitting `--max-memory` leaves execution state unbounded.
 
 ### Piping to Visualization Tools
 
@@ -386,18 +445,23 @@ logq query --output csv 'select backend_processing_time from it' \
 
 ### Explain
 
-Print the query plan without executing:
+Print the query plan without reading rows:
 
 ```
-logq explain 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t'
+logq explain 'select t, sum(sent_bytes) as s from it group by time_bucket("5 seconds", timestamp) as t' \
+  --table it:elb=access.log --threads 4 --max-memory 512MiB
 ```
 
 `explain` reports whether the query uses the batch or row pipeline. When a query falls back to row
-execution, it also names the first unsupported plan node and the reason.
+execution, it also names the first unsupported plan node and the reason. It shows
+the requested/resolved thread limit and optional memory budget. Batch capability
+does not guarantee that a particular file will use parallel workers. Supply the
+same table mappings and options as `query`; without `--table`, `explain` assumes
+an `it:jsonl=stdin` source.
 
 ### Schema
 
-Show field names and types for a log format:
+Show field names and types for `elb`, `alb`, `s3`, or `squid`:
 
 ```
 logq schema elb
@@ -453,14 +517,60 @@ logq schema alb
 | `domain_name` | String |
 | `chosen_cert_arn` | String |
 | `matched_rule_priority` | String |
-| `request_creation_time` | DateTime |
-| `actions_executed` | String |
+| `request_creation_time` | String |
+| `action_executed` | String |
 | `redirect_url` | String |
 | `error_reason` | String |
 
 ### JSONL
 
-No fixed schema. Fields are auto-detected from each JSON line. Nested objects and arrays are supported with path access (`a.b.c`, `d[0]`).
+No fixed schema. Each line must contain one JSON object. Nested objects and arrays
+are supported with path access (`a.b.c`, `d[0]`); a nonexistent field is MISSING.
+Top-level arrays and scalars, blank lines, and malformed JSON are errors. Selecting
+only a few fields reduces retained data but still validates the other fields in
+each consumed line. `LIMIT` may stop before later lines are read.
+
+## Limits and compatibility
+
+Runtime integers are signed 32-bit values and floating-point values use IEEE
+Float32 precision. JSON integers outside the 32-bit range become floats and can
+lose precision; keep large identifiers as strings. Numeric sums and averages also
+return Float32 values, so logq is unsuitable for exact decimal accounting or
+lossless arbitrary-width integer arithmetic.
+Integer arithmetic and `abs` report an error when the result is outside
+the Int32 range. Bitwise shifts require a width between 0 and 31.
+
+The implemented PartiQL subset excludes correlated subqueries, window functions,
+PIVOT, Ion literals, and bag literals (`<<>>`). See the
+[conformance fixtures and explicit skips](tests/conformance/README.md) for tested
+coverage. Equality joins use hash joins where supported; other join predicates
+can require nested loops. Full sorts, high-cardinality groups, exact percentiles,
+and deduplication may retain substantial state. See [the architecture](docs/architecture.md)
+for execution and memory behavior.
+
+## Development
+
+Build from the checkout with Rust 1.85 or newer:
+
+```bash
+cargo build --release --locked
+target/release/logq query 'select count(*) from it' --table it:elb=data/AWSELB.log
+```
+
+Run the core checks used by CI:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-features
+cargo check --all-features
+python3 -m unittest discover -s scripts/bench_e2e -p 'test_*.py'
+```
+
+The `bench-internals` feature exposes benchmark helpers and probe examples; it is
+not required to run the CLI. See the [benchmark harness](scripts/bench_e2e/README.md)
+for reproducible performance work and [fuzzing instructions](fuzz/README.md) for
+parser fuzz tests.
 
 ## Motivation
 
