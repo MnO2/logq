@@ -21,6 +21,8 @@ logq's streaming queries used 8–9 MiB peak RSS in that run. Subsequent executi
 changes are measured in the September 5 [performance results](docs/performance-2026-09-05.md),
 [expanded workloads](docs/performance-expansion-2026-09-05.md), and
 [operator and file controls](docs/performance-next-milestones-2026-09-05.md).
+The September 6 [execution milestones](docs/performance-execution-2026-09-06.md)
+cover nested pruning, batch output, arithmetic, plan reuse, and external sorting.
 See the [benchmark guide](docs/benchmarks.md) for versions, methodology, and limitations.
 
 ## Supported Log Formats
@@ -247,10 +249,17 @@ from it
 select approx_count_distinct(user_agent) from it
 ```
 
-`HAVING` currently refers to aggregate output aliases: use `having cnt > 10`
-with `count(*) as cnt`. Writing the aggregate call again in HAVING is unsupported.
-`GROUP BY` also requires at least one aggregate expression; use `SELECT DISTINCT`
-when only distinct keys are needed.
+`HAVING` accepts aggregate aliases and aggregate calls, including aggregates not
+returned by SELECT. For example, `select category from it group by category
+having sum(score) > 25` filters groups without adding the sum to the output.
+Without an explicit GROUP BY, SELECT must itself contain an aggregate:
+`select count(*) as n from it having count(*) > 0` is supported.
+`GROUP BY` requires an aggregate in SELECT or HAVING; use `SELECT DISTINCT`
+when only distinct keys are needed. See the [executable SQL examples](tests/conformance/README.md).
+
+Numeric equality currently distinguishes integers from floats. SUM returns a
+float, so use `having sum(score) = 25.0` for equality; ordered comparisons such
+as `sum(score) > 25` compare across numeric types.
 
 ### ORDER BY and LIMIT
 

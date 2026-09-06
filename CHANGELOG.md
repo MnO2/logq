@@ -8,6 +8,7 @@
 - Keep SQL constants out of the source-field namespace, apply FROM aliases to stdin consistently with files, and fix duplicate-alias full-sort/Top-N binding and a Top-N panic. Accept following clauses after IN, postfix and CAST expressions.
 - Add a same-engine fresh/reused-plan diagnostic and a bounded fixed-schema external-sort example with temporary-disk quotas and exact-output validation. Retain both as experiments: measurements do not justify a production session API, and production spilling still needs lossless dynamic-value storage and shared query accounting.
 - Add generated cross-path correctness checks and a generated conformance index checked in CI. Runtime numbers remain Int32/Float32.
+- Publish reproducible CLI, lifecycle, kernel and external-sort runners with independent answer checks, immutable manifests and archived source/binary identities. Record the completed plan, [measured adoption decisions](docs/performance-execution-2026-09-06.md), and a proposed [Int64/Float64 compatibility contract](docs/numeric-migration.md).
 
 ## Unreleased — correctness, performance, and documentation audit (2026-09-06)
 

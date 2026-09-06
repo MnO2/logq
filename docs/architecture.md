@@ -80,7 +80,14 @@ Non-correlated subqueries are planned recursively with the same source registry.
 
 The logical layer distinguishes value-producing `Expression` from boolean
 `Formula`. Physical conversion in `logical/types.rs` builds execution nodes and
-places generated constant bindings in a `Variables` map.
+keeps literals as constant values, so JSON fields cannot shadow SQL constants.
+
+`logical/having.rs` binds aggregate calls in HAVING to aggregate outputs before
+ordinary planning. It reuses unambiguous SELECT aggregates or adds collision-free
+hidden aggregates, then removes hidden outputs after HAVING and before
+DISTINCT/ORDER/LIMIT. Nested aggregate calls are rejected. HAVING-only aggregates
+require explicit GROUP BY when SELECT contains no aggregate, matching the current
+grouped-projection subset rather than silently discarding SELECT expressions.
 
 ### 4. Pipeline Selection (`execution/types.rs`)
 
@@ -90,8 +97,11 @@ tree. Eligible subtrees use columnar operators. Unsupported parents can still
 consume a batch child through `BatchToRowAdapter`.
 
 Fixed-format files support typed batch scans. JSONL batching requires a known set
-of required root fields, which can be empty for `count(*)`; nested selected
-values use dynamic `Value` storage. Bare scans, stdin, table bindings, regex
+of required root fields, which can be empty for `count(*)`. Required object paths
+prune unreferenced nested siblings while preserving full consumed-line validation.
+Whole-object references override narrower masks; array/index/wildcard and scoped
+shapes retain their safe full-value fallback. Nested selected values still use
+dynamic `Value` storage. Bare scans, stdin, table bindings, regex
 formats, joins, set operations, and some expression/path shapes use row
 operators. Prefix LIMIT paths preserve demand-driven parsing and expression
 evaluation so they need not read later invalid rows.
@@ -124,6 +134,19 @@ process batches of up to 1,024 rows, using typed columns and selection vectors
 to avoid converting rejected rows back into records. Supported expressions bind
 function handles for repeated evaluation. Typed kernels operate on contiguous
 numeric data and validity bitmaps; mixed values retain scalar semantics.
+
+JSON/NDJSON consume the selected batch stream directly, borrowing string and
+mixed-value cells instead of rebuilding a map per output row. The row API, CSV
+and table consumers still use `BatchToRowAdapter` as needed. Both result interfaces
+share pipeline selection, LIMIT guards and the query memory tracker. Duplicate
+output names use the last occurrence consistently in projection, predicates,
+sorting and serialization.
+
+Trusted Float32 arithmetic can produce a typed output column directly for a
+left-associated chain of addition by constants/root Float32 columns and
+multiplication by Float32 constants. Every operation retains f32 rounding;
+custom functions, integer overflow-aware arithmetic and unsupported trees use
+the original evaluation path.
 
 | Operation | Retained state |
 | --- | --- |
@@ -202,6 +225,12 @@ SUM/AVG results use Float32 precision. JSON integers outside the Int32 range bec
 floats and may lose precision. Large identifiers should be stored as strings.
 Integer arithmetic uses checked operations so overflow is an error in both
 debug and release builds.
+
+Equality distinguishes Int32 from Float32, while ordered comparisons compare
+across numeric types. For example, SUM returns a float and `SUM(x) = 5.0`
+differs from `SUM(x) = 5`. The [numeric migration proposal](numeric-migration.md)
+specifies the compatibility work required for a future Int64/Float64 runtime;
+it does not change the current representation.
 
 NULL means an unknown value; MISSING means an absent field. Both participate in
 three-valued arithmetic/comparison logic, and `IS NULL`/`IS MISSING` distinguish

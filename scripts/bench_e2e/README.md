@@ -5,6 +5,72 @@ same deterministic JSONL data. It also generates ELB and ALB data so logq's
 native readers and gzip path can be measured separately. Generated data and raw
 results are ignored by Git.
 
+## Execution and architecture milestones (2026-09-06)
+
+The standard-library-only `execution_milestones.py` compares nested pruning,
+full-result output and Float32 arithmetic against complete independent Python
+answer digests. It alternates baseline/candidate order, archives its three Python
+sources and binary/data hashes, and records separate RSS samples. Use immutable
+release binaries and a new results directory for every run:
+
+```sh
+cargo build --release --locked --features bench-internals --bin logq --examples
+python3 scripts/bench_e2e/execution_milestones.py \
+  --binary baseline=/absolute/path/to/baseline-logq \
+  --binary candidate=/absolute/path/to/candidate-logq \
+  --data-dir /tmp/logq-execution-data --results-dir /tmp/logq-execution-results \
+  --rows 100000 --widths 32 2048 --runs 7 \
+  --cases nested_w32 direct_w32 add_w32 multiply_w32 add16_w32 multiply16_w32 \
+          projection_w32 groups_w32 small_groups_w32 nested_w2048 direct_w2048 \
+          add_w2048 multiply_w2048 add16_w2048 multiply16_w2048
+```
+
+`--threads` defaults to `1 0` (one worker and automatic). `--generate-only`
+creates or verifies the fixture without timing; reuse requires an identical
+manifest and data inventory. Inputs stay immutable throughout each measurement.
+These are warm synthetic measurements, not cold-storage results.
+
+Two diagnostic examples expose the adoption experiments independently:
+
+```sh
+cargo run --release --locked --features bench-internals --example query_lifecycle_probe -- \
+  --input /tmp/logq-execution-data/width-32.jsonl \
+  --query 'select count(*) as n from it' --runs 100 --threads 1
+cargo run --release --locked --example external_sort_probe -- /absolute/path/to/sort.jsonl \
+  --run-bytes 1048576 --fan-in 8 --disk-bytes 268435456 \
+  --output /tmp/new-sort-output.ndjson
+```
+
+The lifecycle probe reopens regular files and resets execution state per run;
+it buffers full results and requires deterministic output order. It is suitable
+for bounded count/prefix answers, not an application session or result cache.
+The external-sort input is exactly `{ "key": i32, "payload": string }` per line;
+unknown/duplicate fields, NULL/MISSING and other types are rejected. Its default
+bag fingerprints are probabilistic. `--validate` adds exact in-memory comparison
+for inputs up to 16 MiB; `--logq PATH` also checks the CLI. Large fixtures require
+the complete-output oracle below. Run bytes estimate retained records, while
+merge buffers and disk quotas are reported separately from process RSS.
+
+`architecture_milestones.py` runs actual 1/10/100-query lifecycle sequences,
+preparsed typed kernels, and 1/4/16 MiB external-sort controls. It checks every
+sorted output row against an independent SQLite ordering oracle. In a new
+`/tmp/logq-architecture` directory, copy the release binaries to `candidate-final`,
+`query_lifecycle_probe-final`, `expression_probe-final`, and
+`external_sort_probe-final`, then run:
+
+```sh
+python3 scripts/bench_e2e/execution_milestones.py --generate-only \
+  --data-dir /tmp/logq-architecture/data --rows 100000 --widths 32 2048
+python3 scripts/bench_e2e/architecture_milestones.py \
+  --work-dir /tmp/logq-architecture --prepare-sort
+python3 scripts/bench_e2e/architecture_milestones.py --work-dir /tmp/logq-architecture
+```
+
+The runner exclusively creates `architecture-results`, hashes inputs/binaries,
+and archives its source. Allow space for the generated source, SQLite oracle,
+temporary runs and complete output files. Read [the measured decisions](../../docs/performance-execution-2026-09-06.md)
+before treating probe-only timings as production performance.
+
 ## Prerequisites
 
 - [hyperfine](https://github.com/sharkdp/hyperfine) drives repeated wall-time
