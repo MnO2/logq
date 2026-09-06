@@ -13,6 +13,22 @@ fn query(input: &str, table: &str, sql: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
+#[cfg(unix)]
+fn closed_stdout() -> Stdio {
+    let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+    // macOS sets close-on-exec after creating descriptors. A concurrently
+    // spawned child can inherit the reader, so dropping it alone is
+    // insufficient. Disable writes on the shared endpoint before spawning.
+    writer.shutdown(std::net::Shutdown::Write).unwrap();
+    drop(reader);
+    Stdio::from(std::os::fd::OwnedFd::from(writer))
+}
+
+#[cfg(not(unix))]
+fn closed_stdout() -> Stdio {
+    Stdio::piped()
+}
+
 #[test]
 fn short_query_output_reports_closed_stdout_in_every_format() {
     for format in ["json", "ndjson", "csv", "table"] {
@@ -26,11 +42,11 @@ fn short_query_output_reports_closed_stdout_in_every_format() {
                 "select x from it",
             ])
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(closed_stdout())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        // Close the reader before input is available, so even a short result fails to write.
+        // Non-Unix platforms use a pipe whose reader is closed before input.
         drop(child.stdout.take());
         child.stdin.take().unwrap().write_all(b"{\"x\":1}\n").unwrap();
         let output = child.wait_with_output().unwrap();
@@ -56,11 +72,9 @@ fn unknown_schema_format_is_a_command_failure() {
 #[test]
 fn schema_reports_stdout_write_failures() {
     for format in ["elb", "alb", "s3", "squid"] {
-        let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
-        drop(reader);
         let output = Command::new(env!("CARGO_BIN_EXE_logq"))
             .args(["schema", format])
-            .stdout(Stdio::from(std::os::fd::OwnedFd::from(writer)))
+            .stdout(closed_stdout())
             .output()
             .unwrap();
         assert!(!output.status.success(), "{format} silently discarded an output error");

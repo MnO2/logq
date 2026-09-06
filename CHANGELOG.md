@@ -9,6 +9,7 @@
 - Bound parallel newline searches for oversized log rows, reduce Levenshtein workspace to the shorter string, stop split_part after the requested segment, and reuse cached regex matching workspace. Add correctness and allocation regressions for these paths.
 - Protect benchmark result directories from accidental reuse so failed reruns cannot mix new samples with an earlier report.
 - Refresh current architecture, CLI examples, development checks, memory and numeric limits, and historical benchmark labels.
+- Make closed-stdout regressions deterministic when macOS tests launch subprocesses concurrently.
 
 ## Unreleased — next performance milestones (2026-09-05)
 
