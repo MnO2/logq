@@ -1,6 +1,8 @@
 # CHANGELOG — PartiQL Implementation Progress
 
-## Unreleased — execution, reuse, and capacity milestones (2026-09-06)
+## 0.3.0 - 2026-09-07
+
+### execution, reuse, and capacity milestones (2026-09-06)
 
 - Prune unneeded nested object descendants across JSONL row, batch, gzip and parallel readers, while validating every consumed JSON value. Index column projection masks once per batch and retain safe whole-value fallbacks for arrays, wildcards and scoped paths.
 - Serialize JSON/NDJSON directly from borrowed batch columns, preserving field order, duplicate-alias replacement, Float32 spelling, lazy errors and output failure propagation. Add trusted Float32 column addition and constant multiplication kernels with per-operation rounding and scalar fallbacks.
@@ -10,7 +12,7 @@
 - Add generated cross-path correctness checks and a generated conformance index checked in CI. Runtime numbers remain Int32/Float32.
 - Publish reproducible CLI, lifecycle, kernel and external-sort runners with independent answer checks, immutable manifests and archived source/binary identities. Record the completed plan, [measured adoption decisions](docs/performance-execution-2026-09-06.md), and a proposed [Int64/Float64 compatibility contract](docs/numeric-migration.md).
 
-## Unreleased — correctness, performance, and documentation audit (2026-09-06)
+### correctness, performance, and documentation audit (2026-09-06)
 
 - Read every member of concatenated gzip files, including rows split across members, and report corruption or truncation in later members. Keep JSON prefix LIMIT demand-driven for simple projections, filters, and DISTINCT.
 - Preserve literal-prefixed field names and scientific notation; allow spaced operators after CAST, CASE, and postfix predicates. Validate aggregate arity and percentile bounds during planning, accept case-insensitive aggregate names, and prevent zero-argument scalar calls or non-boolean arithmetic predicates from panicking.
@@ -21,7 +23,7 @@
 - Refresh current architecture, CLI examples, development checks, memory and numeric limits, and historical benchmark labels.
 - Make closed-stdout regressions deterministic when macOS tests launch subprocesses concurrently.
 
-## Unreleased — next performance milestones (2026-09-05)
+### next performance milestones (2026-09-05)
 
 - Borrow nested batch values when resolving paths, retain movable columns in mixed projections, and evaluate supported complex predicates without copying unrelated columns. Preserve aliases, active masks, lazy errors and demand-driven LIMIT; budgeted mixed projections retain their existing materialization policy.
 - Add answer-checked narrow/wide, predicate-selectivity, plain/gzip and 1/8/32/125-file controls, with paired CPU/wall measurements and reproducible input manifests. Track independent follow-on work in [the milestone plan](docs/plans/2026-09-05-performance-next-milestones.md).
@@ -34,7 +36,7 @@
 - Resolve the existing lru dependency to 0.18.2 for RUSTSEC-2026-0253 and pass the advisory gates.
 - Record final paired CLI controls, phase measurements, adoption decisions and limitations in [the next-milestones report](docs/performance-next-milestones-2026-09-05.md).
 
-## Unreleased — performance expansion (2026-09-05)
+### performance expansion (2026-09-05)
 
 - Build homogeneous JSONL primitive columns directly, avoiding per-row owned values and long-string allocations; preserve strict parsing, duplicate keys, mixed types and validity masks. Use a 64 KiB sequential JSON buffer.
 - Execute supported JSONL projections and computed aggregate inputs with bound batch expressions. Preserve active-row masks, lazy CASE branches, duplicate aliases and demand-driven expression LIMIT behavior; fixed-format expressions retain their existing reader semantics.
@@ -43,7 +45,7 @@
 - Track implementation and the acceptance criteria for subsequent aggregation, Top-K, shard scheduling, spilling, columnar reuse and numeric-width work in [the expansion plan](docs/plans/2026-09-05-performance-expansion.md).
 - Recorded paired 100K/500K-row workloads, isolated scanner/allocation experiments and original JSONL/ELB/ClickHouse controls in [the expansion report](docs/performance-expansion-2026-09-05.md), including the remaining COUNT gap and CPU/RSS tradeoffs.
 
-## Unreleased — performance corrections (2026-09-05)
+### performance corrections (2026-09-05)
 
 - Parse JSONL directly into required root fields and typed batches while validating ignored input; preserve nested values, NULL/MISSING, duplicate keys and aliases. Keep unsupported dynamic projections on the strict row reader.
 - Execute scans with shared mmap ranges, lazy file opening, bounded queues and controlled workers. Small ordered scan tasks avoid queue stalls; worker-local COUNT/SUM/AVG states merge without rounding intermediate results. `--threads 0` now resolves to available CPUs.
